@@ -22,9 +22,11 @@ pub struct InputLogger {
 impl InputLogger {
     pub fn start(region: Region) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true }));
-        #[cfg(feature = "input-hooks")]
+        #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
         hooks::spawn(shared.clone(), region);
-        #[cfg(not(feature = "input-hooks"))]
+        #[cfg(target_os = "macos")]
+        mac::spawn(shared.clone(), region);
+        #[cfg(all(not(feature = "input-hooks"), not(target_os = "macos")))]
         {
             let _ = region;
             eprintln!("demolens: built without input-hooks; no event log will be captured");
@@ -48,7 +50,7 @@ impl InputLogger {
     }
 }
 
-#[cfg(feature = "input-hooks")]
+#[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
 mod hooks {
     use super::*;
     use crate::events::{EventKind, MouseButton};
@@ -130,6 +132,115 @@ mod hooks {
             });
             if let Err(e) = res {
                 eprintln!("demolens: input hooks unavailable: {e:?}");
+            }
+        });
+    }
+}
+
+/// macOS: polls the mouse position and button state 60 times a second through
+/// CoreGraphics. This needs no Accessibility or Input Monitoring permission
+/// and never blocks. Key presses are not logged on macOS yet (that needs Input
+/// Monitoring), so auto zoom there comes from clicks.
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::*;
+    use crate::events::{EventKind, MouseButton};
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventCreate(source: *const c_void) -> *mut c_void;
+        fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+        fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+        fn CGDisplayCopyDisplayMode(display: u32) -> *mut c_void;
+        fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
+        fn CGDisplayModeRelease(mode: *mut c_void);
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    /// Points to pixels factor of the main display (2.0 on Retina).
+    fn backing_scale() -> f64 {
+        unsafe {
+            let id = CGMainDisplayID();
+            let b = CGDisplayBounds(id);
+            let mode = CGDisplayCopyDisplayMode(id);
+            if mode.is_null() || b.size.width <= 0.0 {
+                return 1.0;
+            }
+            let px = CGDisplayModeGetPixelWidth(mode) as f64;
+            CGDisplayModeRelease(mode);
+            if px > 0.0 { px / b.size.width } else { 1.0 }
+        }
+    }
+
+    fn mouse() -> (f64, f64) {
+        unsafe {
+            let ev = CGEventCreate(std::ptr::null());
+            if ev.is_null() {
+                return (0.0, 0.0);
+            }
+            let p = CGEventGetLocation(ev);
+            CFRelease(ev);
+            (p.x, p.y)
+        }
+    }
+
+    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region) {
+        std::thread::spawn(move || {
+            let scale = backing_scale();
+            let mut last = (f64::NAN, f64::NAN);
+            let mut down = [false; 3];
+            loop {
+                if !shared.lock().unwrap().active {
+                    break;
+                }
+                let now = Instant::now();
+                let (mx, my) = mouse();
+                let pos = (mx * scale - region.x as f64, my * scale - region.y as f64);
+                let mut evs = Vec::new();
+                if pos != last {
+                    evs.push(EventKind::Move { x: pos.0, y: pos.1 });
+                    last = pos;
+                }
+                for (i, b) in [MouseButton::Left, MouseButton::Right, MouseButton::Middle].into_iter().enumerate() {
+                    // 0 = combined session state
+                    let is = unsafe { CGEventSourceButtonState(0, i as u32) };
+                    if is && !down[i] {
+                        evs.push(EventKind::Click { x: pos.0, y: pos.1, button: b });
+                    }
+                    down[i] = is;
+                }
+                if !evs.is_empty() {
+                    let mut s = shared.lock().unwrap();
+                    for k in evs {
+                        s.events.push((now, k));
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
             }
         });
     }

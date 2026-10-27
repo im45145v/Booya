@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>DemoLens records your voice with the screen when the microphone is turned on.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>DemoLens lists capture devices, which include cameras. It does not record the camera.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>DemoLens records your screen to make product demos.</string>
+</dict>
+</plist>

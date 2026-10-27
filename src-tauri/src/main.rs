@@ -14,11 +14,16 @@ use demolens_core::project::Project;
 use demolens_core::{export, new_project, zoom, EventLog, ZoomSegment};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager};
+
+enum RecSlot {
+    Starting,
+    Running(RecordingSession),
+}
 
 #[derive(Default)]
 struct AppState {
-    recording: Mutex<Option<RecordingSession>>,
+    recording: Mutex<Option<RecSlot>>,
     /// The renderer for the last previewed project and size. Building one
     /// loads the event log and background image, so scrubbing reuses it.
     renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
@@ -121,28 +126,58 @@ fn apply_preset(name: String, mut project: Project) -> R<Project> {
     Ok(project)
 }
 
+// Recording commands are async and do their work on a blocking thread, so a
+// slow or stuck ffmpeg can never freeze the window.
 #[tauri::command]
-fn start_recording(app: tauri::AppHandle, state: State<AppState>, target: CaptureTarget, mic: bool, system_audio: bool) -> R<Vec<String>> {
-    let mut slot = state.recording.lock().unwrap();
-    if slot.is_some() {
-        return Err("already recording".into());
+async fn start_recording(app: tauri::AppHandle, target: CaptureTarget, mic: bool, system_audio: bool) -> R<Vec<String>> {
+    {
+        let state = app.state::<AppState>();
+        let mut slot = state.recording.lock().unwrap();
+        match &*slot {
+            Some(RecSlot::Starting) => return Err("Recording is already starting".into()),
+            Some(RecSlot::Running(_)) => return Err("Already recording".into()),
+            None => *slot = Some(RecSlot::Starting),
+        }
     }
     // Recordings go to Videos/DemoLens/<timestamp>, not the app's working
     // directory (which is read only inside a macOS app bundle).
     let base = app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("DemoLens");
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let out_dir = base.join(format!("recording-{stamp}"));
-    let s = capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir }).map_err(e)?;
-    let warnings = s.warnings.clone();
-    *slot = Some(s);
-    Ok(warnings)
+    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir }).map_err(e)).await;
+    let state = app.state::<AppState>();
+    let mut slot = state.recording.lock().unwrap();
+    match res {
+        Ok(s) => {
+            let warnings = s.warnings.clone();
+            *slot = Some(RecSlot::Running(s));
+            Ok(warnings)
+        }
+        Err(err) => {
+            *slot = None;
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
-fn stop_recording(state: State<AppState>) -> R<Project> {
-    let s = state.recording.lock().unwrap().take().ok_or("not recording")?;
-    let rec = s.stop().map_err(e)?;
-    new_project(&rec.video, Some(&rec.events)).map_err(e)
+async fn stop_recording(app: tauri::AppHandle) -> R<Project> {
+    let s = {
+        let state = app.state::<AppState>();
+        let mut slot = state.recording.lock().unwrap();
+        match slot.take() {
+            Some(RecSlot::Running(s)) => s,
+            other => {
+                *slot = other;
+                return Err("Not recording".into());
+            }
+        }
+    };
+    blocking(move || {
+        let rec = s.stop().map_err(e)?;
+        new_project(&rec.video, Some(&rec.events)).map_err(e)
+    })
+    .await
 }
 
 // ---------- Local AI ----------

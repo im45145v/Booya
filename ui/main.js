@@ -268,19 +268,23 @@ function setRecUi(on) {
   $('rec-btn').title = on ? 'Stop recording (Ctrl+R)' : 'Start recording (Ctrl+R)';
 }
 $('rec-btn').onclick = async () => {
+  if ($('rec-btn').disabled) return;
   try {
     if (!recording) {
       const kind = $('rec-target').value, arg = $('rec-arg').value.trim();
       let target = { type: 'screen', display: 0 };
       if (kind === 'window') { if (!arg) return status('Type the window id (Linux) or title (Windows) first.', 'error'); target = { type: 'window', id: arg }; }
       if (kind === 'area') { const v = arg.split(',').map(Number); if (v.length !== 4 || v.some(isNaN)) return status('Type the area as x,y,w,h, for example 0,0,1280,720', 'error'); const [x, y, w, h] = v; target = { type: 'area', x, y, w, h }; }
-      const warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true' });
+      $('rec-btn').disabled = true; status('Starting the recording. If macOS asks for permission, allow it.', 'busy');
+      let warn;
+      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true' }); }
+      finally { $('rec-btn').disabled = false; }
       setRecUi(true);
       const w = warn.filter(x => x !== 'recording without audio');
       status(w.length ? 'Recording. ' + w.join(' ') : 'Recording. Press Stop or Ctrl+R when you are done.', w.length ? 'error' : 'busy');
     } else {
-      setRecUi(false); showBusy('Finishing the recording...');
-      setProject(await invoke('stop_recording'), null); status('Recording loaded. Try Make it demo-ready.', 'success');
+      setRecUi(false); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
+      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Make it demo-ready.', 'success');
       hideBusy();
     }
   } catch (e) { setRecUi(false); hideBusy(); fail(e); }

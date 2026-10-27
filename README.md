@@ -35,6 +35,8 @@ The macOS app is signed ad hoc, not with a paid Apple Developer ID, so Gatekeepe
 
   This removes the download quarantine flag that your browser added. The app is not actually damaged.
 
+The first time you record, macOS asks for **Screen & System Audio Recording** and, with the mic on, **Microphone** access. Allow both, then quit and reopen DemoLens if macOS asks you to. You can change this later in System Settings > Privacy & Security.
+
 ## Why DemoLens
 
 | | DemoLens | Screen Studio | Cap | Loom / Tella |

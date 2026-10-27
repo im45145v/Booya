@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -83,6 +84,7 @@ pub struct RecordingSession {
     child: Child,
     logger: InputLogger,
     started: Instant,
+    stderr: Arc<Mutex<String>>,
     pub video: PathBuf,
     pub events: PathBuf,
     region: Region,
@@ -95,58 +97,126 @@ pub struct Recording {
     pub duration: Duration,
 }
 
+/// How long ffmpeg may run without writing anything before we give up. On
+/// macOS this is what happens while the Screen Recording permission is
+/// missing or its prompt is still open.
+const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long `stop` waits for ffmpeg to finish the file after "q".
+const STOP_TIMEOUT: Duration = Duration::from_secs(6);
+
+fn permission_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        " On macOS, allow DemoLens in System Settings > Privacy & Security > Screen & System Audio Recording (and Microphone if the mic is on), then quit and reopen DemoLens."
+    } else {
+        ""
+    }
+}
+
+/// Reads ffmpeg's stderr on a thread, so a chatty device can never fill the
+/// pipe and freeze ffmpeg, and keeps the text for error messages.
+fn drain_stderr(child: &mut Child) -> Arc<Mutex<String>> {
+    let buf = Arc::new(Mutex::new(String::new()));
+    if let Some(mut e) = child.stderr.take() {
+        let b = buf.clone();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = std::io::Read::read(&mut e, &mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let mut s = b.lock().unwrap();
+                if s.len() < 64 * 1024 {
+                    s.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                }
+            }
+        });
+    }
+    buf
+}
+
+/// Waits until ffmpeg is writing the file. Err(text) when it exits or
+/// produces nothing in time (the child is killed in that case).
+fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>, timeout: Duration) -> std::result::Result<(), String> {
+    let t = Instant::now();
+    loop {
+        if let Ok(Some(_)) = child.try_wait() {
+            std::thread::sleep(Duration::from_millis(100));
+            let e = err.lock().unwrap().clone();
+            return Err(if e.trim().is_empty() { "ffmpeg exited".into() } else { e });
+        }
+        let size = std::fs::metadata(video).map(|m| m.len()).unwrap_or(0);
+        if size > 0 && t.elapsed() > Duration::from_millis(600) {
+            return Ok(());
+        }
+        if t.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("TIMEOUT {}", err.lock().unwrap()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn start_error(err: &str) -> anyhow::Error {
+    if let Some(rest) = err.strip_prefix("TIMEOUT") {
+        let detail = first_line(rest);
+        let detail = if rest.trim().is_empty() { String::new() } else { format!(" ({detail})") };
+        anyhow::anyhow!("Screen capture did not start within {} seconds{detail}.{}", FIRST_OUTPUT_TIMEOUT.as_secs(), permission_hint())
+    } else {
+        anyhow::anyhow!("Could not start screen capture: {}.{}", first_line(err), permission_hint())
+    }
+}
+
 pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     std::fs::create_dir_all(&opts.out_dir)?;
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
-    let spawn = |plan: &CapturePlan| -> Result<Child> {
+    let spawn = |plan: &CapturePlan| -> Result<(Child, Arc<Mutex<String>>)> {
+        let _ = std::fs::remove_file(&video);
         let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
-        cmd.args(["-v", "error", "-y"]).args(&plan.args);
+        cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&plan.args);
         cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac"]);
+        // Matroska is written as it goes, so even a killed recording keeps
+        // what it has; flush packets so the file grows from the first second.
+        cmd.args(["-flush_packets", "1"]);
         cmd.arg(&video);
-        cmd.stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg. Is ffmpeg installed and on PATH?")
-    };
-    // ffmpeg fails within a moment when a device cannot be opened. A missing
-    // or busy microphone should not cost the user the recording, so retry
-    // once with video only and say so.
-    let early_failure = |child: &mut Child| -> Option<String> {
-        let t = Instant::now();
-        while t.elapsed() < Duration::from_millis(900) {
-            if let Ok(Some(_)) = child.try_wait() {
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = std::io::Read::read_to_string(&mut e, &mut err);
-                }
-                return Some(err);
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
         }
-        None
+        let mut child = cmd.spawn().context("failed to start ffmpeg. Is ffmpeg installed?")?;
+        let err = drain_stderr(&mut child);
+        Ok((child, err))
     };
     let mut plan = plan(opts)?;
     let mut started = Instant::now();
-    let mut child = spawn(&plan)?;
-    if let Some(err) = early_failure(&mut child) {
+    let (mut child, mut err) = spawn(&plan)?;
+    if let Err(e) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
+        // A missing or blocked microphone should not cost the user the
+        // recording, so retry once with video only and say so.
         if opts.mic || opts.system_audio {
             let mut o = opts.clone();
             o.mic = false;
             o.system_audio = false;
             let mut retry = self::plan(&o)?;
             retry.warnings.retain(|w| w != "recording without audio");
-            retry.warnings.push(format!("Could not open the {}, so this recording has no sound. ({})", if opts.mic { "microphone" } else { "system audio" }, first_line(&err)));
+            let why = if e.starts_with("TIMEOUT") { "it did not respond".to_string() } else { first_line(&e) };
+            retry.warnings.push(format!("Could not open the {}, so this recording has no sound ({why}).", if opts.mic { "microphone" } else { "system audio" }));
             plan = retry;
             started = Instant::now();
-            child = spawn(&plan)?;
-            if let Some(err) = early_failure(&mut child) {
-                bail!("Could not start screen capture: {}", first_line(&err));
+            (child, err) = spawn(&plan)?;
+            if let Err(e2) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
+                return Err(start_error(&e2));
             }
         } else {
-            bail!("Could not start screen capture: {}", first_line(&err));
+            return Err(start_error(&e));
         }
     }
     let logger = InputLogger::start(plan.region)?;
     logger.set_epoch(started);
-    Ok(RecordingSession { child, logger, started, video, events, region: plan.region, warnings: plan.warnings })
+    Ok(RecordingSession { child, logger, started, stderr: err, video, events, region: plan.region, warnings: plan.warnings })
 }
 
 fn first_line(s: &str) -> String {
@@ -162,21 +232,135 @@ impl RecordingSession {
     }
 
     pub fn stop(mut self) -> Result<Recording> {
-        // "q" makes ffmpeg finish the file cleanly.
+        // "q" makes ffmpeg finish the file cleanly. If it does not exit in
+        // time (a stuck device), kill it: Matroska keeps what was written.
         if let Some(mut stdin) = self.child.stdin.take() {
-            let _ = stdin.write_all(b"q");
+            let _ = stdin.write_all(b"q\n");
+            let _ = stdin.flush();
         }
-        let out = self.child.wait_with_output()?;
+        let t = Instant::now();
+        let mut killed = false;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if t.elapsed() < STOP_TIMEOUT => std::thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    killed = true;
+                    break;
+                }
+            }
+        }
         let duration = self.started.elapsed();
         let mut log = EventLog::new(self.region.w, self.region.h);
         log.header.origin_x = self.region.x;
         log.header.origin_y = self.region.y;
         log.events = self.logger.stop();
         log.save(&self.events)?;
-        if !self.video.exists() {
-            bail!("recording failed: {}", String::from_utf8_lossy(&out.stderr));
+        let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
+        if size == 0 {
+            let e = self.stderr.lock().unwrap().clone();
+            bail!("The recording is empty: {}{}", first_line(&e), permission_hint());
+        }
+        if killed {
+            eprintln!("demolens: ffmpeg did not stop on q, it was killed");
         }
         Ok(Recording { video: self.video, events: self.events, duration })
+    }
+}
+
+/// One avfoundation device from `ffmpeg -f avfoundation -list_devices true -i ""`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvDevice {
+    pub index: u32,
+    pub name: String,
+}
+
+/// Parses the device list ffmpeg prints on stderr into (video, audio) devices.
+pub fn parse_avfoundation_devices(text: &str) -> (Vec<AvDevice>, Vec<AvDevice>) {
+    let (mut video, mut audio) = (Vec::new(), Vec::new());
+    let mut in_audio = false;
+    for line in text.lines() {
+        if line.contains("AVFoundation video devices") {
+            in_audio = false;
+            continue;
+        }
+        if line.contains("AVFoundation audio devices") {
+            in_audio = true;
+            continue;
+        }
+        // "[AVFoundation indev @ 0x7f...] [3] Capture screen 0"
+        let Some(rest) = line.split_once("] [").map(|x| x.1) else { continue };
+        let Some((idx, name)) = rest.split_once("] ") else { continue };
+        let Ok(index) = idx.trim().parse() else { continue };
+        let d = AvDevice { index, name: name.trim().to_string() };
+        if in_audio { audio.push(d) } else { video.push(d) }
+    }
+    (video, audio)
+}
+
+/// Index of "Capture screen N" for display N, if listed.
+pub fn screen_index(video: &[AvDevice], display: u32) -> Option<u32> {
+    let want = format!("Capture screen {display}");
+    video.iter().find(|d| d.name == want).map(|d| d.index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LIST: &str = "[AVFoundation indev @ 0x7fa] AVFoundation video devices:
+[AVFoundation indev @ 0x7fa] [0] FaceTime HD Camera
+[AVFoundation indev @ 0x7fa] [1] Ashish's iPhone Camera
+[AVFoundation indev @ 0x7fa] [2] Capture screen 0
+[AVFoundation indev @ 0x7fa] [3] Capture screen 1
+[AVFoundation indev @ 0x7fa] AVFoundation audio devices:
+[AVFoundation indev @ 0x7fa] [0] MacBook Pro Microphone
+[AVFoundation indev @ 0x7fa] [1] Microsoft Teams Audio
+[in#0 @ 0x7fb] Error opening input: Input/output error
+";
+
+    #[test]
+    fn parses_devices_and_finds_screen() {
+        let (v, a) = parse_avfoundation_devices(LIST);
+        assert_eq!(v.len(), 4);
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0], AvDevice { index: 0, name: "MacBook Pro Microphone".into() });
+        assert_eq!(screen_index(&v, 0), Some(2));
+        assert_eq!(screen_index(&v, 1), Some(3));
+        assert_eq!(screen_index(&v, 2), None);
+    }
+
+    #[test]
+    fn first_line_strips_prefix() {
+        assert_eq!(first_line("[in#1 @ 0x55] Device busy\nmore"), "Device busy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn silent_ffmpeg_times_out_instead_of_hanging() {
+        let dir = std::env::temp_dir().join(format!("dl-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("v.mkv");
+        // stands in for ffmpeg stuck on a permission prompt: alive, no output
+        let mut child = Command::new("sleep").arg("30").stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let err = drain_stderr(&mut child);
+        let t = Instant::now();
+        let r = wait_until_writing(&mut child, &video, &err, Duration::from_millis(700));
+        assert!(r.unwrap_err().starts_with("TIMEOUT"));
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert!(start_error("TIMEOUT").to_string().contains("did not start"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn early_exit_is_reported() {
+        let video = std::env::temp_dir().join("dl-none.mkv");
+        let mut child = Command::new("sh").args(["-c", "echo 'Input/output error' >&2; exit 1"]).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let err = drain_stderr(&mut child);
+        let r = wait_until_writing(&mut child, &video, &err, Duration::from_secs(5));
+        assert!(r.unwrap_err().contains("Input/output error"));
     }
 }
 

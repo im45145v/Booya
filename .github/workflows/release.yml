@@ -82,6 +82,25 @@ jobs:
           hdiutil detach "$mnt"
       - name: Build CLI
         run: cargo build --release -p demolens-cli
+      - name: macOS recording must not hang
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          plutil -p "$app/Contents/Info.plist" | grep -E 'UsageDescription'
+          codesign -d --entitlements - "$app" 2>/dev/null | grep -E 'audio-input|camera' || codesign -d --entitlements :- "$app"
+          export DEMOLENS_FFMPEG="$app/Contents/MacOS/demolens-ffmpeg" DEMOLENS_FFPROBE="$app/Contents/MacOS/demolens-ffprobe"
+          "$DEMOLENS_FFMPEG" -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | head -20 || true
+          # The runner has no Screen Recording permission. The recorder must
+          # either record or fail with a clear message, never hang.
+          set +e
+          start=$(date +%s)
+          perl -e 'alarm 90; exec @ARGV' ./target/release/demolens record --mic --seconds 3 --out "$RUNNER_TEMP/rec"
+          code=$?
+          echo "exit code $code after $(( $(date +%s) - start )) s"
+          ls -la "$RUNNER_TEMP/rec" || true
+          if [ $code -eq 142 ]; then echo "recording hung"; exit 1; fi
+          exit 0
       - name: Collect files
         shell: bash
         run: |
