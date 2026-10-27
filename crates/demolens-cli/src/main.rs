@@ -89,11 +89,42 @@ fn run() -> Result<()> {
         "record" => record(a),
         "doctor" => {
             let secs: f64 = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?.unwrap_or(3.0);
-            let report = capture::doctor(secs);
+            let mut report = capture::doctor(secs);
+            if a.flag("--no-ai") {
+                // capture only
+            } else {
+                let cloud = |t: demolens_ai::providers::Task| {
+                    let cfg = demolens_ai::providers::CloudConfig::load();
+                    cfg.active(t).filter(|p| std::env::var(p.env_key()).is_ok()).map(|p| p.info().name.to_string())
+                };
+                let mut ai = serde_json::to_value(demolens_ai::status::features(&cloud))?;
+                if a.flag("--self-test") {
+                    for f in ai.as_array_mut().into_iter().flatten() {
+                        if f["can_test"] == true {
+                            let id = f["id"].as_str().unwrap_or("").to_string();
+                            f["self_test"] = serde_json::to_value(demolens_ai::status::self_test(&id))?;
+                        }
+                    }
+                }
+                report["ai"] = ai;
+                report["models_dir"] = demolens_ai::models::models_dir().display().to_string().into();
+                report["mics"] = serde_json::to_value(demolens_core::capture::mics::list_mics())?;
+            }
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report["ok"] != true {
                 std::process::exit(1);
             }
+            Ok(())
+        }
+        "verify" => {
+            // Sync report for a finished recording: A/V offset, duration, events.
+            let video = PathBuf::from(a.pos("video")?);
+            let events = a.0.first().filter(|v| !v.starts_with("--")).map(PathBuf::from).or_else(|| {
+                let guess = video.with_file_name("recording.events.jsonl");
+                guess.exists().then_some(guess)
+            });
+            let r = demolens_core::finalize::sync_report(&video, events.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
             Ok(())
         }
         "new" => {

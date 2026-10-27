@@ -15,4 +15,5 @@ pub mod pipeline;
 pub mod providers;
 pub mod redact;
 pub mod s3;
+pub mod status;
 pub mod transcribe;

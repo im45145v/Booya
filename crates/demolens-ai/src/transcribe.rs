@@ -212,6 +212,15 @@ fn run_whisper(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: 
     anyhow::bail!("this build of DemoLens has no speech recognition (built without the 'whisper' feature)")
 }
 
+/// Load the model and run it over one second of silence. Proves the file is a
+/// working model on this machine without needing any speech.
+pub fn self_test(model: &Path) -> Result<String> {
+    let t0 = std::time::Instant::now();
+    let silence = vec![0.0f32; 16_000];
+    let words = run_whisper(&silence, model, Some("en"), FILLER_PROMPT)?;
+    Ok(format!("model loaded and ran in {:.1} s ({} words from silence)", t0.elapsed().as_secs_f64(), words.len()))
+}
+
 /// whisper.cpp sometimes emits punctuation or word pieces as separate
 /// segments. Glue anything that does not start with a space-separated word
 /// (for example "," or "'s") onto the previous word.

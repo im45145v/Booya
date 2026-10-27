@@ -29,6 +29,10 @@ pub struct ModelInfo {
     pub file: &'static str,
     #[serde(skip)]
     pub archive: bool,
+    /// Second place to fetch the same file from when `url` fails. The pinned
+    /// SHA-256 applies to both, so a mirror cannot change the file.
+    #[serde(skip)]
+    pub mirror: &'static str,
     /// SHA-256 of the downloaded file (or archive). Downloads that do not
     /// match are deleted, so a compromised mirror cannot ship a different
     /// model or, worse, a different llama-server binary.
@@ -76,21 +80,22 @@ fn llama_runtime() -> Option<ModelInfo> {
         url,
         file: "llama-runtime",
         archive: true,
+        mirror: "",
         sha256,
     })
 }
 
 pub fn catalog() -> Vec<ModelInfo> {
     let mut v = vec![
-        ModelInfo { id: "whisper-tiny.en", kind: Kind::Speech, title: "Whisper tiny (English), fastest", size: 77_704_715, license: "MIT", url: whisper_url!("ggml-tiny.en.bin"), file: "ggml-tiny.en.bin", archive: false, sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f" },
-        ModelInfo { id: "whisper-base.en", kind: Kind::Speech, title: "Whisper base (English), recommended", size: 147_964_211, license: "MIT", url: whisper_url!("ggml-base.en.bin"), file: "ggml-base.en.bin", archive: false, sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" },
-        ModelInfo { id: "whisper-small.en", kind: Kind::Speech, title: "Whisper small (English), better captions", size: 487_614_201, license: "MIT", url: whisper_url!("ggml-small.en.bin"), file: "ggml-small.en.bin", archive: false, sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d" },
-        ModelInfo { id: "whisper-small", kind: Kind::Speech, title: "Whisper small (99 languages)", size: 487_601_967, license: "MIT", url: whisper_url!("ggml-small.bin"), file: "ggml-small.bin", archive: false, sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b" },
-        ModelInfo { id: "whisper-large-v3-turbo-q5", kind: Kind::Speech, title: "Whisper large v3 turbo Q5 (99 languages), best captions", size: 574_041_195, license: "MIT", url: whisper_url!("ggml-large-v3-turbo-q5_0.bin"), file: "ggml-large-v3-turbo-q5_0.bin", archive: false, sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2" },
-        ModelInfo { id: "ocr-detection", kind: Kind::Ocr, title: "ocrs text detection", size: 2_510_284, license: "CC-BY-SA-4.0", url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten", file: "text-detection.rten", archive: false, sha256: "f15cfb56bd02c4bf478a20343986504a1f01e1665c2b3a0ad66340f054b1b5ca" },
-        ModelInfo { id: "ocr-recognition", kind: Kind::Ocr, title: "ocrs text recognition", size: 9_716_568, license: "CC-BY-SA-4.0", url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten", file: "text-recognition.rten", archive: false, sha256: "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e" },
-        ModelInfo { id: "qwen2.5-0.5b", kind: Kind::Llm, title: "Qwen2.5 0.5B Instruct Q4_K_M, tiny and quick", size: 491_400_032, license: "Apache-2.0", url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf", file: "qwen2.5-0.5b-instruct-q4_k_m.gguf", archive: false, sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db" },
-        ModelInfo { id: "qwen2.5-1.5b", kind: Kind::Llm, title: "Qwen2.5 1.5B Instruct Q4_K_M, better writing", size: 1_117_320_736, license: "Apache-2.0", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf", file: "qwen2.5-1.5b-instruct-q4_k_m.gguf", archive: false, sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e" },
+        ModelInfo { id: "whisper-tiny.en", kind: Kind::Speech, title: "Whisper tiny (English), fastest", size: 77_704_715, license: "MIT", url: whisper_url!("ggml-tiny.en.bin"), file: "ggml-tiny.en.bin", archive: false, mirror: "", sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f" },
+        ModelInfo { id: "whisper-base.en", kind: Kind::Speech, title: "Whisper base (English), recommended", size: 147_964_211, license: "MIT", url: whisper_url!("ggml-base.en.bin"), file: "ggml-base.en.bin", archive: false, mirror: "", sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" },
+        ModelInfo { id: "whisper-small.en", kind: Kind::Speech, title: "Whisper small (English), better captions", size: 487_614_201, license: "MIT", url: whisper_url!("ggml-small.en.bin"), file: "ggml-small.en.bin", archive: false, mirror: "", sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d" },
+        ModelInfo { id: "whisper-small", kind: Kind::Speech, title: "Whisper small (99 languages)", size: 487_601_967, license: "MIT", url: whisper_url!("ggml-small.bin"), file: "ggml-small.bin", archive: false, mirror: "", sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b" },
+        ModelInfo { id: "whisper-large-v3-turbo-q5", kind: Kind::Speech, title: "Whisper large v3 turbo Q5 (99 languages), best captions", size: 574_041_195, license: "MIT", url: whisper_url!("ggml-large-v3-turbo-q5_0.bin"), file: "ggml-large-v3-turbo-q5_0.bin", archive: false, mirror: "", sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2" },
+        ModelInfo { id: "ocr-detection", kind: Kind::Ocr, title: "ocrs text detection", size: 2_510_284, license: "CC-BY-SA-4.0", url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten", file: "text-detection.rten", archive: false, mirror: "https://github.com/deeplabua/deepocr/releases/download/models-v1/text-detection.rten", sha256: "f15cfb56bd02c4bf478a20343986504a1f01e1665c2b3a0ad66340f054b1b5ca" },
+        ModelInfo { id: "ocr-recognition", kind: Kind::Ocr, title: "ocrs text recognition", size: 9_716_568, license: "CC-BY-SA-4.0", url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten", file: "text-recognition.rten", archive: false, mirror: "https://github.com/deeplabua/deepocr/releases/download/models-v1/text-recognition.rten", sha256: "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e" },
+        ModelInfo { id: "qwen2.5-0.5b", kind: Kind::Llm, title: "Qwen2.5 0.5B Instruct Q4_K_M, tiny and quick", size: 491_400_032, license: "Apache-2.0", url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf", file: "qwen2.5-0.5b-instruct-q4_k_m.gguf", archive: false, mirror: "", sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db" },
+        ModelInfo { id: "qwen2.5-1.5b", kind: Kind::Llm, title: "Qwen2.5 1.5B Instruct Q4_K_M, better writing", size: 1_117_320_736, license: "Apache-2.0", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf", file: "qwen2.5-1.5b-instruct-q4_k_m.gguf", archive: false, mirror: "", sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e" },
     ];
     v.extend(llama_runtime());
     v
@@ -207,7 +212,16 @@ pub fn list() -> Vec<ModelStatus> {
 /// `progress(done, total)` is called as bytes arrive.
 pub fn download(id: &str, progress: impl FnMut(u64, u64)) -> Result<PathBuf> {
     let m = find(id)?;
-    download_from(&m, m.url, progress)
+    let mut progress = progress;
+    match download_from(&m, m.url, &mut progress) {
+        Ok(p) => Ok(p),
+        Err(first) if !m.mirror.is_empty() => {
+            // The primary host can go away or refuse downloads (the OCR
+            // bucket answers 403 today). Try the pinned mirror.
+            download_from(&m, m.mirror, &mut progress).map_err(|second| anyhow::anyhow!("{first:#}; mirror also failed: {second:#}"))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn download_from(m: &ModelInfo, url: &str, mut progress: impl FnMut(u64, u64)) -> Result<PathBuf> {
@@ -345,7 +359,7 @@ mod tests {
     }
 
     fn fake(file: &'static str, body: &[u8], sha256: &'static str) -> ModelInfo {
-        ModelInfo { id: "fake", kind: Kind::Ocr, title: "", size: body.len() as u64, license: "", url: "", file, archive: false, sha256 }
+        ModelInfo { id: "fake", kind: Kind::Ocr, title: "", size: body.len() as u64, license: "", url: "", file, archive: false, mirror: "", sha256 }
     }
 
     static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());

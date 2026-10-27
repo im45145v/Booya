@@ -315,6 +315,43 @@ pub fn password_fields(lines: &[(String, [f64; 4])]) -> Vec<[f64; 4]> {
     out
 }
 
+/// Read text from one frame. Used by the self test.
+#[cfg(feature = "ocr")]
+pub fn read_text(frame: &demolens_core::render::Frame) -> Result<String> {
+    use crate::models::require;
+    use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+    use rten::Model;
+    let det = Model::load_file(require("ocr-detection")?)?;
+    let rec = Model::load_file(require("ocr-recognition")?)?;
+    let engine = OcrEngine::new(OcrEngineParams { detection_model: Some(det), recognition_model: Some(rec), ..Default::default() })?;
+    let rgb: Vec<u8> = frame.data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let img = ImageSource::from_bytes(&rgb, (frame.w, frame.h))?;
+    let input = engine.prepare_input(img)?;
+    Ok(engine.get_text(&input)?)
+}
+
+#[cfg(not(feature = "ocr"))]
+pub fn read_text(_frame: &demolens_core::render::Frame) -> Result<String> {
+    anyhow::bail!("this build of DemoLens has no OCR (built without the 'ocr' feature)")
+}
+
+/// Draw a known line of text, read it back and check the secret finder sees
+/// an email address in it.
+pub fn self_test() -> Result<String> {
+    let t0 = std::time::Instant::now();
+    let mut f = demolens_core::render::Frame::new(900, 160);
+    for px in f.data.chunks_exact_mut(4) {
+        px.copy_from_slice(&[255, 255, 255, 255]);
+    }
+    demolens_core::text::draw(&mut f, 30.0, 50.0, 44.0, "contact test@example.com", [0.0, 0.0, 0.0], 1.0);
+    let text = read_text(&f)?;
+    let found = find_sensitive(&text).into_iter().any(|(k, _)| k == Sensitive::Email);
+    if !found {
+        anyhow::bail!("OCR ran but did not read the test text (it read: {:?})", text.trim());
+    }
+    Ok(format!("read a test screen and found the email address in {:.1} s", t0.elapsed().as_secs_f64()))
+}
+
 #[cfg(not(feature = "ocr"))]
 pub fn scan(_project: &Project, _sample_ms: f64, _progress: impl FnMut(f64)) -> Result<Vec<Hit>> {
     anyhow::bail!("this build of DemoLens has no OCR (built without the 'ocr' feature)")
