@@ -267,7 +267,20 @@ impl Project {
 
     pub fn load(path: &Path) -> Result<Self> {
         let s = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        Ok(serde_json::from_str(&s)?)
+        let mut p: Project = serde_json::from_str(&s)?;
+        // Relative media paths are resolved against the project file, so a
+        // project works no matter which folder it is opened from.
+        let base = path.parent().map(|d| if d.as_os_str().is_empty() { Path::new(".") } else { d }).unwrap_or(Path::new("."));
+        let fix = |f: &mut PathBuf| {
+            if f.is_relative() && !f.exists() && base.join(&*f).exists() {
+                *f = base.join(&*f);
+            }
+        };
+        fix(&mut p.source);
+        if let Some(e) = p.events.as_mut() {
+            fix(e);
+        }
+        Ok(p)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {

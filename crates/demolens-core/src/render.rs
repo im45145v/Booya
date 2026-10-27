@@ -353,7 +353,13 @@ impl Renderer {
         let short = self.out_w.min(self.out_h) as f64;
         let px = (st.size * short).max(12.0) as f32;
         let max_w = self.out_w as f32 * 0.84;
-        let lines = text::wrap(&c.text, px, max_w);
+        // Words removed by cuts (fillers) are not shown.
+        let words: Vec<&crate::project::CaptionWord> = c.words.iter().filter(|w| crate::captions::word_visible(&self.project, w)).collect();
+        let body = if c.words.is_empty() { c.text.clone() } else { words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") };
+        if body.trim().is_empty() {
+            return;
+        }
+        let lines = text::wrap(&body, px, max_w);
         let lh = text::line_height(px) * 1.15;
         let pad = px * 0.5;
         let block_h = lh * lines.len() as f32 + pad * 2.0;
@@ -362,7 +368,7 @@ impl Renderer {
         let by = self.out_h as f32 - block_h - (short as f32 * 0.05);
         fill_round_rect(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32);
         // Which word is being spoken now (by index into the caption's words).
-        let active = c.words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
+        let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
         let col = st.color.map(|v| v as f32);
         let hi = st.highlight.map(|v| v as f32);
         let mut word_idx = 0usize;

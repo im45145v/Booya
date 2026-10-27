@@ -45,12 +45,17 @@ fn ts(ms: f64, sep: char) -> String {
     format!("{:02}:{:02}:{:02}{}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, sep, ms % 1000)
 }
 
+/// True when a word survives the project's cuts.
+pub fn word_visible(p: &Project, w: &CaptionWord) -> bool {
+    [w.start_ms + 40.0, (w.start_ms + w.end_ms) / 2.0, w.end_ms - 40.0].iter().any(|&t| p.output_time(t).is_some())
+}
+
 /// Captions mapped to output time; captions fully cut out are dropped.
 pub fn output_captions(p: &Project) -> Vec<(f64, f64, String)> {
     let mut v = Vec::new();
     for c in &p.captions {
         // Use the visible words so cut filler words disappear from the text.
-        let kept: Vec<&CaptionWord> = c.words.iter().filter(|w| p.output_time((w.start_ms + w.end_ms) / 2.0).is_some()).collect();
+        let kept: Vec<&CaptionWord> = c.words.iter().filter(|w| word_visible(p, w)).collect();
         let text = if c.words.is_empty() { c.text.clone() } else { kept.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") };
         if text.trim().is_empty() {
             continue;
@@ -106,6 +111,32 @@ impl Default for AutoCutOptions {
     }
 }
 
+/// Whisper word timestamps are coarse and often stretch across pauses.
+/// Pull word edges out of detected silences so captions line up with the
+/// voice and cutting a pause never swallows a word.
+pub fn snap_to_speech(words: &mut [CaptionWord], silences: &[(f64, f64)]) {
+    for i in 0..words.len() {
+        let next = words.get(i + 1).map(|n| n.end_ms).unwrap_or(f64::MAX);
+        let w = &mut words[i];
+        for &(a, b) in silences {
+            if w.start_ms >= a && w.end_ms <= b {
+                // The whole word sits in a pause: whisper placed it too
+                // early, so move it to where the voice starts again.
+                let dur = w.end_ms - w.start_ms;
+                w.start_ms = b;
+                w.end_ms = (b + dur).min(next).max(b + 1.0);
+                continue;
+            }
+            if w.start_ms >= a && w.start_ms < b && b < w.end_ms {
+                w.start_ms = b;
+            }
+            if w.end_ms > a && w.end_ms <= b && a > w.start_ms {
+                w.end_ms = a;
+            }
+        }
+    }
+}
+
 /// Source ranges to remove. `silences` comes from `audio::detect_silences`.
 pub fn plan_cuts(words: &[CaptionWord], silences: &[(f64, f64)], o: &AutoCutOptions) -> Vec<(f64, f64)> {
     let mut r: Vec<(f64, f64)> = Vec::new();
@@ -136,6 +167,16 @@ pub fn plan_cuts(words: &[CaptionWord], silences: &[(f64, f64)], o: &AutoCutOpti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_snap_out_of_silence() {
+        let mut ws = vec![w(5000.0, 6000.0, "march."), w(6000.0, 6580.0, "Press"), w(10660.0, 12000.0, "saved.")];
+        snap_to_speech(&mut ws, &[(5280.0, 6860.0), (11240.0, 11830.0)]);
+        assert_eq!((ws[0].start_ms, ws[0].end_ms), (5000.0, 5280.0));
+        // A word placed entirely inside a pause moves to the end of it.
+        assert_eq!((ws[1].start_ms, ws[1].end_ms), (6860.0, 7440.0));
+        assert_eq!(ws[2].end_ms, 12000.0);
+    }
 
     fn w(a: f64, b: f64, t: &str) -> CaptionWord {
         CaptionWord { start_ms: a, end_ms: b, text: t.into() }
