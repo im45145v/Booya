@@ -9,12 +9,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev ffmpeg
-      - name: Test core
-        run: cargo test -p demolens-core
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev ffmpeg cmake clang libclang-dev
+      - name: Test core and AI
+        run: cargo test -p demolens-core -p demolens-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
