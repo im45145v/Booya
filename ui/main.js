@@ -150,6 +150,15 @@ $('bg-pick').onclick = async () => {
   const p = await dialog.open({ multiple: false, filters: [{ name: 'Photo', extensions: ['png', 'jpg', 'jpeg', 'webp', 'heic', 'heif', 'bmp', 'gif'] }] });
   if (p) useBackground(p);
 };
+// Thumbnails load when a recent photo scrolls into view (the row is hidden until the Image background is chosen).
+let recentsIO = null;
+function recentsObserver() {
+  return (recentsIO ||= new IntersectionObserver(entries => entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    const b = en.target; recentsIO.unobserve(b);
+    invoke('background_thumb', { path: b.dataset.path }).then(u => { b.style.backgroundImage = `url(${u})`; }).catch(() => { b.remove(); });
+  }), { rootMargin: '80px' }));
+}
 async function loadRecents() {
   const box = $('bg-recents'); if (!box) return;
   const list = await invoke('background_recents').catch(() => []);
@@ -158,7 +167,7 @@ async function loadRecents() {
     const b = document.createElement('button'); b.className = 'recent'; b.title = baseName(p); b.setAttribute('aria-label', 'Use ' + baseName(p));
     b.onclick = () => { $('bg-image').value = p; setBgType('image'); readPanel(); refresh(); };
     box.appendChild(b);
-    invoke('background_thumb', { path: p }).then(u => { b.style.backgroundImage = `url(${u})`; }).catch(() => { b.remove(); });
+    b.dataset.path = p; recentsObserver().observe(b);
   }
 }
 loadRecents();
