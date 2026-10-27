@@ -300,6 +300,18 @@ impl Default for Watermark {
     }
 }
 
+/// A short text note shown over the video for a few seconds, like "Click here".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Callout {
+    pub text: String,
+    /// Source time range.
+    pub start_ms: f64,
+    pub end_ms: f64,
+    /// Centre of the note as a fraction of the output (0 to 1).
+    pub x: f64,
+    pub y: f64,
+}
+
 /// A title card shown before or after the recording.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Card {
@@ -377,6 +389,8 @@ pub struct Project {
     #[serde(default)]
     pub watermark: Option<Watermark>,
     #[serde(default)]
+    pub callouts: Vec<Callout>,
+    #[serde(default)]
     pub intro: Option<Card>,
     #[serde(default)]
     pub outro: Option<Card>,
@@ -434,6 +448,7 @@ impl Project {
             audio: AudioSettings::default(),
             webcam: None,
             watermark: None,
+            callouts: Vec::new(),
             intro: None,
             outro: None,
         }

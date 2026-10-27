@@ -189,6 +189,7 @@ pub fn passthrough_ok(p: &Project) -> bool {
         && !p.keys.enabled
         && p.webcam.as_ref().is_none_or(|w| !w.visible)
         && p.card_lengths_ms() == (0.0, 0.0)
+        && p.callouts.is_empty()
         && p.watermark.as_ref().is_none_or(|w| w.text.trim().is_empty())
         && !p.audio.denoise
         && (ow, oh) == (p.source_width, p.source_height)

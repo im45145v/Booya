@@ -273,6 +273,12 @@
       <label class="switch"><input type="checkbox" id="zoom-follow" checked /> Follow the cursor</label>
       <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-wand"/></svg><span>Regenerate auto zoom</span></button></div>
 
+      <h3 class="section">Callouts</h3>
+      <p class="muted small">Short notes on the video, such as "Click here". Added at the playhead.</p>
+      <div class="row"><input id="co-text" class="field" maxlength="80" placeholder="Text to show" aria-label="Callout text" /></div>
+      <div class="row"><select id="co-pos" class="field" aria-label="Callout position"><option value="0.85">Bottom</option><option value="0.5">Middle</option><option value="0.15">Top</option></select><select id="co-len" class="field" aria-label="Callout length"><option value="2000">2 s</option><option value="3000" selected>3 s</option><option value="5000">5 s</option></select><button id="co-add" class="btn needs-project">Add</button></div>
+      <div id="co-list" class="list"></div>
+
       <h3 class="section">Blur boxes</h3>
       <div class="row"><button id="blur-draw" class="btn needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span>Draw blur boxes...</span></button></div>
       <div class="row"><input id="blur-rect" class="field" placeholder="or type x,y,w,h in video pixels" aria-label="Blur box x,y,w,h" /><button id="blur-add" class="btn needs-project">Add</button></div>

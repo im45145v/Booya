@@ -100,7 +100,7 @@ function syncPanel() {
   const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.65;
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
-  renderBlurList(); markTemplate(); markDestination();
+  renderBlurList(); renderCallouts(); markTemplate(); markDestination();
 }
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
@@ -172,6 +172,24 @@ function renderBlurList() {
     d.appendChild(x); $('blur-list').appendChild(d);
   });
 }
+
+function renderCallouts() {
+  const box = $('co-list'); box.innerHTML = project.callouts && project.callouts.length ? '' : '<p class="muted small">No callouts yet.</p>';
+  (project.callouts || []).forEach((c, i) => {
+    const d = document.createElement('div'); d.className = 'item';
+    const label = document.createElement('span'); label.textContent = `${c.text} \u00b7 ${(c.start_ms / 1000).toFixed(1)}s`;
+    const x = document.createElement('button'); x.className = 'btn icon ghost sm'; x.innerHTML = icon('i-x'); x.setAttribute('aria-label', 'Remove callout ' + (i + 1));
+    x.onclick = () => { project.callouts.splice(i, 1); renderCallouts(); refresh(); };
+    d.append(label, x); box.appendChild(d);
+  });
+}
+$('co-add').onclick = () => {
+  const t = $('co-text').value.trim(); if (!project) return;
+  if (!t) return status('Type the note first, for example: Click here', 'error');
+  const s = tl.outToSrc(tl.playhead);
+  (project.callouts = project.callouts || []).push({ text: t, start_ms: s, end_ms: Math.min(project.duration_ms, s + +$('co-len').value), x: 0.5, y: +$('co-pos').value });
+  $('co-text').value = ''; renderCallouts(); refresh(); status('Callout added at the playhead.', 'success');
+};
 
 function syncSelection() {
   if (!project) return;

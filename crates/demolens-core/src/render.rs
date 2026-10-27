@@ -693,8 +693,35 @@ impl Renderer {
                 self.draw_caption(&mut out, c, src_t);
             }
         }
+        self.draw_callouts(&mut out, src_t);
         self.draw_watermark(&mut out);
         out
+    }
+
+    /// Notes that fade in and out over the video, in a rounded pill.
+    fn draw_callouts(&self, out: &mut Frame, src_t: f64) {
+        let short = self.out_w.min(self.out_h) as f32;
+        let px = (short * 0.036).max(12.0);
+        for c in &self.project.callouts {
+            if src_t < c.start_ms || src_t > c.end_ms || c.text.trim().is_empty() {
+                continue;
+            }
+            // 250 ms fades at each end.
+            let k = (((src_t - c.start_ms) / 250.0).min((c.end_ms - src_t) / 250.0)).clamp(0.0, 1.0) as f32;
+            let k = k * k * (3.0 - 2.0 * k);
+            let lines = text::wrap(c.text.trim(), px, self.out_w as f32 * 0.6);
+            let lh = text::line_height(px) * 1.1;
+            let pad = px * 0.6;
+            let bw = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.0;
+            let bh = lh * lines.len() as f32 + pad * 1.2;
+            let bx = (c.x.clamp(0.0, 1.0) as f32 * self.out_w as f32 - bw / 2.0).clamp(4.0, (self.out_w as f32 - bw - 4.0).max(4.0));
+            let by = (c.y.clamp(0.0, 1.0) as f32 * self.out_h as f32 - bh / 2.0).clamp(4.0, (self.out_h as f32 - bh - 4.0).max(4.0));
+            fill_round_rect(out, bx as f64, by as f64, bw as f64, bh as f64, (bh * 0.32) as f64, [20.0, 20.0, 26.0], 0.86 * k);
+            for (i, line) in lines.iter().enumerate() {
+                let x = bx + (bw - text::measure(line, px)) / 2.0;
+                text::draw(out, x, by + pad * 0.6 + i as f32 * lh, px, line, [255.0, 255.0, 255.0], k);
+            }
+        }
     }
 
     /// A title card over the style's background. `k` (0 to 1) is how visible the text is,
@@ -909,5 +936,25 @@ mod card_tests {
         assert_eq!(off.data[0], 10);
         // Nothing drawn in a far corner.
         assert_eq!(on.data[(5 * 640 + 5) * 4], 10);
+    }
+}
+
+#[cfg(test)]
+mod callout_tests {
+    use super::*;
+    use crate::project::Callout;
+
+    #[test]
+    fn a_callout_shows_only_inside_its_time_range() {
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 10_000.0);
+        p.style.padding = 0.0;
+        p.callouts.push(Callout { text: "Click here".into(), start_ms: 1000.0, end_ms: 4000.0, x: 0.5, y: 0.8 });
+        let r = Renderer::new(p, None, 640, 360, None);
+        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
+        let before = r.render(&src, 500.0);
+        let during = r.render(&src, 2500.0);
+        let after = r.render(&src, 4500.0);
+        assert_eq!(before.data, after.data);
+        assert_ne!(before.data, during.data);
     }
 }
