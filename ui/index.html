@@ -274,6 +274,12 @@
       <div class="row"><select id="co-pos" class="field" aria-label="Callout position"><option value="0.85">Bottom</option><option value="0.5">Middle</option><option value="0.15">Top</option></select><select id="co-len" class="field" aria-label="Callout length"><option value="2000">2 s</option><option value="3000" selected>3 s</option><option value="5000">5 s</option></select><button id="co-add" class="btn needs-project">Add</button></div>
       <div id="co-list" class="list"></div>
 
+      <h3 class="section">Transcript</h3>
+      <p class="muted small" id="tr-hint">Fix a word by editing it. Cut line removes that part of the video.</p>
+      <div class="row"><input id="tr-find" class="field" placeholder="Find" aria-label="Find in transcript" /><input id="tr-repl" class="field" placeholder="Replace with" aria-label="Replace with" /></div>
+      <div class="row"><button id="tr-replace" class="btn needs-project">Replace all</button></div>
+      <div id="tr-list" class="tr-list"></div>
+
       <h3 class="section">Shapes</h3>
       <p class="muted small" id="sh-hint">Pick a tool, then drag on the preview. It is added at the playhead.</p>
       <div class="row" id="sh-tools" role="group" aria-label="Shape tools">
@@ -326,5 +332,6 @@
 <script src="main.js"></script>
 <script src="picker.js"></script>
   <script src="annotate.js"></script>
+  <script src="transcript.js"></script>
 </body>
 </html>

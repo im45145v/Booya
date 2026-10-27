@@ -256,7 +256,7 @@ class Timeline {
       ctx.fillStyle = it.hex || C(it.color); ctx.globalAlpha = sel ? 1 : .8;
       rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.fill(); ctx.globalAlpha = 1;
       if (sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.stroke(); ctx.lineWidth = 1; }
-      if (b - a > 36 && yb - ya > 12) { ctx.fillStyle = it.hex ? '#111' : '#fff'; ctx.font = font(10); ctx.fillText(it.label.slice(0, Math.floor((b - a) / 6)), a + 6, (ya + yb) / 2); }
+      if (b - a > 36 && yb - ya > 10) { ctx.fillStyle = it.hex ? '#111' : '#fff'; ctx.font = font(10); ctx.fillText(it.label.slice(0, Math.floor((b - a) / 6)), a + 6, (ya + yb) / 2); }
     }
     // Keystrokes (what the overlay shows)
     { const [ka, kb] = this.L.keys; ctx.font = font(10);
