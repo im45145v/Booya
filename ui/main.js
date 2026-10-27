@@ -332,6 +332,13 @@ function hideBusy() { $('busy-overlay').hidden = true; }
 // ---------- Recording ----------
 $('rec-target').onchange = () => { const k = $('rec-target').value; $('rec-arg').hidden = k === 'screen'; $('rec-pick').hidden = k !== 'area'; $('rec-arg').placeholder = k === 'window' ? (navigator.userAgent.includes('Windows') ? 'Window title' : 'Window id') : 'x,y,w,h'; };
 document.querySelectorAll('.toggle').forEach(b => (b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true')));
+// Turning key capture on explains what is kept and, on a Mac, which permission it needs.
+$('rec-keys').addEventListener('click', () => {
+  if ($('rec-keys').getAttribute('aria-pressed') !== 'true') return;
+  status(IS_MAC
+    ? 'Key capture is on. Only shortcuts and the timing of typing are kept, never the letters. macOS will ask for Input Monitoring: allow DemoLens in System Settings > Privacy & Security > Input Monitoring, then restart the app.'
+    : 'Key capture is on. Only shortcuts and the timing of typing are kept, never the letters. Password fields are not special-cased, so turn it off while typing secrets.', 'info');
+});
 function setRecUi(on) {
   recording = on;
   $('rec-btn').classList.toggle('recording', on);
