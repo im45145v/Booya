@@ -1,0 +1,20 @@
+[package]
+name = "demolens-core"
+description = "Event log, auto zoom, compositor and export pipeline for DemoLens"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Global keyboard/mouse hooks for the event log (needs X11/Xtst dev libs on Linux).
+input-hooks = ["dep:rdev"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rayon = "1"
+png = "0.17"
+rdev = { version = "0.5", optional = true }
