@@ -59,7 +59,7 @@ If you record demos of developer tools, your screen is full of tokens, emails an
 - **Auto zoom**: zoom segments are generated from clicks and typing bursts. The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Subtle, moderate and intense zoom styles are one click. Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
 - **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
 - **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
-- **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, intro and outro title cards and timed text callouts.
+- **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, twelve built-in wallpapers, intro and outro title cards, timed text callouts and drawn shapes (arrow, box, ellipse, highlight).
 - **Interactive demo**: `demolens interactive demo.json` (or Magic tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot.
@@ -189,7 +189,7 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area, window (by id or title, CLI). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in, class-only poller that needs Input Monitoring (0.3.0, not yet tested on a real Mac) |
+| macOS (12.3+) | ScreenCaptureKit: screen, area, window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in, class-only poller that needs Input Monitoring (0.3.0, not yet tested on a real Mac) |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
 
 Native GPU capture on Windows (Windows.Graphics.Capture) and system audio on macOS are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.
