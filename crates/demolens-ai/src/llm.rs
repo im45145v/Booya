@@ -98,6 +98,7 @@ impl Llm {
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0.3,
             "max_tokens": max_tokens,
+            "frequency_penalty": 0.4,
             "stream": false
         });
         let v: Value = agent()

@@ -196,8 +196,7 @@ pub fn generate(p: &Project, log: Option<&demolens_core::events::EventLog>, llm:
         }
     }
     if let Ok(t) = llm.chat(SYSTEM, &format!("Demo title: {}\nSummary: {}\n\nWrite a short, friendly social media post (under 280 characters) announcing this demo video. No emojis, at most two hashtags. Reply with the post only.", d.title, d.summary), 160) {
-        let t = t.trim_matches(['"', ' ', '\n']).to_string();
-        if !t.is_empty() {
+        if let Some(t) = tidy_post(&t) {
             d.social_post = t;
         }
     }
@@ -205,10 +204,61 @@ pub fn generate(p: &Project, log: Option<&demolens_core::events::EventLog>, llm:
     Ok(d)
 }
 
+/// Small models sometimes loop on hashtags and emojis. Keep the first
+/// paragraph, drop emojis, keep at most two hashtags and 280 characters.
+/// Returns None when nothing usable is left.
+pub fn tidy_post(raw: &str) -> Option<String> {
+    // Skip a preamble such as "Here's a friendly post:".
+    let para = raw
+        .split("\n\n")
+        .map(|p| p.trim().trim_matches('"').trim())
+        .find(|p| !p.is_empty() && !p.ends_with(':'))
+        .unwrap_or("")
+        .replace('\n', " ");
+    let mut tags = 0;
+    let mut words = Vec::new();
+    for w in para.split_whitespace() {
+        let w: String = w.chars().filter(|c| (*c as u32) < 0x2000 || c.is_alphanumeric()).collect();
+        if w.is_empty() {
+            continue;
+        }
+        if w.starts_with('#') {
+            tags += 1;
+            if tags > 2 || words.iter().any(|x: &String| x.eq_ignore_ascii_case(&w)) {
+                continue;
+            }
+        }
+        words.push(w);
+    }
+    let mut out = String::new();
+    for w in words {
+        if out.len() + w.len() + 1 > 280 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&w);
+    }
+    let letters = out.chars().filter(|c| c.is_alphabetic()).count();
+    (letters >= 20).then_some(out)
+}
+
 fn clean_name(l: &str) -> String {
-    let l = l.trim().trim_start_matches(['-', '*', '#', ' ']);
-    let l = l.strip_prefix("Step").or_else(|| l.strip_prefix("Chapter")).unwrap_or(l);
-    l.trim_start_matches(|c: char| c.is_ascii_digit() || ".-*):# ".contains(c)).trim().trim_matches(['"', '*', '\'']).trim().to_string()
+    // Models decorate list items in many ways ("1. Step 1: \"Name\"", "**Name**").
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?i)^\s*(?:[-*#>]+\s*|(?:step|chapter)\s*\d*\s*[.):-]?\s*|\d+\s*[.):-]\s*)").unwrap());
+    static TAIL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let tail = TAIL.get_or_init(|| regex::Regex::new(r"(?i)\s*[-(:]?\s*(?:step|chapter)\s*\d+\)?\s*$").unwrap());
+    let mut cur = l.trim().replace(['"', '\u{201c}', '\u{201d}'], "");
+    loop {
+        let next = re.replace(&cur, "");
+        let next = tail.replace(&next, "").trim().trim_matches(['"', '*', '\'']).trim().to_string();
+        if next == cur {
+            return next;
+        }
+        cur = next;
+    }
 }
 
 pub fn chapters_text(d: &DemoDocs) -> String {
@@ -272,10 +322,23 @@ mod tests {
     }
 
     #[test]
+    fn runaway_posts_are_tidied() {
+        let raw = "\u{1F680}\u{2728} Invoices Saved Successfully #Invoices #InvoiceManagement \u{1F310} #Invoices #InvoiceManagement #More";
+        assert_eq!(tidy_post(raw).unwrap(), "Invoices Saved Successfully #Invoices #InvoiceManagement");
+        assert!(tidy_post("#a #b").is_none());
+        assert_eq!(tidy_post("Here's a post:\n\n\"Saving invoices is now one click.\"").unwrap(), "Saving invoices is now one click.");
+        assert!(tidy_post(&"word ".repeat(200)).unwrap().len() <= 280);
+    }
+
+    #[test]
     fn llm_chapter_names_are_cleaned() {
         assert_eq!(clean_name("Step 1: \"Invoice Search\""), "Invoice Search");
         assert_eq!(clean_name("2. **Save**"), "Save");
         assert_eq!(clean_name("- Export to PDF"), "Export to PDF");
+        assert_eq!(clean_name("1. Step 1: \"Invoices Page\""), "Invoices Page");
+        assert_eq!(clean_name("3D printing"), "3D printing");
+        assert_eq!(clean_name("Invoice Search\" Chapter 1"), "Invoice Search");
+        assert_eq!(clean_name("Save (Step 2)"), "Save");
     }
 
     #[test]

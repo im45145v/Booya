@@ -19,6 +19,10 @@ pub fn transcribe(video: &Path, model: &Path, language: Option<&str>) -> Result<
     use anyhow::Context;
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+    // Keep whisper.cpp's model loading chatter off the terminal unless asked.
+    if std::env::var_os("DEMOLENS_DEBUG_WHISPER").is_none() {
+        whisper_rs::install_logging_hooks();
+    }
     let audio = demolens_core::audio::decode_mono(video, 16_000)?;
     if audio.is_empty() {
         return Ok(Vec::new());

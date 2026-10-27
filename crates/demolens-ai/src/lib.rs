@@ -11,5 +11,6 @@
 pub mod docs;
 pub mod llm;
 pub mod models;
+pub mod pipeline;
 pub mod redact;
 pub mod transcribe;
