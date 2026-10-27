@@ -225,12 +225,52 @@ pub struct CameraTiming {
     pub ease_in_ms: f64,
     pub ease_out_ms: f64,
     pub follow_smoothing_ms: f64,
+    /// Fraction of the visible half-size the cursor may roam before the camera
+    /// starts to follow. 0 follows every move; 0.4 keeps a calm, still frame.
+    pub deadzone: f64,
 }
+
+/// How far ahead of a zoom's start the camera aims, so it arrives at the action.
+const ANTICIPATION_MS: f64 = 1000.0;
+/// Step of the camera simulation. Small enough to be smooth, large enough to be cheap.
+const SIM_STEP_MS: f64 = 40.0;
 
 impl CameraTiming {
     pub fn new(ease_in_ms: f64, ease_out_ms: f64, follow_smoothing_ms: f64) -> Self {
-        Self { ease_in_ms, ease_out_ms, follow_smoothing_ms }
+        Self { ease_in_ms, ease_out_ms, follow_smoothing_ms, deadzone: 0.4 }
     }
+}
+
+/// Where the zoomed camera aims at time `t`.
+///
+/// The cursor can wander inside a dead zone without moving the camera; once it
+/// pushes past the edge the camera is pulled along, eased so it never snaps.
+/// This is what makes the footage feel steady instead of seasick. Starting
+/// from where the cursor will be when the action begins means the zoom lands
+/// on the content rather than on wherever the pointer happened to be.
+fn follow_target(s: &ZoomSegment, tr: &CursorTrack, t: f64, timing: &CameraTiming, w: f64) -> (f64, f64) {
+    let smooth = timing.follow_smoothing_ms;
+    let at = |x: f64| tr.smooth_at(x, smooth);
+    let Some(mut pos) = at((s.start_ms + ANTICIPATION_MS).min(s.end_ms)).or(Some(s.focus)) else { return s.focus };
+    if timing.deadzone <= 0.0 {
+        return at(t).unwrap_or(pos);
+    }
+    let half = w / (2.0 * s.scale.max(1.0)) * timing.deadzone;
+    let tau = (smooth * 0.6).max(60.0);
+    let k = 1.0 - (-SIM_STEP_MS / tau).exp();
+    let mut x = s.start_ms;
+    while x < t {
+        let step = SIM_STEP_MS.min(t - x);
+        x += step;
+        if let Some(c) = at(x) {
+            // The point on the dead-zone border nearest the cursor is where the camera wants to be.
+            let want = |p: f64, c: f64| if (c - p).abs() > half { c - (c - p).signum() * half } else { p };
+            let kk = if step < SIM_STEP_MS { 1.0 - (-step / tau).exp() } else { k };
+            pos.0 += (want(pos.0, c.0) - pos.0) * kk;
+            pos.1 += (want(pos.1, c.1) - pos.1) * kk;
+        }
+    }
+    pos
 }
 
 /// Evaluate the camera at source time `t`.
@@ -259,7 +299,7 @@ pub fn camera_at(t: f64, segments: &[ZoomSegment], track: Option<&CursorTrack>, 
     let scale = s.scale.max(1.0).powf(k);
 
     let target = if s.follow_cursor {
-        track.and_then(|tr| tr.smooth_at(t, timing.follow_smoothing_ms)).unwrap_or(s.focus)
+        track.map(|tr| follow_target(s, tr, t, &timing, w)).unwrap_or(s.focus)
     } else {
         s.focus
     };
@@ -273,7 +313,8 @@ pub fn camera_at(t: f64, segments: &[ZoomSegment], track: Option<&CursorTrack>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    const T: CameraTiming = CameraTiming { ease_in_ms: 400.0, ease_out_ms: 400.0, follow_smoothing_ms: 0.0 };
+    const T: CameraTiming = CameraTiming { ease_in_ms: 400.0, ease_out_ms: 400.0, follow_smoothing_ms: 0.0, deadzone: 0.0 };
+    const CALM: CameraTiming = CameraTiming { ease_in_ms: 400.0, ease_out_ms: 400.0, follow_smoothing_ms: 250.0, deadzone: 0.4 };
     use crate::events::{Event, EventKind, MouseButton};
 
     fn log_with(events: Vec<Event>) -> EventLog {
@@ -454,6 +495,20 @@ mod tests {
         let a = camera_at(800.0, &[seg.clone()], Some(&track), 1920.0, 1080.0, T);
         let b = camera_at(1600.0, &[seg], Some(&track), 1920.0, 1080.0, T);
         assert!(b.cx > a.cx);
+    }
+
+    #[test]
+    fn camera_holds_still_while_the_cursor_wanders_then_follows() {
+        let log = log_with(vec![mv(0.0, 900.0, 500.0), mv(1500.0, 1000.0, 540.0), mv(3000.0, 1000.0, 540.0), mv(5000.0, 1800.0, 900.0)]);
+        let track = CursorTrack::new(&log);
+        let seg = ZoomSegment { start_ms: 0.0, end_ms: 8000.0, scale: 2.0, follow_cursor: true, focus: (900.0, 500.0), reason: "click".into() };
+        let segs = [seg];
+        let a = camera_at(2000.0, &segs, Some(&track), 1920.0, 1080.0, CALM);
+        let b = camera_at(3000.0, &segs, Some(&track), 1920.0, 1080.0, CALM);
+        // The cursor drifted about 100px inside the dead zone: the camera barely moves.
+        assert!((a.cx - b.cx).abs() < 30.0, "{} vs {}", a.cx, b.cx);
+        let c = camera_at(6500.0, &segs, Some(&track), 1920.0, 1080.0, CALM);
+        assert!(c.cx > b.cx + 200.0, "camera did not follow the cursor out of the dead zone");
     }
 
     #[test]

@@ -366,12 +366,15 @@ pub struct ZoomConfigSer {
     pub ease_out_ms: f64,
     /// Zoom level used when auto zoom is generated.
     pub level: f64,
+    /// 0 makes the camera follow every cursor move; 1 holds still until the
+    /// cursor nears the edge of the view. Added in 0.3.0.
+    pub steadiness: f64,
 }
 
 impl Default for ZoomConfigSer {
     fn default() -> Self {
         let c = ZoomConfig::default();
-        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale }
+        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.65 }
     }
 }
 

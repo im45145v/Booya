@@ -238,6 +238,7 @@
       <label class="stack" title="Quick settings for how bold the zooms are. You can fine tune below.">Zoom style<select id="zc-style" class="field"><option value="">Custom</option><option value="subtle">Subtle (gentle, slow)</option><option value="moderate">Moderate (default)</option><option value="intense">Intense (close and quick)</option></select></label>
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
       <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="3" step="0.1" /><output id="zc-level-out">1.7x</output></label>
+      <label class="slider" title="High keeps the view still while the cursor roams and follows only when it nears the edge. Low follows every move.">Steadiness <input id="zc-steady" type="range" min="0" max="1" step="0.05" /><output id="zc-steady-out">65%</output></label>
       <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-wand"/></svg><span>Apply to auto zoom</span></button></div>
 
       <h3 class="section">Audio</h3>

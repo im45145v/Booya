@@ -525,7 +525,11 @@ impl Renderer {
             self.track.as_ref(),
             p.source_width as f64,
             p.source_height as f64,
-            CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(350.0)),
+            {
+                let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(350.0));
+                t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
+                t
+            },
         )
     }
 
