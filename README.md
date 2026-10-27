@@ -1,4 +1,6 @@
-# DemoLens
+<p align="center"><img src="assets/logo.svg" width="128" height="128" alt="DemoLens logo"></p>
+
+<h1 align="center">DemoLens</h1>
 
 DemoLens is a free, open source screen recorder for product demos. It is a local alternative to Screen Studio and Screen Charm that runs on Windows, macOS and Linux. Everything happens on your machine: no account, no upload, no internet connection.
 

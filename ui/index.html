@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
 <head>
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
 <meta charset="utf-8" />
 <title>DemoLens</title>
 <link rel="stylesheet" href="style.css" />
@@ -34,7 +35,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
     <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.4"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-skip" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12h7"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
@@ -45,7 +46,7 @@
 </svg>
 
 <header class="toolbar" role="toolbar" aria-label="Main toolbar">
-  <div class="brand"><svg class="ico" aria-hidden="true"><use href="#i-logo"/></svg><span>DemoLens</span></div>
+  <div class="brand"><img src="logo.svg" alt="" width="24" height="24"><span>DemoLens</span></div>
   <div class="tb-group">
     <button id="open-btn" class="btn ghost" title="Open a video or project (Ctrl+O)"><svg class="ico"><use href="#i-open"/></svg><span>Open</span></button>
     <button id="save-btn" class="btn ghost needs-project" title="Save project (Ctrl+S). Shift+click or Ctrl+Shift+S to save as."><svg class="ico"><use href="#i-save"/></svg><span>Save</span></button>
@@ -69,7 +70,7 @@
   </div>
   <div class="tb-group">
     <button id="theme-btn" class="btn icon ghost" title="Switch light or dark theme" aria-label="Switch theme"><svg class="ico"><use href="#i-sun"/></svg></button>
-    <button id="about-btn" class="btn icon ghost" title="About DemoLens" aria-label="About DemoLens"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    <button id="about-btn" class="btn icon ghost" title="About DemoLens" aria-label="About DemoLens"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button>
     <button id="keys-btn" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico"><use href="#i-keyboard"/></svg></button>
     <button id="ex-top" class="btn primary needs-project" title="Export video (Ctrl+E)"><svg class="ico"><use href="#i-export"/></svg><span>Export</span></button>
   </div>
@@ -81,7 +82,7 @@
       <img id="preview" alt="Preview of the current frame" hidden />
       <div id="welcome" class="welcome">
         <div class="welcome-card">
-          <div class="welcome-logo"><svg class="ico xl" aria-hidden="true"><use href="#i-logo"/></svg></div>
+          <img class="welcome-logo" src="logo.svg" alt="DemoLens logo" width="112" height="112">
           <h1>Turn a screen recording into a polished demo</h1>
           <p class="lead">Auto zoom on every click, a smooth cursor, captions, filler words cut and secrets blurred. Everything runs on this computer.</p>
           <div class="welcome-actions">

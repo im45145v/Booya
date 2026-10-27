@@ -115,7 +115,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 1px solid v
 /* Toolbar */
 .toolbar { display: flex; align-items: center; gap: var(--sp-3); height: 48px; padding: 0 var(--sp-3); background: var(--surface); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: var(--fs-lg); letter-spacing: -.01em; padding-right: var(--sp-2); }
-.brand .ico { width: 20px; height: 20px; color: var(--accent); }
+.brand img { width: 24px; height: 24px; display: block; transform: scale(1.22); }
 .tb-group { display: flex; align-items: center; gap: 4px; }
 .tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
 .project-name { flex: 1; text-align: center; color: var(--muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -134,7 +134,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 1px solid v
 .welcome { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: var(--sp-5); overflow: auto;
   background: radial-gradient(1200px 500px at 20% -10%, var(--accent-soft), transparent 60%), radial-gradient(800px 400px at 110% 110%, rgba(236,72,153,.12), transparent 60%); }
 .welcome-card { max-width: 560px; text-align: center; }
-.welcome-logo { width: 72px; height: 72px; margin: 0 auto var(--sp-4); border-radius: 20px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, #6d6af5, #ec4899); box-shadow: var(--shadow); }
+.welcome-logo { width: 112px; height: 112px; display: block; margin: -12px auto var(--sp-2); filter: drop-shadow(0 8px 18px rgba(60, 40, 160, .35)); }
 .welcome h1 { font-size: 26px; line-height: 1.2; letter-spacing: -.02em; margin: 0 0 var(--sp-2); }
 .lead { color: var(--muted); font-size: var(--fs-lg); margin: 0 auto var(--sp-5); max-width: 480px; }
 .welcome-actions { display: flex; gap: var(--sp-2); justify-content: center; flex-wrap: wrap; margin-bottom: var(--sp-5); }
