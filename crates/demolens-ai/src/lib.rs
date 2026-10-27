@@ -9,6 +9,7 @@
 //! * `docs`       the "demo to docs" pipeline with a no-model fallback
 
 pub mod docs;
+pub mod interactive;
 pub mod llm;
 pub mod models;
 pub mod pipeline;

@@ -901,6 +901,32 @@ async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: 
     .await
 }
 
+
+/// Build a self-contained click-through demo (one HTML file) from the clicks.
+/// Runs fully on this computer; secrets already blurred in the project are
+/// blurred in every screenshot.
+#[tauri::command]
+async fn export_interactive(app: tauri::AppHandle, project: Project, out: String, title: Option<String>, cta_text: Option<String>, cta_url: Option<String>, badge: Option<bool>) -> R<String> {
+    let outp = check_write(&app, &out, &["html"])?;
+    blocking(move || {
+        let log = project.events.as_ref().and_then(|p| EventLog::load(p).ok());
+        let o = demolens_ai::interactive::Options {
+            title: title.filter(|t| !t.trim().is_empty()),
+            cta_text: cta_text.filter(|t| !t.trim().is_empty()),
+            cta_url: cta_url.filter(|t| !t.trim().is_empty()),
+            badge: badge.unwrap_or(true),
+            ..Default::default()
+        };
+        let (html, n) = demolens_ai::interactive::generate(&project, log.as_ref(), None, &o, |i, total| {
+            progress(&app, "interactive", if total == 0 { 0.0 } else { i as f64 / total as f64 }, &format!("Capturing step {} of {}", (i + 1).min(total), total));
+        })
+        .map_err(e)?;
+        std::fs::write(&outp, &html).map_err(e)?;
+        Ok(format!("{n} steps, {:.1} MB", html.len() as f64 / 1e6))
+    })
+    .await
+}
+
 /// Build the sample recording in the app's data folder and open it.
 #[tauri::command]
 async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
@@ -1289,6 +1315,7 @@ fn main() {
             save_project,
             regenerate_zoom,
             preview,
+            export_interactive,
             export_video,
             list_presets,
             save_preset,

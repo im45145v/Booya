@@ -445,6 +445,27 @@ $('ai-redact').onclick = () => aiTask('Scanning for secrets', async () => {
   applyResult(r.project);
   status(r.report.found.length ? `Found ${r.report.found.length} secret${r.report.found.length === 1 ? '' : 's'} (${[...new Set(r.report.found.map(f => f[0]))].join(', ')}) and blurred ${r.report.added} region${r.report.added === 1 ? '' : 's'}.` : 'Found 0 secrets on the sampled frames. Still watch the export before sharing.', 'success');
 });
+$('ai-interactive').onclick = async () => {
+  if (!project || busy) return;
+  readPanel();
+  if (!project.events) return status('This recording has no click log, so there is nothing to click through. Record with DemoLens to get one.', 'error');
+  const ok = await confirmBox('Interactive demo', `<p>Makes one HTML file: a screenshot for every click, a pulsing dot where you clicked, and a short caption from your narration. It works offline and uploads nothing.</p>
+    ${project.blur.length ? '<p class="found">Your blurred regions are applied to every screenshot.</p>' : '<p class="warn-note">No blurred regions yet. Run "Blur secrets" first if the screen shows anything private.</p>'}
+    <label class="stack">Title <input class="field" id="ix-title" placeholder="Leave empty to write one from the recording" /></label>
+    <label class="stack">Button text (optional) <input class="field" id="ix-cta" placeholder="Start free trial" /></label>
+    <label class="stack">Button link (optional, https://...) <input class="field" id="ix-url" placeholder="https://example.com/signup" /></label>
+    <label><input type="checkbox" id="ix-badge" checked /> Show "Made with DemoLens"</label>`, 'Choose where to save');
+  if (!ok) return;
+  const v = id => ($(id) && $(id).value || '').trim();
+  const title = v('ix-title'), cta = v('ix-cta'), url = v('ix-url'), badge = $('ix-badge') ? $('ix-badge').checked : true;
+  const out = await dialog.save({ defaultPath: stem(projectPath || project.source) + '-interactive.html', filters: [{ name: 'Interactive demo', extensions: ['html'] }] });
+  if (!out) return;
+  aiTask('Building the interactive demo', async () => {
+    const r = await invoke('export_interactive', { project, out, title, ctaText: cta, ctaUrl: url, badge });
+    lastExport = out;
+    status('Interactive demo saved: ' + baseName(out) + ' (' + r + ')', 'success');
+  });
+};
 $('ai-docs').onclick = () => aiTask('Writing docs', async () => {
   const cloud = $('docs-llm').checked ? await confirmCloud('llm') : false;
   if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');

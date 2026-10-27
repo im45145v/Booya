@@ -947,6 +947,7 @@ name = "demolens-ai"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "demolens-core",
  "hmac",
  "ocrs",

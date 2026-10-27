@@ -45,6 +45,9 @@ LOCAL AI (offline, models download once on first use):
   demolens autocut <project.json> [--fillers] [--silences] [--min-silence MS] [--dry-run]
   demolens redact <project.json> [--every MS] [--dry-run]
   demolens docs <project.json> [-o DIR] [--no-llm]
+  demolens interactive <project.json> [-o demo.html] [--title T] [--cta-text T --cta-url URL]
+                  [--width 1280] [--max-steps 40] [--no-badge] [--no-llm]
+                  one self-contained click-through demo (HTML), built from the clicks
   demolens audio <project.json> [--denoise on|off] [--mute on|off]
 ";
 
@@ -252,6 +255,7 @@ fn run() -> Result<()> {
         "ready" => ai::ready_cmd(a),
         "redact" => ai::redact_cmd(a),
         "docs" => ai::docs_cmd(a),
+        "interactive" => ai::interactive_cmd(a),
         "audio" => ai::audio_cmd(a),
         "" | "-h" | "--help" | "help" => {
             print!("{HELP}");

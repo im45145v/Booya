@@ -223,3 +223,30 @@ pub fn ready_cmd(mut a: Args) -> Result<()> {
     p.save(&pp)?;
     Ok(())
 }
+
+pub fn interactive_cmd(mut a: Args) -> Result<()> {
+    use demolens_ai::interactive::{generate, Options};
+    let pp = PathBuf::from(a.pos("project")?);
+    let out = PathBuf::from(a.opt(&["-o"]).unwrap_or("demo.html".into()));
+    let no_llm = a.flag("--no-llm");
+    let no_badge = a.flag("--no-badge");
+    let mut o = Options { badge: !no_badge, ..Options::default() };
+    if let Some(v) = a.opt(&["--width"]) {
+        o.width = v.parse()?;
+    }
+    if let Some(v) = a.opt(&["--max-steps"]) {
+        o.max_steps = v.parse()?;
+    }
+    o.title = a.opt(&["--title"]);
+    o.cta_text = a.opt(&["--cta-text"]);
+    o.cta_url = a.opt(&["--cta-url"]);
+    let p = Project::load(&pp)?;
+    let log = p.events.as_ref().and_then(|e| EventLog::load(e).ok());
+    let llm = if no_llm { None } else { Llm::detect()? };
+    let t0 = std::time::Instant::now();
+    let (html, n) = generate(&p, log.as_ref(), llm.as_ref(), &o, |i, total| eprint!("\rscreenshot {i}/{total}"))?;
+    eprintln!();
+    std::fs::write(&out, &html)?;
+    println!("wrote {} ({} steps, {:.1} MB, {:.1}s). Open it in any browser; it needs no network.", out.display(), n, html.len() as f64 / 1e6, t0.elapsed().as_secs_f64());
+    Ok(())
+}

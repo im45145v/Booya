@@ -34,7 +34,7 @@ pub fn fmt_ts(ms: f64) -> String {
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{:02}:{:02}", s / 60, s % 60) }
 }
 
-fn transcript_between(p: &Project, a: f64, b: f64) -> String {
+pub(crate) fn transcript_between(p: &Project, a: f64, b: f64) -> String {
     let mut out = Vec::new();
     for c in &p.captions {
         for w in &c.words {
@@ -117,7 +117,7 @@ fn first_output_time(p: &Project, a: f64, b: f64) -> Option<f64> {
     None
 }
 
-fn first_sentence(s: &str, max_words: usize) -> String {
+pub(crate) fn first_sentence(s: &str, max_words: usize) -> String {
     let end = s.find(['.', '?', '!', ',', ';']).unwrap_or(s.len());
     let words: Vec<&str> = s[..end].split_whitespace().take(max_words).collect();
     let mut out = words.join(" ");
