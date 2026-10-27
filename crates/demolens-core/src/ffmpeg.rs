@@ -446,6 +446,8 @@ mod url_tests {
         let u = file_url(Path::new("-evil.mp4")).into_string().unwrap();
         assert!(u.starts_with("file:") && !u.starts_with("file:-"), "{u}");
         let u = file_url(Path::new("http://example.com/x.mp4")).into_string().unwrap();
-        assert!(u.starts_with("file:/") || u.starts_with("file:C:"), "{u}");
+        // Always a local absolute path, never a network URL ffmpeg would fetch.
+        let rest = &u["file:".len()..];
+        assert!(rest.starts_with('/') || rest.as_bytes().get(1) == Some(&b':'), "{u}");
     }
 }
