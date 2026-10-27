@@ -11,8 +11,10 @@ pub mod text;
 pub mod input;
 pub mod preset;
 pub mod project;
+pub mod proxy;
 pub mod render;
 pub mod sample;
+pub mod storage;
 pub mod zoom;
 
 pub use events::{Event, EventKind, EventLog};
