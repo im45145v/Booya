@@ -5,7 +5,7 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>DemoLens records your voice with the screen when the microphone is turned on.</string>
   <key>NSCameraUsageDescription</key>
-  <string>DemoLens lists capture devices, which include cameras. It does not record the camera.</string>
+  <string>DemoLens records your webcam only when you turn on the webcam overlay for a recording.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>DemoLens records your screen to make product demos.</string>
 </dict>

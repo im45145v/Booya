@@ -85,3 +85,9 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     }
     Ok(CapturePlan { region, args, warnings })
 }
+
+/// avfoundation index of the first camera (not a screen), if any.
+pub fn camera_index() -> Option<u32> {
+    let (video, _) = list_devices();
+    video.iter().find(|d| !d.name.starts_with("Capture screen")).map(|d| d.index)
+}

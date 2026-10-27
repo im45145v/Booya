@@ -18,3 +18,13 @@ anyhow.workspace = true
 base64 = "0.22"
 demolens-ai = { path = "../crates/demolens-ai" }
 tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }

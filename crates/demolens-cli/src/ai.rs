@@ -54,6 +54,18 @@ pub fn models_cmd(mut a: Args) -> Result<()> {
             println!("installed {}", p.display());
             Ok(())
         }
+        "verify" => {
+            let mut bad = 0;
+            for m in models::list().into_iter().filter(|m| m.installed || models::path_of(&m.info).exists()) {
+                let ok = models::verify(m.info.id).unwrap_or(false);
+                println!("{} {}", if ok { "ok      " } else { "MISMATCH" }, m.info.id);
+                bad += usize::from(!ok);
+            }
+            if bad > 0 {
+                bail!("{bad} model(s) failed verification; delete and download them again");
+            }
+            Ok(())
+        }
         "delete" => {
             a.0.remove(0);
             let id = a.pos("model id")?;

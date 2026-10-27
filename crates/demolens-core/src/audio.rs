@@ -10,7 +10,7 @@ use std::process::Command;
 pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
     let out = Command::new(crate::ffmpeg::ffmpeg_bin())
         .args(["-v", "error", "-i"])
-        .arg(path)
+        .arg(crate::ffmpeg::file_url(path))
         .args(["-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "f32le", "-"])
         .output()
         .context("failed to run ffmpeg")?;

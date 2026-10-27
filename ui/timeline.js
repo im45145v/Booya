@@ -113,10 +113,14 @@ class Timeline {
     if (this.drag.kind === 'scrub') return this.scrubTo(x);
     const z = this.project.zoom[this.drag.i], src = this.outToSrc(this.ms(x));
     this.drag.moved = true;
-    if (this.drag.edge === 'start') z.start_ms = Math.max(0, Math.min(src, z.end_ms - 200));
-    else if (this.drag.edge === 'end') z.end_ms = Math.min(this.project.duration_ms, Math.max(src, z.start_ms + 200));
+    // Zooms may not overlap: clamp against the neighbours on either side.
+    const others = this.project.zoom.filter((_, j) => j !== this.drag.i);
+    const lo = Math.max(0, ...others.filter(o => o.end_ms <= z.start_ms + 1).map(o => o.end_ms));
+    const hi = Math.min(this.project.duration_ms, ...others.filter(o => o.start_ms >= z.end_ms - 1).map(o => o.start_ms));
+    if (this.drag.edge === 'start') z.start_ms = Math.max(lo, Math.min(src, z.end_ms - 200));
+    else if (this.drag.edge === 'end') z.end_ms = Math.min(hi, Math.max(src, z.start_ms + 200));
     else {
-      const s = Math.max(0, Math.min(this.project.duration_ms - this.drag.len, src - this.drag.grab));
+      const s = Math.max(lo, Math.min(hi - this.drag.len, src - this.drag.grab));
       z.start_ms = s; z.end_ms = s + this.drag.len;
     }
     this.draw();

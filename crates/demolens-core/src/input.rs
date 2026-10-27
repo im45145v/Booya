@@ -1,7 +1,16 @@
-//! Global input logger. With the `input-hooks` feature it uses rdev to watch
-//! mouse and keyboard system wide (X11 on Linux, CGEventTap on macOS which
-//! needs Accessibility permission, low level hooks on Windows). Without the
-//! feature it records nothing and the editor simply has no auto zoom.
+//! Input logging for auto zoom.
+//!
+//! * **Mouse** position and clicks are *polled* on every OS (CoreGraphics on
+//!   macOS, XQueryPointer on X11, GetCursorPos on Windows). Polling needs no
+//!   global hook and no special permission, and stops when recording stops.
+//! * **Keys** are logged only when the user opts in (`KeyLogging::On`), and
+//!   never as characters: printable keys become the class
+//!   [`crate::events::PRINTABLE`]; only named keys (Enter, Tab, arrows) and
+//!   shortcuts with Ctrl/Alt/Meta keep their name. On Linux and Windows the
+//!   global keyboard hook (rdev) runs in a short lived child process
+//!   (`<exe> --demolens-keyhook`) that classifies keys before they leave it,
+//!   and is killed when recording stops or pauses, so no hook outlives a
+//!   recording. macOS does not log keys.
 
 use crate::capture::Region;
 use crate::events::Event;
@@ -9,52 +18,227 @@ use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Whether key presses are logged at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyLogging {
+    /// No key events, and no keyboard hook is installed. The default.
+    #[default]
+    Off,
+    /// Shortcuts, named keys and the *timing* of typing (no characters).
+    On,
+}
+
+impl KeyLogging {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "no" | "false" => Some(Self::Off),
+            "on" | "yes" | "true" | "masked" | "timing" => Some(Self::On),
+            _ => None,
+        }
+    }
+}
+
+/// Reduce one key press to what auto zoom and the shortcut overlay need.
+/// A printable key without Ctrl/Alt/Meta becomes [`crate::events::PRINTABLE`].
+pub fn classify(key: &str, modifiers: &[String]) -> String {
+    let shortcut = modifiers.iter().any(|m| !m.eq_ignore_ascii_case("shift"));
+    let key = key.strip_prefix("Key").filter(|k| k.len() == 1).unwrap_or(key);
+    let key = key.strip_prefix("Num").filter(|k| k.len() == 1 && k.chars().all(|c| c.is_ascii_digit())).unwrap_or(key);
+    if key.chars().count() == 1 {
+        let c = key.chars().next().unwrap();
+        if c.is_whitespace() {
+            return "Space".into();
+        }
+        return if shortcut { c.to_uppercase().collect() } else { crate::events::PRINTABLE.into() };
+    }
+    key.to_string()
+}
+
 struct Shared {
     epoch: Option<Instant>,
     events: Vec<(Instant, crate::events::EventKind)>,
     active: bool,
+    /// Start of the current pause, if paused.
+    paused_at: Option<Instant>,
+    pauses: Vec<(Instant, Instant)>,
+}
+
+impl Shared {
+    fn push(&mut self, now: Instant, kind: crate::events::EventKind) {
+        if self.active && self.paused_at.is_none() {
+            self.events.push((now, kind));
+        }
+    }
 }
 
 pub struct InputLogger {
     shared: Arc<Mutex<Shared>>,
+    keys: KeyLogging,
+    hook: Option<std::process::Child>,
+    poller: Option<std::thread::JoinHandle<()>>,
+}
+
+/// What the logger saw, in ms since the epoch.
+pub struct Logged {
+    pub events: Vec<Event>,
+    /// Paused stretches (start, end), cut out of the project automatically.
+    pub pauses: Vec<(f64, f64)>,
 }
 
 impl InputLogger {
-    pub fn start(region: Region) -> Result<Self> {
-        let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true }));
-        #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
-        hooks::spawn(shared.clone(), region);
-        #[cfg(target_os = "macos")]
-        mac::spawn(shared.clone(), region);
-        #[cfg(all(not(feature = "input-hooks"), not(target_os = "macos")))]
-        {
-            let _ = region;
-            eprintln!("demolens: built without input-hooks; no event log will be captured");
+    pub fn start(region: Region, keys: KeyLogging) -> Result<Self> {
+        let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new() }));
+        let poller = poll::spawn(shared.clone(), region);
+        let mut me = Self { shared, keys, hook: None, poller };
+        me.start_hook();
+        Ok(me)
+    }
+
+    /// A logger that records nothing (used as a placeholder).
+    pub fn idle() -> Self {
+        Self {
+            shared: Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: false, paused_at: None, pauses: Vec::new() })),
+            keys: KeyLogging::Off,
+            hook: None,
+            poller: None,
         }
-        Ok(Self { shared })
+    }
+
+    fn start_hook(&mut self) {
+        if self.keys == KeyLogging::Off {
+            return;
+        }
+        #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
+        {
+            self.hook = keyhook::spawn(self.shared.clone());
+        }
+    }
+
+    fn stop_hook(&mut self) {
+        if let Some(mut c) = self.hook.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+
+    /// Is the keyboard hook process running right now?
+    pub fn hook_running(&mut self) -> bool {
+        self.hook.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
     }
 
     pub fn set_epoch(&self, t: Instant) {
         self.shared.lock().unwrap().epoch = Some(t);
     }
 
-    pub fn stop(self) -> Vec<Event> {
+    /// Pause or resume logging. Pausing also kills the keyboard hook.
+    pub fn set_paused(&mut self, paused: bool) {
+        let now = Instant::now();
+        {
+            let mut s = self.shared.lock().unwrap();
+            match (paused, s.paused_at) {
+                (true, None) => s.paused_at = Some(now),
+                (false, Some(a)) => {
+                    s.pauses.push((a, now));
+                    s.paused_at = None;
+                }
+                _ => return,
+            }
+        }
+        if paused {
+            self.stop_hook();
+        } else {
+            self.start_hook();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.shared.lock().unwrap().paused_at.is_some()
+    }
+
+    pub fn stop(mut self) -> Logged {
+        self.stop_hook();
         let mut s = self.shared.lock().unwrap();
         s.active = false;
-        let epoch = s.epoch.unwrap_or_else(Instant::now);
-        s.events
+        let now = Instant::now();
+        if let Some(a) = s.paused_at.take() {
+            s.pauses.push((a, now));
+        }
+        let epoch = s.epoch.unwrap_or(now);
+        let ms = |t: Instant| t.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
+        let events = s
+            .events
             .drain(..)
             .filter(|(t, _)| *t >= epoch)
-            .map(|(t, kind)| Event { t: (t - epoch).as_secs_f64() * 1000.0, kind })
-            .collect()
+            .map(|(t, kind)| Event { t: ms(t), kind })
+            .collect();
+        let pauses = s.pauses.iter().map(|&(a, b)| (ms(a), ms(b))).collect();
+        drop(s);
+        if let Some(h) = self.poller.take() {
+            let _ = h.join();
+        }
+        Logged { events, pauses }
     }
 }
 
+impl Drop for InputLogger {
+    fn drop(&mut self) {
+        self.stop_hook();
+        self.shared.lock().unwrap().active = false;
+    }
+}
+
+/// Call first thing in `main`. When the process was started as the keyboard
+/// hook helper it runs the hook and never returns.
+pub fn run_keyhook_if_requested() {
+    if std::env::args().nth(1).as_deref() != Some(KEYHOOK_ARG) {
+        return;
+    }
+    #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
+    keyhook::run();
+    #[allow(unreachable_code)]
+    std::process::exit(0);
+}
+
+pub const KEYHOOK_ARG: &str = "--demolens-keyhook";
+
 #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
-mod hooks {
+mod keyhook {
     use super::*;
-    use crate::events::{EventKind, MouseButton};
-    use rdev::{listen, Button, EventType, Key};
+    use crate::events::EventKind;
+    use rdev::{listen, EventType, Key};
+    use std::io::{BufRead, Write};
+    use std::process::{Command, Stdio};
+
+    pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<std::process::Child> {
+        let exe = std::env::current_exe().ok()?;
+        let mut cmd = Command::new(exe);
+        cmd.arg(KEYHOOK_ARG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let mut child = cmd.spawn().map_err(|e| eprintln!("demolens: key logging unavailable: {e}")).ok()?;
+        let out = child.stdout.take()?;
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(out).lines() {
+                let Ok(line) = line else { break };
+                let now = Instant::now();
+                let mut parts = line.splitn(2, '\t');
+                let key = parts.next().unwrap_or_default().to_string();
+                let modifiers: Vec<String> = parts.next().unwrap_or_default().split(',').filter(|m| !m.is_empty()).map(String::from).collect();
+                if key.is_empty() {
+                    continue;
+                }
+                // Classify again on this side: the helper is our own binary,
+                // but the log must never hold a character either way.
+                let key = classify(&key, &modifiers);
+                shared.lock().unwrap().push(now, EventKind::Key { key, modifiers });
+            }
+        });
+        Some(child)
+    }
 
     fn key_label(k: Key, name: Option<String>) -> String {
         match k {
@@ -80,71 +264,194 @@ mod hooks {
             Key::ControlLeft | Key::ControlRight => Some("Ctrl"),
             Key::ShiftLeft | Key::ShiftRight => Some("Shift"),
             Key::Alt | Key::AltGr => Some("Alt"),
-            Key::MetaLeft | Key::MetaRight => Some(if cfg!(target_os = "macos") { "Cmd" } else { "Meta" }),
+            Key::MetaLeft | Key::MetaRight => Some("Meta"),
             _ => None,
         }
     }
 
-    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region) {
-        std::thread::spawn(move || {
-            let mut pos = (0.0, 0.0);
-            let mut mods: Vec<&'static str> = Vec::new();
-            let res = listen(move |ev| {
-                let now = Instant::now();
-                let kind = match ev.event_type {
-                    EventType::MouseMove { x, y } => {
-                        pos = (x - region.x as f64, y - region.y as f64);
-                        Some(EventKind::Move { x: pos.0, y: pos.1 })
-                    }
-                    EventType::ButtonPress(b) => Some(EventKind::Click {
-                        x: pos.0,
-                        y: pos.1,
-                        button: match b {
-                            Button::Right => MouseButton::Right,
-                            Button::Middle => MouseButton::Middle,
-                            _ => MouseButton::Left,
-                        },
-                    }),
-                    EventType::KeyPress(k) => {
-                        if let Some(m) = modifier(k) {
-                            if !mods.contains(&m) {
-                                mods.push(m);
-                            }
-                            None
-                        } else {
-                            Some(EventKind::Key { key: key_label(k, ev.name.clone()), modifiers: mods.iter().map(|m| m.to_string()).collect() })
-                        }
-                    }
-                    EventType::KeyRelease(k) => {
-                        if let Some(m) = modifier(k) {
-                            mods.retain(|x| *x != m);
-                        }
-                        None
-                    }
-                    _ => None,
-                };
-                if let Some(kind) = kind {
-                    let mut s = shared.lock().unwrap();
-                    if s.active {
-                        s.events.push((now, kind));
-                    }
-                }
-            });
-            if let Err(e) = res {
-                eprintln!("demolens: input hooks unavailable: {e:?}");
+    /// The helper process: classify every key press and write one line per
+    /// key to stdout. Exits as soon as the parent closes stdin or dies.
+    pub fn run() {
+        std::thread::spawn(|| {
+            let mut sink = String::new();
+            while std::io::stdin().read_line(&mut sink).map(|n| n > 0).unwrap_or(false) {
+                sink.clear();
             }
+            std::process::exit(0);
         });
+        let mut mods: Vec<&'static str> = Vec::new();
+        let res = listen(move |ev| match ev.event_type {
+            EventType::KeyPress(k) => {
+                if let Some(m) = modifier(k) {
+                    if !mods.contains(&m) {
+                        mods.push(m);
+                    }
+                    return;
+                }
+                let modifiers: Vec<String> = mods.iter().map(|m| m.to_string()).collect();
+                let key = classify(&key_label(k, ev.name.clone()), &modifiers);
+                let mut out = std::io::stdout().lock();
+                if writeln!(out, "{key}\t{}", modifiers.join(",")).and_then(|_| out.flush()).is_err() {
+                    std::process::exit(0);
+                }
+            }
+            EventType::KeyRelease(k) => {
+                if let Some(m) = modifier(k) {
+                    mods.retain(|x| *x != m);
+                }
+            }
+            _ => {}
+        });
+        if let Err(e) = res {
+            eprintln!("demolens: keyboard hook unavailable: {e:?}");
+        }
     }
 }
 
-/// macOS: polls the mouse position and button state 60 times a second through
-/// CoreGraphics. This needs no Accessibility or Input Monitoring permission
-/// and never blocks. Key presses are not logged on macOS yet (that needs Input
-/// Monitoring), so auto zoom there comes from clicks.
-#[cfg(target_os = "macos")]
-mod mac {
+/// Mouse polling, shared by every OS. `pointer()` returns the position in
+/// physical screen pixels and the left/right/middle button state.
+mod poll {
     use super::*;
     use crate::events::{EventKind, MouseButton};
+    use std::time::Duration;
+
+    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region) -> Option<std::thread::JoinHandle<()>> {
+        let mut src = platform::Pointer::open()?;
+        Some(std::thread::spawn(move || {
+            let mut last = (f64::NAN, f64::NAN);
+            let mut down = [false; 3];
+            let mut last_change = Instant::now();
+            loop {
+                if !shared.lock().unwrap().active {
+                    break;
+                }
+                let now = Instant::now();
+                let Some((mx, my, buttons)) = src.read() else {
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                };
+                let pos = (mx - region.x as f64, my - region.y as f64);
+                let mut evs = Vec::new();
+                if pos != last {
+                    evs.push(EventKind::Move { x: pos.0, y: pos.1 });
+                    last = pos;
+                }
+                for (i, b) in [MouseButton::Left, MouseButton::Right, MouseButton::Middle].into_iter().enumerate() {
+                    if buttons[i] && !down[i] {
+                        evs.push(EventKind::Click { x: pos.0, y: pos.1, button: b });
+                    }
+                    down[i] = buttons[i];
+                }
+                if !evs.is_empty() {
+                    last_change = now;
+                    let mut s = shared.lock().unwrap();
+                    for k in evs {
+                        s.push(now, k);
+                    }
+                }
+                // 60 Hz while the mouse is in use, 20 Hz once it has been still
+                // for half a second (a click still lasts longer than 50 ms).
+                let idle = now.duration_since(last_change) > Duration::from_millis(500);
+                std::thread::sleep(Duration::from_millis(if idle { 50 } else { 16 }));
+            }
+        }))
+    }
+
+    #[cfg(all(target_os = "linux", feature = "input-hooks"))]
+    mod platform {
+        use x11::xlib;
+        pub struct Pointer {
+            dpy: *mut xlib::Display,
+        }
+        // The display connection is only used from the polling thread.
+        unsafe impl Send for Pointer {}
+        impl Pointer {
+            pub fn open() -> Option<Self> {
+                let dpy = unsafe { xlib::XOpenDisplay(std::ptr::null()) };
+                if dpy.is_null() {
+                    eprintln!("demolens: no X11 display, so no cursor log (Wayland is not supported yet)");
+                    return None;
+                }
+                Some(Self { dpy })
+            }
+            pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
+                unsafe {
+                    let root = xlib::XDefaultRootWindow(self.dpy);
+                    let (mut r, mut c) = (0, 0);
+                    let (mut rx, mut ry, mut wx, mut wy) = (0, 0, 0, 0);
+                    let mut mask = 0u32;
+                    if xlib::XQueryPointer(self.dpy, root, &mut r, &mut c, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask) == 0 {
+                        return None;
+                    }
+                    Some((rx as f64, ry as f64, [mask & xlib::Button1Mask != 0, mask & xlib::Button3Mask != 0, mask & xlib::Button2Mask != 0]))
+                }
+            }
+        }
+        impl Drop for Pointer {
+            fn drop(&mut self) {
+                unsafe { xlib::XCloseDisplay(self.dpy) };
+            }
+        }
+    }
+
+    #[cfg(all(windows, feature = "input-hooks"))]
+    mod platform {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        pub struct Pointer;
+        impl Pointer {
+            pub fn open() -> Option<Self> {
+                Some(Self)
+            }
+            pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
+                let mut p = POINT { x: 0, y: 0 };
+                if unsafe { GetCursorPos(&mut p) } == 0 {
+                    return None;
+                }
+                let down = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0;
+                // VK_LBUTTON, VK_RBUTTON, VK_MBUTTON
+                Some((p.x as f64, p.y as f64, [down(1), down(2), down(4)]))
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod platform {
+        pub struct Pointer {
+            scale: f64,
+        }
+        impl Pointer {
+            pub fn open() -> Option<Self> {
+                Some(Self { scale: super::super::mac::backing_scale() })
+            }
+            pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
+                let (x, y) = super::super::mac::mouse();
+                let b = super::super::mac::buttons();
+                Some((x * self.scale, y * self.scale, b))
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", all(feature = "input-hooks", any(target_os = "linux", windows)))))]
+    mod platform {
+        pub struct Pointer;
+        impl Pointer {
+            pub fn open() -> Option<Self> {
+                eprintln!("demolens: built without input-hooks; no event log will be captured");
+                None
+            }
+            pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
+                None
+            }
+        }
+    }
+}
+
+/// macOS pointer access through CoreGraphics. Needs no Accessibility or
+/// Input Monitoring permission. Keys are not logged on macOS.
+#[cfg(target_os = "macos")]
+mod mac {
     use std::ffi::c_void;
 
     #[repr(C)]
@@ -183,7 +490,7 @@ mod mac {
     }
 
     /// Points to pixels factor of the main display (2.0 on Retina).
-    fn backing_scale() -> f64 {
+    pub fn backing_scale() -> f64 {
         unsafe {
             let id = CGMainDisplayID();
             let b = CGDisplayBounds(id);
@@ -197,7 +504,7 @@ mod mac {
         }
     }
 
-    fn mouse() -> (f64, f64) {
+    pub fn mouse() -> (f64, f64) {
         unsafe {
             let ev = CGEventCreate(std::ptr::null());
             if ev.is_null() {
@@ -209,44 +516,26 @@ mod mac {
         }
     }
 
-    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region) {
-        std::thread::spawn(move || {
-            let scale = backing_scale();
-            let mut last = (f64::NAN, f64::NAN);
-            let mut down = [false; 3];
-            let mut last_change = Instant::now();
-            loop {
-                if !shared.lock().unwrap().active {
-                    break;
-                }
-                let now = Instant::now();
-                let (mx, my) = mouse();
-                let pos = (mx * scale - region.x as f64, my * scale - region.y as f64);
-                let mut evs = Vec::new();
-                if pos != last {
-                    evs.push(EventKind::Move { x: pos.0, y: pos.1 });
-                    last = pos;
-                }
-                for (i, b) in [MouseButton::Left, MouseButton::Right, MouseButton::Middle].into_iter().enumerate() {
-                    // 0 = combined session state
-                    let is = unsafe { CGEventSourceButtonState(0, i as u32) };
-                    if is && !down[i] {
-                        evs.push(EventKind::Click { x: pos.0, y: pos.1, button: b });
-                    }
-                    down[i] = is;
-                }
-                if !evs.is_empty() {
-                    last_change = now;
-                    let mut s = shared.lock().unwrap();
-                    for k in evs {
-                        s.events.push((now, k));
-                    }
-                }
-                // 60 Hz while the mouse is in use, 20 Hz once it has been still
-                // for half a second (a click still lasts longer than 50 ms).
-                let idle = now.duration_since(last_change) > std::time::Duration::from_millis(500);
-                std::thread::sleep(std::time::Duration::from_millis(if idle { 50 } else { 16 }));
-            }
-        });
+    pub fn buttons() -> [bool; 3] {
+        // 0 = combined session state; buttons 0, 1, 2 = left, right, middle.
+        [0u32, 1, 2].map(|i| unsafe { CGEventSourceButtonState(0, i) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify, KeyLogging};
+    use crate::events::PRINTABLE;
+    #[test]
+    fn keys_are_classified_never_stored_as_characters() {
+        assert_eq!(classify("p", &[]), PRINTABLE);
+        assert_eq!(classify("P", &["Shift".into()]), PRINTABLE);
+        assert_eq!(classify("7", &[]), PRINTABLE);
+        assert_eq!(classify("s", &["Ctrl".into()]), "S");
+        assert_eq!(classify("KeyS", &["Ctrl".into()]), "S");
+        assert_eq!(classify("Enter", &[]), "Enter");
+        assert_eq!(classify(" ", &[]), "Space");
+        assert_eq!(KeyLogging::default(), KeyLogging::Off);
+        assert_eq!(KeyLogging::parse("on"), Some(KeyLogging::On));
     }
 }

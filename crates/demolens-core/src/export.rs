@@ -53,8 +53,12 @@ pub fn audio_filter(project: &Project) -> String {
     let mut f = String::new();
     let n = project.clips.len();
     for (i, c) in project.clips.iter().enumerate() {
+        // A short fade at each cut avoids clicks where the audio is joined.
+        let len = c.out_len() / 1000.0;
+        let fade = if n > 1 { (project.export.crossfade_ms / 1000.0).min(len / 3.0).max(0.0) } else { 0.0 };
+        let fades = if fade > 0.005 { format!(",afade=t=in:d={fade:.3},afade=t=out:st={:.3}:d={fade:.3}", (len - fade).max(0.0)) } else { String::new() };
         f.push_str(&format!(
-            "[1:a]atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS,{}[a{i}];",
+            "[1:a]atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS,{}{fades}[a{i}];",
             c.src_start_ms / 1000.0,
             c.src_end_ms / 1000.0,
             atempo_chain(c.speed)
@@ -80,7 +84,7 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
     match export_with(project, out, enc, &mut progress) {
         // A hardware encoder can still fail mid-run (busy, unsupported size).
         // Redo it in software rather than failing the export.
-        Err(e) if enc.is_hardware() && project.export.format == Format::Mp4 => {
+        Err(e) if enc.is_hardware() && project.export.format == Format::Mp4 && !passthrough_ok(project) => {
             eprintln!("{} failed ({e:#}); retrying with libx264", enc.name());
             progress(0.0);
             export_with(project, out, crate::ffmpeg::Encoder::X264, &mut progress)
@@ -89,8 +93,78 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
     }
 }
 
+/// True when the export would reproduce the source unchanged, so it can be
+/// copied instead of decoded, rendered and encoded again: one full clip at
+/// 1x, no zoom, no blur, no burned captions, no styling, the cursor and key
+/// overlays off, and the output size equal to the source.
+pub fn passthrough_ok(p: &Project) -> bool {
+    let s = &p.export;
+    let (ow, oh) = s.aspect.size(s.quality);
+    s.format == Format::Mp4
+        && p.clips.len() == 1
+        && p.clips[0].speed == 1.0
+        && p.clips[0].src_start_ms <= 0.0
+        && p.clips[0].src_end_ms >= p.duration_ms - 1.0
+        && p.zoom.is_empty()
+        && p.blur.is_empty()
+        && (!p.caption_style.burn_in || p.captions.is_empty())
+        && p.style.padding == 0.0
+        && p.style.corner_radius == 0.0
+        && !p.cursor.visible
+        && !p.keys.enabled
+        && p.webcam.as_ref().is_none_or(|w| !w.visible)
+        && !p.audio.denoise
+        && !p.audio.mute
+        && (ow, oh) == (p.source_width, p.source_height)
+}
+
+/// Copy the streams into an MP4 without re-encoding.
+fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
+    let info = ffmpeg::probe(&project.source)?;
+    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(&project.source));
+    // The capture is H.264 already; audio may be PCM or Opus, which MP4
+    // players handle badly, so audio is converted to AAC (cheap).
+    cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]);
+    cmd.arg(ffmpeg::file_url(out));
+    let res = cmd.stdin(Stdio::null()).output().context("failed to start ffmpeg")?;
+    if !res.status.success() {
+        bail!("ffmpeg copy failed: {}", String::from_utf8_lossy(&res.stderr));
+    }
+    progress(1.0);
+    let fps = project.export.fps as f64;
+    Ok(ExportStats { frames: (info.duration_ms / 1000.0 * fps) as u64, width: info.width, height: info.height, seconds: info.duration_ms / 1000.0 })
+}
+
+/// A private scratch folder (0700 on Unix) for temporary audio.
+fn private_tmp() -> Result<std::path::PathBuf> {
+    let d = std::env::temp_dir().join(format!("demolens-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.recursive(true).create(&d)?;
+    Ok(d)
+}
+
+/// Kills the encoder if export bails out early (decoder error, panic).
+struct KillOnDrop(Option<std::process::Child>);
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(c) = self.0.as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     project.validate()?;
+    if passthrough_ok(project) {
+        return export_passthrough(project, out, progress);
+    }
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
@@ -114,32 +188,60 @@ fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progr
     let mut reader = FrameReader::open(&project.source, first_src, dec_fps, dw, dh)?;
     let mut current: Option<Frame> = reader.next()?;
 
+    // Optional webcam bubble, decoded square at its on-screen size.
+    let mut cam = match project.webcam.as_ref().filter(|w| w.visible && w.path.exists()) {
+        Some(w) => {
+            let d = renderer.webcam_size();
+            let start = first_src - w.offset_ms;
+            let vf = format!("crop='min(iw,ih)':'min(iw,ih)',scale={d}:{d}");
+            FrameReader::open_filtered(&w.path, start, fps, &vf, d, d).ok().map(|r| (r, w.offset_ms, None::<Frame>))
+        }
+        None => None,
+    };
+
     let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
-    cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-r", &fps.to_string(), "-i", "-"]);
-    let with_audio = s.format == Format::Mp4 && info.has_audio && !project.audio.mute;
-    // Noise cleanup writes a cleaned track next to the output and uses it as
-    // the audio input instead of the original.
+    cmd.args(["-v", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-r", &fps.to_string(), "-i", "-"]);
+    let with_audio = s.format != Format::Gif && info.has_audio && !project.audio.mute;
+    // Noise cleanup writes a cleaned track to a private temp folder and uses
+    // it as the audio input instead of the original.
     let mut audio_input = project.source.clone();
-    let denoised = out.with_extension("denoised.wav");
-    if with_audio && project.audio.denoise {
+    let tmp = if with_audio && project.audio.denoise { Some(private_tmp()?) } else { None };
+    if let Some(t) = &tmp {
+        let denoised = t.join("denoised.wav");
         crate::audio::denoise_file(&project.source, &denoised)?;
-        audio_input = denoised.clone();
+        audio_input = denoised;
     }
     match s.format {
         Format::Mp4 => {
             if with_audio {
-                cmd.arg("-i").arg(&audio_input);
+                cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
                 cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
             }
             cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
+        }
+        Format::Webm => {
+            if with_audio {
+                cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
+                cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "128k"]);
+            }
+            cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p", "-shortest"]);
         }
         Format::Gif => {
             cmd.args(["-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a", "-loop", "0"]);
         }
     }
-    cmd.arg(out);
-    let mut enc = cmd.stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg encoder")?;
-    let mut stdin = enc.stdin.take().unwrap();
+    cmd.arg(ffmpeg::file_url(out));
+    let mut guard = KillOnDrop(Some(cmd.stdin(Stdio::null()).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg encoder")?));
+    let mut stdin = guard.0.as_mut().unwrap().stdin.take().unwrap();
+
+    // Cross-fade at cuts: the last frame before a cut fades into the next clip.
+    let fade_ms = s.crossfade_ms.max(0.0);
+    let boundaries: Vec<f64> = project.clips.iter().scan(0.0, |acc, c| {
+        *acc += c.out_len();
+        Some(*acc)
+    }).collect();
+    let mut last_frame: Option<Frame> = None;
+    let mut hold: Option<(f64, Frame)> = None;
 
     for i in 0..total {
         let out_t = i as f64 * 1000.0 / fps;
@@ -154,15 +256,49 @@ fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progr
             }
         }
         let src = current.as_ref().context("source has no frames")?;
-        let frame = renderer.render(src, src_t);
+        let mut frame = renderer.render(src, src_t);
+        if let Some((r, offset, cur)) = cam.as_mut() {
+            let cam_t = src_t - *offset;
+            let want = ((cam_t - (first_src - *offset)) / 1000.0 * r.fps).floor().max(0.0) as u64;
+            while r.index <= want {
+                match r.next() {
+                    Ok(Some(f)) => *cur = Some(f),
+                    _ => break,
+                }
+            }
+            if let Some(c) = cur.as_ref() {
+                renderer.draw_webcam(&mut frame, c);
+            }
+        }
+        if fade_ms > 0.0 && boundaries.len() > 1 {
+            // Entering a new clip: remember the previous clip's last frame.
+            if let Some(&b) = boundaries.iter().find(|&&b| out_t >= b && out_t - b < 1000.0 / fps) {
+                if b < out_dur - 1.0 {
+                    if let Some(prev) = last_frame.take() {
+                        hold = Some((b, prev));
+                    }
+                }
+            }
+            if let Some((b, prev)) = &hold {
+                let k = (out_t - b) / fade_ms;
+                if k >= 1.0 {
+                    hold = None;
+                } else {
+                    frame.mix_from(prev, (1.0 - k) as f32);
+                }
+            }
+            last_frame = Some(frame.clone());
+        }
         if stdin.write_all(&frame.data).is_err() {
             break;
         }
         progress((i + 1) as f64 / total as f64);
     }
     drop(stdin);
-    let res = enc.wait_with_output()?;
-    let _ = std::fs::remove_file(&denoised);
+    let res = guard.0.take().unwrap().wait_with_output()?;
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_dir_all(t);
+    }
     if !res.status.success() {
         bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&res.stderr));
     }
@@ -177,5 +313,26 @@ mod tests {
         assert_eq!(atempo_chain(1.0), "atempo=1.00000");
         assert_eq!(atempo_chain(4.0), "atempo=2.0,atempo=2.00000");
         assert_eq!(atempo_chain(0.25), "atempo=0.5,atempo=0.50000");
+    }
+
+    #[test]
+    fn passthrough_only_when_nothing_changes() {
+        let mut p = Project::new("a.mkv".into(), None, 1920, 1080, 10_000.0);
+        assert!(!passthrough_ok(&p), "default styling needs a render");
+        p.style.padding = 0.0;
+        p.style.corner_radius = 0.0;
+        p.cursor.visible = false;
+        p.keys.enabled = false;
+        assert!(passthrough_ok(&p));
+        p.clips[0].speed = 1.5;
+        assert!(!passthrough_ok(&p));
+    }
+
+    #[test]
+    fn audio_fades_only_at_cuts() {
+        let mut p = Project::new("a.mkv".into(), None, 1920, 1080, 10_000.0);
+        assert!(!audio_filter(&p).contains("afade"));
+        p.cut_ranges(&[(4_000.0, 5_000.0)]);
+        assert!(audio_filter(&p).contains("afade=t=in"));
     }
 }

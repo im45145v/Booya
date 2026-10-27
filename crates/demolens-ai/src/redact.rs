@@ -1,7 +1,10 @@
 //! Auto blur for sensitive info. Frames are sampled, text is found with a
 //! local OCR model (ocrs), matched against detectors for emails, API keys,
-//! card numbers and phone numbers, and turned into blur boxes that are
-//! merged over time so a value stays hidden while it is on screen.
+//! cards, phone numbers, Aadhaar, PAN, UPI IDs, IBANs, IP addresses and
+//! bearer tokens, plus the field next to a "Password" label, and turned into
+//! blur boxes that are merged over time so a value stays hidden while it is
+//! on screen. This is an aid, not a guarantee: OCR can miss small or low
+//! contrast text, so the app asks the user to review before exporting.
 
 use anyhow::Result;
 use demolens_core::project::{BlurBox, Project};
@@ -16,17 +19,83 @@ pub enum Sensitive {
     ApiKey,
     Card,
     Phone,
+    /// Indian Aadhaar number (12 digits, Verhoeff check digit).
+    Aadhaar,
+    /// Indian PAN (ABCDE1234F).
+    Pan,
+    /// UPI ID (name@bank).
+    Upi,
+    Iban,
+    Ip,
+    /// "Bearer ..." or "password: ..." style secrets.
+    Token,
+    /// The field next to a "Password" label.
+    Password,
+}
+
+/// Verhoeff checksum, used by Aadhaar.
+fn verhoeff(digits: &str) -> bool {
+    const D: [[u8; 10]; 10] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+        [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+        [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+        [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+        [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+        [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+        [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+        [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+        [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+    ];
+    const P: [[u8; 10]; 8] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+        [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+        [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+        [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+        [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+        [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+        [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+    ];
+    let d: Vec<u8> = digits.chars().filter_map(|c| c.to_digit(10).map(|v| v as u8)).collect();
+    let mut c = 0u8;
+    for (i, &x) in d.iter().rev().enumerate() {
+        c = D[c as usize][P[i % 8][x as usize] as usize];
+    }
+    c == 0
+}
+
+fn iban_ok(s: &str) -> bool {
+    let t: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
+    if !(15..=34).contains(&t.len()) {
+        return false;
+    }
+    let r = format!("{}{}", &t[4..], &t[..4]);
+    let mut m = 0u32;
+    for c in r.chars() {
+        let v = if c.is_ascii_digit() { c.to_digit(10).unwrap() } else { c as u32 - 'A' as u32 + 10 };
+        for ch in v.to_string().chars() {
+            m = (m * 10 + ch.to_digit(10).unwrap()) % 97;
+        }
+    }
+    m == 1
 }
 
 fn res() -> &'static [(Sensitive, Regex)] {
     static R: OnceLock<Vec<(Sensitive, Regex)>> = OnceLock::new();
     R.get_or_init(|| {
         vec![
+            (Sensitive::Token, Regex::new(r"(?i)\b(bearer\s+[A-Za-z0-9\-._~+/]{16,}=*|(?:password|passwd|pwd|secret|api[_ ]?key|token)\s*[:=]\s*\S{4,})").unwrap()),
+            (Sensitive::Aadhaar, Regex::new(r"\b[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}\b").unwrap()),
+            (Sensitive::Pan, Regex::new(r"\b[A-Z]{3}[PCHFATBLJG][A-Z]\d{4}[A-Z]\b").unwrap()),
+            (Sensitive::Iban, Regex::new(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,4})?\b").unwrap()),
             (Sensitive::Email, Regex::new(r"(?i)[a-z0-9._%+\-]+\s?@\s?[a-z0-9\-]+(\.[a-z0-9\-]+)*\.[a-z]{2,}").unwrap()),
             (
                 Sensitive::ApiKey,
                 Regex::new(r"\b((?i:sk|pk|rk)[-_ ](?i:live|test|proj)[-_ ]?[A-Za-z0-9][^\s]{11,}|(sk|pk|rk)[-_][A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{30,}|[A-Fa-f0-9]{32,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})").unwrap(),
             ),
+            (Sensitive::Upi, Regex::new(r"(?i)\b[a-z0-9][a-z0-9.\-_]{1,255}@(?:ok)?[a-z]{2,64}\b").unwrap()),
+            (Sensitive::Ip, Regex::new(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b").unwrap()),
             (Sensitive::Card, Regex::new(r"\b(?:\d[ -]?){12,18}\d\b").unwrap()),
             (Sensitive::Phone, Regex::new(r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?\d{3,4}[\s.-]?\d{3,4}[\s.-]?\d{0,4}").unwrap()),
         ]
@@ -47,7 +116,8 @@ pub fn find_sensitive(text: &str) -> Vec<(Sensitive, std::ops::Range<usize>)> {
     let mut out: Vec<(Sensitive, std::ops::Range<usize>)> = Vec::new();
     // Long digit groups that look like card numbers but fail the Luhn check
     // (order ids, invoice numbers) should not be reported as phone numbers.
-    let card_like: Vec<std::ops::Range<usize>> = res()[2].1.find_iter(text).map(|m| m.range()).collect();
+    let card_re = &res().iter().find(|(k, _)| *k == Sensitive::Card).unwrap().1;
+    let card_like: Vec<std::ops::Range<usize>> = card_re.find_iter(text).map(|m| m.range()).collect();
     for (kind, re) in res() {
         for m in re.find_iter(text) {
             if out.iter().any(|(_, r)| r.start < m.end() && m.start() < r.end) {
@@ -57,6 +127,10 @@ pub fn find_sensitive(text: &str) -> Vec<(Sensitive, std::ops::Range<usize>)> {
             let digits = s.chars().filter(|c| c.is_ascii_digit()).count();
             let ok = match kind {
                 Sensitive::Card => luhn(s),
+                Sensitive::Aadhaar => verhoeff(s),
+                Sensitive::Iban => iban_ok(s),
+                // An email (with a dotted domain) is reported as an email.
+                Sensitive::Upi => !s.split('@').nth(1).unwrap_or("").contains('.'),
                 Sensitive::Phone => (10..=15).contains(&digits) && !luhn_like_date(s) && !card_like.iter().any(|r| r.start < m.end() && m.start() < r.end),
                 _ => true,
             };
@@ -139,6 +213,10 @@ pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) ->
     let total = (project.duration_ms / sample_ms).ceil().max(1.0);
     let mut hits = Vec::new();
     let mut i = 0u64;
+    // OCR only runs when the picture changed; otherwise the last frame's
+    // findings are carried forward. Static stretches cost almost nothing.
+    let mut last_sig: Option<Vec<u8>> = None;
+    let mut last_hits: Vec<Hit> = Vec::new();
     while let Some(frame) = reader.next()? {
         let t = i as f64 * sample_ms;
         i += 1;
@@ -146,12 +224,21 @@ pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) ->
         if project.output_time(t).is_none() {
             continue;
         }
+        let sig = signature(&frame.data, w as usize, h as usize);
+        if last_sig.as_ref().is_some_and(|l| !changed(l, &sig)) {
+            hits.extend(last_hits.iter().map(|x| Hit { t_ms: t, ..x.clone() }));
+            progress((i as f64 / total).min(1.0));
+            continue;
+        }
+        last_sig = Some(sig);
+        let first_new = hits.len();
         let rgb: Vec<u8> = frame.data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
         let img = ImageSource::from_bytes(&rgb, (w, h))?;
         let input = engine.prepare_input(img)?;
         let words = engine.detect_words(&input)?;
         let lines = engine.find_text_lines(&input, &words);
         let texts = engine.recognize_text(&input, &lines)?;
+        let mut line_boxes: Vec<(String, [f64; 4])> = Vec::new();
         for line in texts.into_iter().flatten() {
             // Build the line string while remembering each char's box.
             let mut s = String::new();
@@ -161,8 +248,8 @@ pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) ->
                 rects.push((s.len(), [r.left() as f64, r.top() as f64, r.right() as f64, r.bottom() as f64]));
                 s.push(c.char);
             }
-            if std::env::var_os("DEMOLENS_DEBUG_OCR").is_some() {
-                eprintln!("ocr {t:.0}ms: {s}");
+            if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
+                line_boxes.push((s.clone(), [a.1[0], a.1[1].min(b.1[1]), b.1[2], a.1[3].max(b.1[3])]));
             }
             for (kind, range) in find_sensitive(&s) {
                 let sel: Vec<&[f64; 4]> = rects.iter().filter(|(o, _)| range.contains(o)).map(|(_, r)| r).collect();
@@ -176,9 +263,56 @@ pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) ->
                 hits.push(Hit { t_ms: t, kind, text: s[range].to_string(), x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
             }
         }
+        for b in password_fields(&line_boxes) {
+            hits.push(Hit { t_ms: t, kind: Sensitive::Password, text: String::new(), x: b[0], y: b[1], w: b[2] - b[0], h: b[3] - b[1] });
+        }
+        last_hits = hits[first_new..].to_vec();
         progress((i as f64 / total).min(1.0));
     }
     Ok(hits)
+}
+
+/// 48x27 grey thumbnail of an RGBA frame, for change detection.
+pub fn signature(rgba: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let (sw, sh) = (48usize, 27usize);
+    let mut out = Vec::with_capacity(sw * sh);
+    for j in 0..sh {
+        for i in 0..sw {
+            let (x, y) = (i * w / sw + w / sw / 2, j * h / sh + h / sh / 2);
+            let k = (y.min(h - 1) * w + x.min(w - 1)) * 4;
+            let p = rgba.get(k..k + 3).unwrap_or(&[0, 0, 0]);
+            out.push(((p[0] as u32 * 3 + p[1] as u32 * 6 + p[2] as u32) / 10) as u8);
+        }
+    }
+    out
+}
+
+/// True when two thumbnails differ enough to be worth another OCR pass.
+pub fn changed(a: &[u8], b: &[u8]) -> bool {
+    a.len() != b.len() || a.iter().zip(b).filter(|(x, y)| x.abs_diff(**y) > 6).count() > 0
+}
+
+/// Boxes for the text field next to (right of, or under) a "Password"
+/// label. Input boxes show dots that OCR reads as anything, so the field
+/// is blurred whatever it contains.
+pub fn password_fields(lines: &[(String, [f64; 4])]) -> Vec<[f64; 4]> {
+    let mut out = Vec::new();
+    for (text, b) in lines {
+        let lower = text.to_lowercase();
+        let Some(pos) = lower.find("password").or_else(|| lower.find("passcode")).or_else(|| lower.find("pin")) else { continue };
+        if lower.contains("forgot") || lower.contains("reset") || (lower.starts_with("pin") && lower.len() > 12) {
+            continue;
+        }
+        let h = (b[3] - b[1]).max(8.0);
+        let label_end = b[0] + (b[2] - b[0]) * ((pos + 8).min(text.len()) as f64 / text.len().max(1) as f64);
+        // Text after the label on the same line ("Password: ****").
+        if text.len() > pos + 10 {
+            out.push([label_end, b[1] - h * 0.3, b[2] + h, b[3] + h * 0.3]);
+        }
+        // The input box usually sits under the label.
+        out.push([b[0] - h * 0.5, b[3], b[0] + (h * 18.0).max(b[2] - b[0]), b[3] + h * 2.6]);
+    }
+    out
 }
 
 #[cfg(not(feature = "ocr"))]
@@ -210,10 +344,35 @@ mod tests {
     }
 
     #[test]
+    fn detects_indian_ids_and_more() {
+        // 2341 2341 2346 has a valid Verhoeff check digit.
+        assert_eq!(kinds("Aadhaar 2341 2341 2346"), vec![Sensitive::Aadhaar]);
+        assert_ne!(kinds("Aadhaar 2341 2341 2345"), vec![Sensitive::Aadhaar]);
+        assert_eq!(kinds("PAN ABCPE1234F"), vec![Sensitive::Pan]);
+        assert_eq!(kinds("Pay ashish.malla@okhdfcbank"), vec![Sensitive::Upi]);
+        assert_eq!(kinds("Pay ravi@ybl"), vec![Sensitive::Upi]);
+        assert_eq!(kinds("mail ravi@example.com"), vec![Sensitive::Email]);
+        assert_eq!(kinds("IBAN GB82 WEST 1234 5698 7654 32"), vec![Sensitive::Iban]);
+        assert_eq!(kinds("server 192.168.10.24 is up"), vec![Sensitive::Ip]);
+        assert_eq!(kinds("Authorization: Bearer abcdefghijklmnop1234"), vec![Sensitive::Token]);
+        assert_eq!(kinds("password: hunter22"), vec![Sensitive::Token]);
+        assert!(kinds("Version 1.2.3 released").is_empty());
+    }
+
+    #[test]
     fn ignores_harmless_text() {
         assert!(kinds("Invoice March total 120.50").is_empty());
         assert!(kinds("Card 1234 5678 9012 3456").is_empty()); // fails Luhn
         assert!(kinds("2026-10-27 12:30").is_empty());
+    }
+
+    #[test]
+    fn password_labels_blur_the_field() {
+        let f = password_fields(&[("Password".into(), [100.0, 200.0, 180.0, 216.0]), ("Name".into(), [100.0, 100.0, 140.0, 116.0])]);
+        assert_eq!(f.len(), 1);
+        assert!(f[0][1] >= 216.0 && f[0][3] > 240.0);
+        assert!(password_fields(&[("Forgot password?".into(), [0.0, 0.0, 10.0, 10.0])]).is_empty());
+        assert!(!changed(&[10, 10], &[12, 14]) && changed(&[10, 10], &[30, 10]));
     }
 
     #[test]

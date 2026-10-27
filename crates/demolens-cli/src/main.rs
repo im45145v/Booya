@@ -15,11 +15,12 @@ const HELP: &str = "DemoLens: local screen recorder for product demos
 
 USAGE:
   demolens record [--screen N | --window ID | --area X,Y,W,H] [--mic] [--system-audio]
+                  [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
   demolens new <video> [--events FILE] [-o project.json]
   demolens zoom <events.jsonl> --duration MS
   demolens preview <project.json> --at MS [-o frame.png] [--quality 720]
-  demolens export <project.json> -o out.mp4|out.gif [--aspect 16:9|9:16|1:1]
+  demolens export <project.json> -o out.mp4|out.webm|out.gif [--aspect 16:9|9:16|1:1]
                   [--quality 720|1080|1440|2160] [--fps 30]
   demolens trim <project.json> START_MS END_MS
   demolens split <project.json> AT_MS
@@ -32,7 +33,7 @@ USAGE:
                   (--speech adds espeak-ng narration and on-screen secrets)
 
 LOCAL AI (offline, models download once on first use):
-  demolens models [list | download ID | delete ID]
+  demolens models [list | download ID | verify | delete ID]
   demolens transcribe <project.json> [--model whisper-base.en] [--lang en]
   demolens captions <project.json> [--burn on|off] [--size PX] [-o subs.srt|subs.vtt]
   demolens autocut <project.json> [--fillers] [--silences] [--min-silence MS] [--dry-run]
@@ -65,6 +66,7 @@ impl Args {
 }
 
 fn main() {
+    demolens_core::input::run_keyhook_if_requested();
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -124,7 +126,7 @@ fn run() -> Result<()> {
             if let Some(v) = a.opt(&["--fps"]) {
                 p.export.fps = v.parse()?;
             }
-            p.export.format = if out.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif")) { Format::Gif } else { Format::Mp4 };
+            p.export.format = Format::from_path(&out).unwrap_or(Format::Mp4);
             let t0 = std::time::Instant::now();
             let mut last = -1i64;
             let st = export::export(&p, &out, |f| {
@@ -230,6 +232,11 @@ fn record(mut a: Args) -> Result<()> {
         mic: a.flag("--mic"),
         system_audio: a.flag("--system-audio"),
         out_dir: a.opt(&["--out"]).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("recording")),
+        keys: match a.opt(&["--keys"]) {
+            Some(k) => demolens_core::input::KeyLogging::parse(&k).context("--keys must be on or off")?,
+            None => Default::default(),
+        },
+        webcam: a.flag("--webcam"),
     };
     let seconds: Option<f64> = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?;
     let session = capture::start(&opts)?;

@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window",
-  "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "description": "Main window and the recording badge. Dialogs, file writes and the pause shortcut run in Rust, so the web view gets only the core permissions.",
+  "windows": [
+    "main",
+    "indicator"
+  ],
+  "permissions": [
+    "core:default"
+  ]
 }

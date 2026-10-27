@@ -48,6 +48,13 @@ pub struct RecordOptions {
     /// Output directory. The recorder writes `recording.mkv` and
     /// `recording.events.jsonl` there.
     pub out_dir: PathBuf,
+    /// Key capture. Off by default (no keyboard hook at all). When on, only
+    /// key classes are kept: shortcuts by name, typed characters as `printable`.
+    #[serde(default)]
+    pub keys: crate::input::KeyLogging,
+    /// Also record the webcam to `webcam.mkv` for a picture-in-picture overlay.
+    #[serde(default)]
+    pub webcam: bool,
 }
 
 /// Geometry of what will be captured, used to make event coordinates relative.
@@ -82,6 +89,7 @@ pub(crate) fn plan(opts: &RecordOptions) -> Result<CapturePlan> {
 
 pub struct RecordingSession {
     child: Child,
+    webcam: Option<Child>,
     logger: InputLogger,
     started: Instant,
     stderr: Arc<Mutex<String>>,
@@ -167,8 +175,33 @@ fn start_error(err: &str) -> anyhow::Error {
     }
 }
 
+/// One PNG of the whole screen (display 0), for the visual area picker.
+/// Returns (png bytes, width, height) in capture pixels, the same space
+/// `CaptureTarget::Area` uses.
+pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false };
+    let plan = plan(&opts)?;
+    let out = Command::new(crate::ffmpeg::ffmpeg_bin())
+        .args(["-hide_banner", "-v", "error", "-nostdin"])
+        .args(&plan.args)
+        .args(["-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to start ffmpeg")?;
+    if out.stdout.len() < 100 {
+        bail!("could not take a screenshot: {}", first_line(&String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok((out.stdout, plan.region.w, plan.region.h))
+}
+
 pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     std::fs::create_dir_all(&opts.out_dir)?;
+    #[cfg(unix)]
+    {
+        // Recordings and the event log are private to the user.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&opts.out_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
     let spawn = |plan: &CapturePlan| -> Result<(Child, Arc<Mutex<String>>)> {
@@ -214,9 +247,91 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             return Err(start_error(&e));
         }
     }
-    let logger = InputLogger::start(plan.region)?;
+    let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
-    Ok(RecordingSession { child, logger, started, stderr: err, video, events, region: plan.region, warnings: plan.warnings })
+    let mut warnings = plan.warnings;
+    let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
+    if webcam.is_some() {
+        // When the camera's first frame landed, relative to the screen's.
+        let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
+    }
+    Ok(RecordingSession { child, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings })
+}
+
+/// Webcam input arguments for this OS, or None when no camera can be found.
+fn webcam_input() -> Option<Vec<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let dev = (0..4).map(|i| format!("/dev/video{i}")).find(|p| Path::new(p).exists())?;
+        Some(vec![s("-f"), s("v4l2"), s("-framerate"), s("30"), s("-video_size"), s("640x480"), s("-i"), dev])
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let idx = macos::camera_index()?;
+        Some(vec![s("-f"), s("avfoundation"), s("-framerate"), s("30"), s("-video_size"), s("1280x720"), s("-i"), format!("{idx}:none")])
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
+    let Some(input) = webcam_input() else {
+        warnings.push("No webcam found (webcam capture is supported on Linux and macOS), so there is no camera overlay.".into());
+        return None;
+    };
+    let out = dir.join("webcam.mkv");
+    let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&input);
+    cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    match cmd.spawn() {
+        Ok(mut c) => {
+            let err = Arc::new(Mutex::new(String::new()));
+            if wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT).is_ok() {
+                Some(c)
+            } else {
+                warnings.push("The webcam did not start (check the Camera permission), so there is no camera overlay.".into());
+                None
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+/// Ask ffmpeg to finish with "q", then kill it after `STOP_TIMEOUT`.
+/// Returns true when it had to be killed.
+fn finish(child: &mut Child) -> bool {
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"q\n");
+        let _ = stdin.flush();
+    }
+    let t = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return false,
+            Ok(None) if t.elapsed() < STOP_TIMEOUT => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return true;
+            }
+        }
+    }
+}
+
+impl Drop for RecordingSession {
+    /// A session dropped without `stop` (app quit, panic) must not leave
+    /// ffmpeg recording the screen in the background.
+    fn drop(&mut self) {
+        for c in std::iter::once(&mut self.child).chain(self.webcam.as_mut()) {
+            if let Ok(None) = c.try_wait() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+    }
 }
 
 fn first_line(s: &str) -> String {
@@ -227,6 +342,17 @@ fn first_line(s: &str) -> String {
 }
 
 impl RecordingSession {
+    /// Privacy pause: stops cursor and key logging (and kills the keyboard
+    /// hook). The screen keeps recording, but the paused stretch is cut out
+    /// of the project, so it never reaches an export.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.logger.set_paused(paused);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.logger.is_paused()
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }
@@ -234,30 +360,22 @@ impl RecordingSession {
     pub fn stop(mut self) -> Result<Recording> {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.
-        if let Some(mut stdin) = self.child.stdin.take() {
-            let _ = stdin.write_all(b"q\n");
-            let _ = stdin.flush();
-        }
-        let t = Instant::now();
-        let mut killed = false;
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if t.elapsed() < STOP_TIMEOUT => std::thread::sleep(Duration::from_millis(50)),
-                _ => {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
-                    killed = true;
-                    break;
-                }
-            }
+        let killed = finish(&mut self.child);
+        if let Some(c) = self.webcam.as_mut() {
+            finish(c);
         }
         let duration = self.started.elapsed();
         let mut log = EventLog::new(self.region.w, self.region.h);
         log.header.origin_x = self.region.x;
         log.header.origin_y = self.region.y;
-        log.events = self.logger.stop();
+        let logger = std::mem::replace(&mut self.logger, InputLogger::idle());
+        let logged = logger.stop();
+        log.events = logged.events;
         log.save(&self.events)?;
+        // Paused stretches are cut out when the project is created.
+        if !logged.pauses.is_empty() {
+            let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&logged.pauses)?);
+        }
         let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
         if size == 0 {
             let e = self.stderr.lock().unwrap().clone();
@@ -266,7 +384,7 @@ impl RecordingSession {
         if killed {
             eprintln!("demolens: ffmpeg did not stop on q, it was killed");
         }
-        Ok(Recording { video: self.video, events: self.events, duration })
+        Ok(Recording { video: self.video.clone(), events: self.events.clone(), duration })
     }
 }
 

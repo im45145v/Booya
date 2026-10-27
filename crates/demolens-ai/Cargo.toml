@@ -19,6 +19,8 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 regex = "1"
+sha2 = "0.10"
+hmac = "0.12"
 ureq = { version = "3", features = ["json"] }
 whisper-rs = { version = "0.16", optional = true }
 ocrs = { version = "0.13", optional = true }

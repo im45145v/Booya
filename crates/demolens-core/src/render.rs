@@ -69,6 +69,19 @@ impl Frame {
 
     /// Alpha blend one pixel (used by the text renderer).
     #[inline]
+    /// Blend `other` over this frame with weight `a` (same size only).
+    pub fn mix_from(&mut self, other: &Frame, a: f32) {
+        if other.w != self.w || other.h != self.h || a <= 0.0 {
+            return;
+        }
+        let a = a.min(1.0);
+        self.data.par_chunks_mut(4096).zip(other.data.par_chunks(4096)).for_each(|(d, o)| {
+            for (x, y) in d.iter_mut().zip(o) {
+                *x = (*x as f32 + (*y as f32 - *x as f32) * a).round() as u8;
+            }
+        });
+    }
+
     pub fn blend_pub(&mut self, x: i64, y: i64, rgb: [f32; 3], a: f32) {
         self.blend(x, y, rgb, a)
     }
@@ -158,6 +171,9 @@ pub fn blur_region(f: &mut Frame, b: &BlurBox) {
     }
 }
 
+/// Label shown while the presenter types (characters are never logged).
+pub const TYPING: &str = "Typing...";
+
 /// One label shown by the keystroke overlay.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyLabel {
@@ -186,22 +202,17 @@ pub fn build_key_labels(log: &EventLog, hold_ms: f64, shortcuts_only: bool) -> V
         if shortcuts_only {
             continue;
         }
-        let ch = if key.chars().count() == 1 {
-            key.to_string()
-        } else if key.eq_ignore_ascii_case("space") {
-            " ".into()
-        } else {
-            String::new()
-        };
-        if !ch.is_empty() {
+        // The log holds no characters (only that a printable key was
+        // pressed), so typing shows as one "Typing..." label.
+        let typing = key == crate::events::PRINTABLE || key.chars().count() == 1 || key.eq_ignore_ascii_case("space");
+        if typing {
             if let Some(last) = out.last_mut() {
                 if typing_open && t - (last.end_ms - hold_ms) < 1200.0 {
-                    last.text.push_str(&ch);
                     last.end_ms = t + hold_ms;
                     continue;
                 }
             }
-            out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: ch });
+            out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: TYPING.into() });
             typing_open = true;
         } else {
             out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: key.to_string() });
@@ -436,6 +447,50 @@ impl Renderer {
         }
     }
 
+    /// Webcam bubble diameter in output pixels.
+    pub fn webcam_size(&self) -> u32 {
+        let short = self.out_w.min(self.out_h) as f64;
+        let d = self.project.webcam.as_ref().map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24) * short;
+        ((d.round() as u32) & !1).max(16)
+    }
+
+    /// Composite the webcam frame (already square, `webcam_size`) in its corner.
+    pub fn draw_webcam(&self, out: &mut Frame, cam: &Frame) {
+        use crate::project::Corner;
+        let Some(w) = self.project.webcam.as_ref() else { return };
+        let d = cam.w as f64;
+        let short = self.out_w.min(self.out_h) as f64;
+        let m = short * 0.035;
+        let (x0, y0) = match w.corner {
+            Corner::TopLeft => (m, m),
+            Corner::TopRight => (self.out_w as f64 - d - m, m),
+            Corner::BottomLeft => (m, self.out_h as f64 - d - m),
+            Corner::BottomRight => (self.out_w as f64 - d - m, self.out_h as f64 - d - m),
+        };
+        let r = if w.circle { d / 2.0 } else { d * 0.16 };
+        let (cx, cy, h) = (x0 + d / 2.0, y0 + d / 2.0, d / 2.0);
+        // Soft shadow, then the video, then a thin white ring.
+        for yy in (y0 as i64 - 8)..(y0 + d) as i64 + 12 {
+            for xx in (x0 as i64 - 8)..(x0 + d) as i64 + 8 {
+                let (fx, fy) = (xx as f64 + 0.5, yy as f64 + 0.5);
+                let ds = sd_round_rect(fx, fy - 4.0, cx, cy, h, h, r);
+                if ds > 0.0 && ds < 10.0 {
+                    out.blend(xx, yy, [0.0; 3], (0.22 * (1.0 - ds / 10.0)) as f32);
+                }
+                let dd = sd_round_rect(fx, fy, cx, cy, h, h, r);
+                let cov = (0.5 - dd).clamp(0.0, 1.0) as f32;
+                if cov > 0.0 {
+                    let px = cam.px((fx - x0) as i64, (fy - y0) as i64);
+                    out.blend(xx, yy, [px[0], px[1], px[2]], cov);
+                }
+                let ring = (1.5 - (dd + 1.5).abs()).clamp(0.0, 1.0) as f32;
+                if ring > 0.0 {
+                    out.blend(xx, yy, [255.0; 3], 0.9 * ring);
+                }
+            }
+        }
+    }
+
     pub fn camera(&self, src_t: f64) -> Camera {
         let p = &self.project;
         camera_at(
@@ -542,6 +597,9 @@ impl Renderer {
             }
         }
 
+        // Where the cursor is in output space (for label placement).
+        let cursor_out = self.track.as_ref().and_then(|tr| tr.smooth_at(src_t, p.cursor.smoothing_ms)).map(|(x, y)| to_out(x, y));
+
         // 4. Cursor (smoothed, optionally bigger).
         if p.cursor.visible {
             if let Some(tr) = &self.track {
@@ -578,9 +636,20 @@ impl Renderer {
                 let bw = tw + padx * 2.0;
                 let bh = th + pady * 2.0;
                 let bx = (self.out_w as f64 - bw) / 2.0;
-                // Sit above captions when both are visible.
+                // Bottom centre, above captions when both are visible...
                 let lift = if self.caption_at(src_t).is_some() { short * 0.16 } else { 0.0 };
-                let by = self.out_h as f64 - bh - (short * 0.045).max(pady) - lift;
+                let bottom = self.out_h as f64 - bh - (short * 0.045).max(pady) - lift;
+                // ...unless that would cover what the presenter is working on
+                // (the cursor or a click in the last 1.5 s), then the top.
+                let top = (short * 0.045).max(pady);
+                let margin = short * 0.06;
+                let hits = |y: f64| {
+                    let inside = |(x0, y0): (f64, f64)| x0 >= bx - margin && x0 <= bx + bw + margin && y0 >= y - margin && y0 <= y + bh + margin;
+                    let cursor = cursor_out.is_some_and(inside);
+                    let click = self.clicks.iter().any(|&(t, x, y2)| (0.0..1500.0).contains(&(src_t - t)) && inside(to_out(x, y2)));
+                    cursor || click
+                };
+                let by = if hits(bottom) && !hits(top) { top } else { bottom };
                 fill_round_rect(&mut out, bx, by, bw, bh, bh * 0.3, [15.0, 15.0, 18.0], 0.82 * a);
                 text::draw(&mut out, (bx + padx) as f32, (by + pady) as f32, px, &text, [250.0, 250.0, 250.0], a);
             }
@@ -611,7 +680,7 @@ mod tests {
         log.events = vec![k(0.0, "h", &[]), k(100.0, "i", &[]), k(500.0, "S", &["Ctrl"]), k(3000.0, "Enter", &[])];
         let labels = build_key_labels(&log, 1000.0, false);
         let texts: Vec<_> = labels.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, vec!["hi", "Ctrl + S", "Enter"]);
+        assert_eq!(texts, vec!["Typing...", "Ctrl + S", "Enter"]);
         assert_eq!(labels[0].end_ms, 500.0);
         let only = build_key_labels(&log, 1000.0, true);
         assert_eq!(only.len(), 1);

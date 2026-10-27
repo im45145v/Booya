@@ -41,6 +41,9 @@
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
     <symbol id="i-sample" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m10 8.5 4.5 2.5-4.5 2.5z" fill="currentColor"/><path d="M8 21h8"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M2.5 12h3M18.5 12h3M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></symbol>
+    <symbol id="i-cam" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
     <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h4L13 5v14l-5-4.5H4z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
   </defs>
 </svg>
@@ -64,12 +67,17 @@
     </select>
     <label class="sr-only" for="rec-arg">Window id or area</label>
     <input id="rec-arg" class="field sm" placeholder="x,y,w,h" hidden />
+    <button id="rec-pick" class="btn icon ghost" hidden title="Pick the area on a screenshot" aria-label="Pick area"><svg class="ico"><use href="#i-crop"/></svg></button>
     <button id="rec-mic" class="btn icon ghost toggle" aria-pressed="true" title="Record microphone" aria-label="Record microphone"><svg class="ico"><use href="#i-mic"/></svg></button>
     <button id="rec-sys" class="btn icon ghost toggle" aria-pressed="false" title="Record system audio" aria-label="Record system audio"><svg class="ico"><use href="#i-speaker"/></svg></button>
+    <button id="rec-cam" class="btn icon ghost toggle" aria-pressed="false" title="Record the webcam for a picture in picture overlay" aria-label="Record webcam"><svg class="ico"><use href="#i-cam"/></svg></button>
+    <button id="rec-keys" class="btn icon ghost toggle" aria-pressed="false" title="Capture key presses (off by default). Only shortcut names are kept, never what you type." aria-label="Capture key presses"><svg class="ico"><use href="#i-keyboard"/></svg></button>
+    <button id="rec-pause" class="btn ghost" hidden title="Pause input capture and cut this part (Ctrl/Cmd+Shift+P)"><svg class="ico"><use href="#i-pause"/></svg><span>Pause</span></button>
     <button id="rec-btn" class="btn rec" title="Start recording (Ctrl+R)"><svg class="ico"><use href="#i-record"/></svg><span>Record</span></button>
   </div>
   <div class="tb-group">
     <button id="theme-btn" class="btn icon ghost" title="Switch light or dark theme" aria-label="Switch theme"><svg class="ico"><use href="#i-sun"/></svg></button>
+    <button id="settings-btn" class="btn icon ghost" title="Settings: privacy, cloud AI, storage" aria-label="Settings"><svg class="ico"><use href="#i-gear"/></svg></button>
     <button id="about-btn" class="btn icon ghost" title="About DemoLens" aria-label="About DemoLens"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button>
     <button id="keys-btn" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico"><use href="#i-keyboard"/></svg></button>
     <button id="ex-top" class="btn primary needs-project" title="Export video (Ctrl+E)"><svg class="ico"><use href="#i-export"/></svg><span>Export</span></button>
@@ -84,7 +92,7 @@
         <div class="welcome-card">
           <img class="welcome-logo" src="logo.svg" alt="DemoLens logo" width="112" height="112">
           <h1>Turn a screen recording into a polished demo</h1>
-          <p class="lead">Auto zoom on every click, a smooth cursor, captions, filler words cut and secrets blurred. Everything runs on this computer.</p>
+          <p class="lead">Auto zoom on every click, a smooth cursor, captions, filler words cut and secrets blurred. Everything runs on this computer unless you turn on a cloud provider.</p>
           <div class="welcome-actions">
             <button id="w-sample" class="btn primary lg"><svg class="ico"><use href="#i-sample"/></svg><span>Try the sample</span></button>
             <button id="w-record" class="btn lg"><svg class="ico"><use href="#i-record"/></svg><span>Record screen</span></button>
@@ -136,14 +144,14 @@
           <label><input type="checkbox" id="r-zoom" checked /> Auto zoom on clicks and typing</label>
           <label><input type="checkbox" id="r-captions" checked /> Captions <span class="pill" id="pill-speech"></span></label>
           <label><input type="checkbox" id="r-cut" checked /> Cut filler words and long pauses</label>
-          <label><input type="checkbox" id="r-blur" checked /> Blur emails, API keys and cards <span class="pill" id="pill-ocr"></span></label>
+          <label><input type="checkbox" id="r-blur" checked /> Blur emails, keys, cards, IDs and passwords <span class="pill" id="pill-ocr"></span></label>
           <label><input type="checkbox" id="r-denoise" checked /> Remove background noise</label>
         </div>
         <button id="ready-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-wand"/></svg><span>Make it demo-ready</span></button>
         <ul id="ready-report" class="report" aria-live="polite"></ul>
       </div>
 
-      <h3 class="section">AI tools <span class="badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+      <h3 class="section">AI tools <span class="badge" id="ai-badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
       <div class="tool-list">
         <button id="ai-transcribe" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Transcribe</b><small>Captions and word timings</small></span></button>
         <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Remove fillers and pauses</small></span></button>
@@ -152,7 +160,7 @@
           <label><input type="checkbox" id="cut-silences" checked /> Pauses longer than
             <select id="cut-min" class="field sm" aria-label="Minimum pause length"><option value="500">0.5 s</option><option value="700" selected>0.7 s</option><option value="1200">1.2 s</option></select></label>
         </div>
-        <button id="ai-redact" class="tool needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span><b>Blur secrets</b><small>Emails, API keys, cards, phones</small></span></button>
+        <button id="ai-redact" class="tool needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span><b>Blur secrets</b><small>Emails, keys, cards, Aadhaar, PAN, UPI, passwords</small></span></button>
         <button id="ai-docs" class="tool needs-project"><svg class="ico"><use href="#i-doc"/></svg><span><b>Write docs</b><small>Title, chapters, guide, post</small></span></button>
         <div class="sub"><label><input type="checkbox" id="docs-llm" checked /> Use a local LLM if one is available</label></div>
         <button id="cap-export" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Export subtitles</b><small>SRT or VTT file</small></span></button>
@@ -190,9 +198,17 @@
 
       <h3 class="section">Keys and captions</h3>
       <label class="switch"><input type="checkbox" id="keys-on" /> Keystroke overlay</label>
-      <label class="switch"><input type="checkbox" id="keys-short" /> Shortcuts only</label>
+      <label class="switch"><input type="checkbox" id="keys-short" /> Shortcuts only (typing shows as "Typing...")</label>
       <label class="switch"><input type="checkbox" id="cap-burn" /> Burn in captions</label>
       <label class="slider">Caption size <input id="cap-size" type="range" min="0.025" max="0.08" step="0.002" /></label>
+
+      <div id="cam-section" hidden>
+      <h3 class="section">Webcam</h3>
+      <label class="switch"><input type="checkbox" id="cam-visible" /> Show webcam</label>
+      <label class="switch"><input type="checkbox" id="cam-circle" /> Circle</label>
+      <label class="slider">Size <input id="cam-size" type="range" min="0.12" max="0.4" step="0.01" /></label>
+      <label class="stack">Corner<select id="cam-corner" class="field"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option></select></label>
+      </div>
 
       <h3 class="section">Audio</h3>
       <label class="switch"><input type="checkbox" id="aud-denoise" /> Remove background noise</label>
@@ -213,7 +229,8 @@
       <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-wand"/></svg><span>Regenerate auto zoom</span></button></div>
 
       <h3 class="section">Blur boxes</h3>
-      <div class="row"><input id="blur-rect" class="field" placeholder="x,y,w,h in video pixels" aria-label="Blur box x,y,w,h" /><button id="blur-add" class="btn needs-project">Add</button></div>
+      <div class="row"><button id="blur-draw" class="btn needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span>Draw blur boxes...</span></button></div>
+      <div class="row"><input id="blur-rect" class="field" placeholder="or type x,y,w,h in video pixels" aria-label="Blur box x,y,w,h" /><button id="blur-add" class="btn needs-project">Add</button></div>
       <div id="blur-list" class="list"></div>
     </div>
 
@@ -225,12 +242,14 @@
         <label class="stack">Aspect<select id="ex-aspect" class="field"><option value="16:9">16:9 landscape</option><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option></select></label>
         <label class="stack">Quality<select id="ex-quality" class="field"><option value="480">480p</option><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label>
         <label class="stack">Frame rate<select id="ex-fps" class="field"><option>15</option><option>24</option><option selected>30</option><option>60</option></select></label>
-        <label class="stack">Format<select id="ex-format" class="field"><option value="mp4">MP4 video</option><option value="gif">GIF</option></select></label>
+        <label class="stack">Format<select id="ex-format" class="field"><option value="mp4">MP4 video</option><option value="webm">WebM video</option><option value="gif">GIF</option></select></label>
       </div>
       <button id="ex-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-export"/></svg><span>Export...</span></button>
+      <p class="hint warn-note">Auto blur may miss text. Watch the export before sharing.</p>
       <div id="ex-state" class="ex-state" hidden>
         <div class="bar"><div id="ex-bar"></div></div>
         <div class="row between"><span id="ex-text" class="small"></span><button id="ex-reveal" class="btn ghost sm" hidden><svg class="ico"><use href="#i-folder"/></svg><span>Show in folder</span></button></div>
+        <div class="row"><button id="ex-upload" class="btn sm" hidden><svg class="ico"><use href="#i-export"/></svg><span>Upload and copy a private link</span></button></div>
       </div>
     </div>
   </aside>

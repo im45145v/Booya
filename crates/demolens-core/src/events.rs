@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+/// Event log format version. Version 2 never stores typed characters.
+pub const EVENTS_VERSION: u32 = 2;
+
+/// The `key` of every printable key press without Ctrl/Alt/Meta: the log
+/// keeps *that* something was typed and when, never *what*.
+pub const PRINTABLE: &str = "printable";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseButton {
@@ -24,8 +31,10 @@ pub enum EventKind {
     Move { x: f64, y: f64 },
     /// Mouse button pressed at (x, y).
     Click { x: f64, y: f64, button: MouseButton },
-    /// Key pressed. `key` is a display label such as "A", "Enter", "Space".
-    /// `modifiers` holds held modifiers such as "Ctrl", "Shift", "Alt", "Meta".
+    /// Key pressed. `key` is a key class: [`PRINTABLE`] for typing, a named
+    /// key such as "Enter", "Tab", "Space", "Up", or the key of a shortcut
+    /// ("S" with modifiers ["Ctrl"]). `modifiers` holds held modifiers such as
+    /// "Ctrl", "Shift", "Alt", "Meta".
     Key {
         key: String,
         #[serde(default)]
@@ -69,7 +78,7 @@ pub struct EventLog {
 impl EventLog {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            header: EventLogHeader { demolens_events: 1, width, height, origin_x: 0, origin_y: 0, scale: 1.0 },
+            header: EventLogHeader { demolens_events: EVENTS_VERSION, width, height, origin_x: 0, origin_y: 0, scale: 1.0 },
             events: Vec::new(),
         }
     }
@@ -89,12 +98,29 @@ impl EventLog {
             events.push(ev);
         }
         events.sort_by(|a, b| a.t.total_cmp(&b.t));
+        // Version 1 logs (DemoLens 0.1.x) stored typed characters. Reduce
+        // them to key classes as they load, so they never reach the overlay.
+        for e in &mut events {
+            if let EventKind::Key { key, modifiers } = &mut e.kind {
+                *key = crate::input::classify(key, modifiers);
+            }
+        }
         Ok(Self { header, events })
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
-        writeln!(f, "{}", serde_json::to_string(&self.header)?)?;
+        // The log can hold what was typed, so only the owner may read it.
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = std::io::BufWriter::new(opts.open(path)?);
+        let mut header = self.header.clone();
+        header.demolens_events = EVENTS_VERSION;
+        writeln!(f, "{}", serde_json::to_string(&header)?)?;
         for e in &self.events {
             writeln!(f, "{}", serde_json::to_string(e)?)?;
         }

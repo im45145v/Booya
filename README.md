@@ -2,7 +2,7 @@
 
 <h1 align="center">DemoLens</h1>
 
-DemoLens is a free, open source screen recorder for product demos. It is a local alternative to Screen Studio and Screen Charm that runs on Windows, macOS and Linux. Everything happens on your machine: no account, no upload, no internet connection.
+DemoLens is a free, open source screen recorder for product demos. It is a local alternative to Screen Studio and Screen Charm that runs on Windows, macOS and Linux. Everything happens on your machine: no account and no telemetry. The only network use by default is downloading the optional AI models when you ask for them. Cloud AI and uploads exist but are off until you turn them on.
 
 You record your screen, DemoLens logs your cursor, clicks and key presses next to the video, and the editor turns that into a polished demo with smooth auto zoom, a nicer cursor, click ripples, a keystroke overlay and a styled background. Export to MP4 or GIF up to 4K in 16:9, 9:16 or 1:1.
 
@@ -47,25 +47,28 @@ The first time you record, macOS asks for **Screen & System Audio Recording** an
 | Auto blur of API keys, emails, cards | Yes | No | No | No |
 | Scriptable CLI | Yes | No | No | No |
 
-If you record demos of developer tools, your screen is full of tokens, emails and customer data. DemoLens finds and blurs them for you and never uploads a frame.
+If you record demos of developer tools, your screen is full of tokens, emails and customer data. DemoLens finds and blurs them for you and never uploads a frame unless you set up your own storage.
 
 
 ## Features
 
 - **Recording**: full screen, a single window or an area, with microphone and system audio where the OS allows it (see the capture table below).
-- **Event log**: while recording, cursor moves, clicks and key presses are written to a timestamped `*.events.jsonl` file next to the video.
+- **Event log**: while recording, cursor moves and clicks are written to a timestamped `*.events.jsonl` file next to the video. Key capture is off by default; when you turn it on, only shortcut names and the timing of typing are kept, never the characters.
+- **Recording indicator**: an always on top REC badge with a timer and a Pause button (Ctrl/Cmd+Shift+P). Paused parts are cut.
+- **Webcam overlay**: record the webcam alongside the screen and show it as a circle or rounded square in any corner.
 - **Auto zoom**: zoom segments are generated from clicks and typing bursts. The zoom eases in and out smoothly and follows the cursor. Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
 - **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
-- **Keystroke overlay**: shows typed text and shortcuts such as `Ctrl + S`. Can be switched off or limited to shortcuts only.
+- **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
 - **Styling**: gradient, solid or image background, padding, rounded corners and a soft shadow.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
-- **Blur boxes**: hide private data with manual blur regions that move correctly with the zoom.
+- **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot.
 - **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
 - **Make it demo-ready**: one button (or `D`, or `demolens ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
 - **Editor comforts**: dark and light themes, undo and redo, a timeline you can zoom and scrub, draggable zoom segments, keyboard shortcuts for everything (press `?`). Opening a video also loads the event log next to it.
 - **Local AI** (optional, offline, see below): captions, auto cut of filler words and long pauses, auto blur of emails, API keys and card numbers, and written docs (title, chapters, step by step guide, social post).
 - **Audio cleanup**: background noise removal and mute.
-- **Export**: MP4 (H.264 + AAC) or GIF (palette optimised), 720p to 4K, in 16:9, 9:16 or 1:1.
+- **Export**: MP4 (H.264 + AAC), WebM (VP9 + Opus) or GIF (palette optimised), 480p to 4K, in 16:9, 9:16 or 1:1, with presets for YouTube, Reels and Shorts, feed posts and READMEs. An untouched recording is remuxed without re-encoding.
+- **Optional cloud AI and storage**: bring your own key for OpenAI, Anthropic, Gemini, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs or any OpenAI compatible endpoint, and your own S3 or R2 bucket. Off by default; see [Cloud AI](#cloud-ai-optional).
 
 ## How it works
 
@@ -114,7 +117,7 @@ Clicks and typing bursts (3 or more keys with less than 0.9 s between them; shor
 
 ## Local AI
 
-All AI features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it. Without any model installed, DemoLens works exactly as before and each AI button tells you which model it needs.
+By default all AI features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it (models come from Hugging Face, GitHub and AWS and are SHA-256 checked). Without any model installed, DemoLens works exactly as before and each AI button tells you which model it needs.
 
 Open **Models...** in the app (or run `demolens models list`) to see, download and delete models. They live in `~/.config/demolens/models` (the platform config folder on macOS and Windows). Once downloaded, everything works with no network.
 
@@ -132,10 +135,10 @@ What each feature does:
 
 - **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (with size control) or exported as SRT or VTT. Words you cut never show up.
 - **Auto cut**: removes filler words (um, uh) and pauses longer than a threshold you choose. Each cut is a normal clip edit, so undo works.
-- **Auto blur secrets**: samples frames, reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), card numbers (Luhn checked) and phone numbers.
+- **Auto blur secrets**: samples frames (skipping frames that did not change), reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), bearer tokens, card numbers (Luhn checked), phone numbers, Aadhaar (Verhoeff checked), PAN, UPI IDs, IBANs (mod 97), IP addresses and password fields. It can miss text: watch the export before sharing.
 - **Write docs**: builds steps from the transcript, clicks, typing and zooms, then writes a title, YouTube style chapters, a Markdown guide and a short social post. With no LLM it falls back to a rule based writer.
 
-The LLM is found in this order: `DEMOLENS_LLM_URL` (any OpenAI compatible server, localhost only unless you also set `DEMOLENS_ALLOW_REMOTE_LLM=1`), Ollama on port 11434, a server on port 8080, then the bundled llama.cpp runtime with a downloaded Qwen model.
+The LLM is found in this order: `DEMOLENS_LLM_URL` (any OpenAI compatible server, this machine only unless you also set `DEMOLENS_ALLOW_REMOTE_LLM=1`, in which case it must be https and the app asks first), Ollama on port 11434, a server on port 8080, then the bundled llama.cpp runtime with a downloaded Qwen model.
 
 Honest limits: Whisper often drops filler words or writes them as real words, so auto cut finds fewer fillers than a human would. The 0.5B model writes plain but usable text; the 1.5B model or your own Ollama model writes better.
 
@@ -145,12 +148,46 @@ Honest limits: Whisper often drops filler words or writes them as real words, so
 
 ![Generated docs](docs/media/docs.png)
 
+## Cloud AI (optional)
+
+Off by default. Open **Settings > Cloud AI**, paste your own key (stored in the OS keychain, shown masked, removable) and tick a task for a provider. Ticking shows a notice that the data leaves your device and records the date. Every call then shows exactly what is sent, its size, the provider, the endpoint and links to their terms and privacy policy, and you can cancel.
+
+| Provider | Speech to text | Writing docs | Text to speech |
+|----------|---|---|---|
+| OpenAI | yes | yes | yes |
+| Anthropic | | yes | |
+| Google Gemini | | yes | |
+| Groq | yes | yes | |
+| OpenRouter | | yes | |
+| Deepgram | yes | | |
+| AssemblyAI | yes (deleted after transcription) | | |
+| ElevenLabs | yes | | yes |
+| Any OpenAI compatible endpoint (https) | yes | yes | yes |
+
+Speech to text sends only the audio track as 16 kHz mono WAV. Writing sends only the transcript and chapter timings. Video and event logs are never sent.
+
+**Storage:** in **Settings > Storage**, add an S3 or Cloudflare R2 bucket. After an export, "Upload and copy a private link" uploads the video as a private object (encrypted at rest on S3) and copies a signed link that expires after 24 hours by default (7 days at most). Event logs and project files are refused.
+
+These integrations are tested against mocked HTTP servers. They follow each provider's public API, but not every provider has been tried live.
+
+## Privacy
+
+DemoLens runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
+
+- **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press and when you type, not the characters you type. Cursor moves and clicks are logged for auto zoom. A REC badge is always visible while recording.
+- **Where it goes:** `Videos/DemoLens/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
+- **Network use:** only when you download AI models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `DEMOLENS_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
+- **Auto blur helps but is not perfect.** Always watch your export before sharing.
+- **Recording other people:** if your screen, mic or calls include other people, you are responsible for telling them and having a lawful reason under laws such as GDPR or India's DPDP Act.
+
+See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to report a problem.
+
 ## Capture support
 
 | OS | Video | Microphone | System audio | Input log |
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
-| Linux (Wayland) | TODO: xdg-desktop-portal ScreenCast + PipeWire | | | TODO |
+| Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
 | macOS | ffmpeg `avfoundation`: screen, area | avfoundation | TODO: ScreenCaptureKit (or a loopback device such as BlackHole) | rdev (needs Accessibility permission) |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
 
@@ -244,12 +281,11 @@ Run the tests with `cargo test -p demolens-core -p demolens-ai`.
 
 ## Roadmap
 
-Done: one click demo-ready, templates, new editor layout and timeline, shortcuts, installers for all OSes, local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
+Done: drawn blur boxes, a visual area picker, webcam overlay, optional cloud AI and storage, one click demo-ready, templates, new editor layout and timeline, shortcuts, installers for all OSes, local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
 
-- Draw blur boxes on the preview, and a visual window and area picker.
 - Bundled ffmpeg and signed builds.
 - Wayland capture through the PipeWire portal (Wayland is not supported yet; use an X11 session).
-- Webcam overlay (corner bubble, shape and size per preset).
+- Intel Mac builds. The release ships Apple Silicon only; Intel Macs can build from source with `cargo build --release --target x86_64-apple-darwin`.
 - Local AI voiceover with Piper, to replace or fix narration.
 - Loudness normalisation for the mic track.
 - Native capture backends: ScreenCaptureKit (macOS), Windows.Graphics.Capture plus WASAPI loopback (Windows).

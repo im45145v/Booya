@@ -12,5 +12,7 @@ pub mod docs;
 pub mod llm;
 pub mod models;
 pub mod pipeline;
+pub mod providers;
 pub mod redact;
+pub mod s3;
 pub mod transcribe;

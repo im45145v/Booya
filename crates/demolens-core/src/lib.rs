@@ -31,5 +31,15 @@ pub fn new_project(video: &std::path::Path, events: Option<&std::path::Path>) ->
         let log = EventLog::load(ev)?;
         p.zoom = generate_zoom_segments(&log, info.duration_ms, &ZoomConfig::default());
     }
+    // Stretches paused during recording are removed.
+    if let Some(pauses) = std::fs::read_to_string(video.with_extension("pauses.json")).ok().and_then(|s| serde_json::from_str::<Vec<(f64, f64)>>(&s).ok()) {
+        p.cut_ranges(&pauses);
+    }
+    // A webcam recorded with the screen sits next to it as webcam.mkv.
+    if let Some(cam) = video.parent().map(|d| d.join("webcam.mkv")).filter(|c| c.exists() && c.as_path() != video) {
+        let mut w = project::Webcam::new(cam.clone());
+        w.offset_ms = std::fs::read_to_string(cam.with_extension("offset")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+        p.webcam = Some(w);
+    }
     Ok(p)
 }

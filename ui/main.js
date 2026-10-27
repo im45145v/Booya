@@ -12,9 +12,10 @@ const VIDEO_EXT = ['mkv', 'mp4', 'mov', 'webm', 'avi'];
 let project = null, projectPath = null, playing = false, recording = false, busy = false, saved = null;
 let pending = false, again = false, lastExport = null, models = [];
 
+// File dialogs run in Rust, which then allows writes to exactly the chosen path.
 const dialog = {
-  open: o => (window.__TAURI__.dialog ? window.__TAURI__.dialog.open(o) : invoke('plugin:dialog|open', { options: o })),
-  save: o => (window.__TAURI__.dialog ? window.__TAURI__.dialog.save(o) : invoke('plugin:dialog|save', { options: o })),
+  open: o => invoke('pick_open', { name: o.filters[0].name, extensions: o.filters[0].extensions }),
+  save: o => invoke('pick_save', { defaultPath: o.defaultPath || null, name: o.filters[0].name, extensions: o.filters[0].extensions }),
 };
 
 // ---------- Status bar: info, busy, success and error states ----------
@@ -86,6 +87,8 @@ function syncPanel() {
   $('cur-visible').checked = c.visible; $('cur-size').value = c.size; $('cur-smooth').value = c.smoothing_ms; $('cur-ripple').checked = c.click_ripples;
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
+  const w = project.webcam; $('cam-section').hidden = !w;
+  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; }
   $('aud-denoise').checked = project.audio.denoise; $('aud-mute').checked = project.audio.mute;
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); markTemplate(); markDestination();
@@ -98,6 +101,7 @@ function readPanel() {
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
+  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value });
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked });
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
@@ -146,7 +150,7 @@ async function refresh() {
   $('time').textContent = `${fmt(tl.playhead)} / ${fmt(tl.outDur())}`;
   if (pending) { again = true; return; }
   pending = true;
-  try { $('preview').src = await invoke('preview', { project, outMs: tl.playhead, shortSide: playing ? 360 : 540 }); }
+  try { $('preview').src = await invoke('preview', { project, outMs: tl.playhead, shortSide: playing ? 360 : 540, playing }); }
   catch (e) { fail(e); }
   pending = false;
   if (again) { again = false; refresh(); }
@@ -262,14 +266,18 @@ function showBusy(t) { $('busy-text').textContent = t; $('busy-overlay').hidden 
 function hideBusy() { $('busy-overlay').hidden = true; }
 
 // ---------- Recording ----------
-$('rec-target').onchange = () => { const k = $('rec-target').value; $('rec-arg').hidden = k === 'screen'; $('rec-arg').placeholder = k === 'window' ? (navigator.userAgent.includes('Windows') ? 'Window title' : 'Window id') : 'x,y,w,h'; };
+$('rec-target').onchange = () => { const k = $('rec-target').value; $('rec-arg').hidden = k === 'screen'; $('rec-pick').hidden = k !== 'area'; $('rec-arg').placeholder = k === 'window' ? (navigator.userAgent.includes('Windows') ? 'Window title' : 'Window id') : 'x,y,w,h'; };
 document.querySelectorAll('.toggle').forEach(b => (b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true')));
 function setRecUi(on) {
   recording = on;
   $('rec-btn').classList.toggle('recording', on);
   $('rec-btn').innerHTML = icon(on ? 'i-stop' : 'i-record') + `<span>${on ? 'Stop' : 'Record'}</span>`;
   $('rec-btn').title = on ? 'Stop recording (Ctrl+R)' : 'Start recording (Ctrl+R)';
+  $('rec-pause').hidden = !on; if (!on) setPausedUi(false);
 }
+function setPausedUi(p) { $('rec-pause').innerHTML = icon(p ? 'i-play' : 'i-pause') + `<span>${p ? 'Resume' : 'Pause'}</span>`; $('rec-pause').dataset.paused = p; }
+$('rec-pause').onclick = () => invoke('pause_recording', { paused: $('rec-pause').dataset.paused !== 'true' }).catch(fail);
+window.__TAURI__.event.listen('rec-paused', e => { setPausedUi(!!e.payload); if (recording) status(e.payload ? 'Paused. Input capture is stopped and this part will be cut.' : 'Recording.', 'busy'); });
 $('rec-btn').onclick = async () => {
   if ($('rec-btn').disabled) return;
   try {
@@ -280,7 +288,7 @@ $('rec-btn').onclick = async () => {
       if (kind === 'area') { const v = arg.split(',').map(Number); if (v.length !== 4 || v.some(isNaN)) return status('Type the area as x,y,w,h, for example 0,0,1280,720', 'error'); const [x, y, w, h] = v; target = { type: 'area', x, y, w, h }; }
       $('rec-btn').disabled = true; status('Starting the recording. If macOS asks for permission, allow it.', 'busy');
       let warn;
-      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true' }); }
+      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true' }); }
       finally { $('rec-btn').disabled = false; }
       setRecUi(true);
       const w = warn.filter(x => x !== 'recording without audio');
@@ -350,8 +358,9 @@ function markDestination() {
 async function doExport() {
   if (!project || busy) return;
   selectTab('export'); readPanel();
-  const gif = project.export.format === 'gif';
-  const out = await dialog.save({ defaultPath: stem(projectPath || project.source) + '-demo.' + (gif ? 'gif' : 'mp4'), filters: [gif ? { name: 'GIF', extensions: ['gif'] } : { name: 'MP4 video', extensions: ['mp4'] }] });
+  const fmtx = project.export.format, names = { gif: 'GIF', webm: 'WebM video', mp4: 'MP4 video' };
+  if (project.blur.length && !(await reviewWarning())) return;
+  const out = await dialog.save({ defaultPath: stem(projectPath || project.source) + '-demo.' + fmtx, filters: [{ name: names[fmtx] || 'Video', extensions: [fmtx] }] });
   if (!out) return;
   busy = true; enableControls();
   $('ex-state').hidden = false; $('ex-reveal').hidden = true; $('ex-bar').style.width = '0%'; $('ex-text').textContent = 'Starting...';
@@ -360,7 +369,7 @@ async function doExport() {
   try {
     const r = await invoke('export_video', { project, out });
     lastExport = out; $('ex-bar').style.width = '100%';
-    $('ex-text').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${baseName(out)}`; $('ex-reveal').hidden = false;
+    $('ex-text').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${baseName(out)}`; $('ex-reveal').hidden = false; $('ex-upload').hidden = !storageReady;
     status('Exported ' + r, 'success');
   } catch (e) { $('ex-text').textContent = 'Export failed'; fail(e); }
   busy = false; enableControls();
@@ -404,7 +413,9 @@ $('ready-btn').onclick = () => aiTask('Making it demo-ready', async () => {
   status(skipped ? `Demo-ready, ${skipped} step(s) skipped. See the Magic tab for why.` : 'Demo-ready. Press Space to watch it, then Export.', 'success');
 });
 $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
-  const r = await invoke('ai_transcribe', { project, model: null });
+  const cloud = await confirmCloud('stt');
+  if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');
+  const r = await invoke('ai_transcribe', { project, model: null, cloud });
   r.project.caption_style.burn_in = true; applyResult(r.project);
   status(`${r.report.words} words and ${r.report.fillers} filler words. Captions are burned in; switch that off in Style.`, 'success');
 });
@@ -420,13 +431,24 @@ $('ai-redact').onclick = () => aiTask('Scanning for secrets', async () => {
   status(r.report.found.length ? `Blurred ${r.report.added} regions: ${r.report.found.map(f => f[0]).join(', ')}` : 'Nothing sensitive found.', 'success');
 });
 $('ai-docs').onclick = () => aiTask('Writing docs', async () => {
-  const r = await invoke('ai_docs', { project, useLlm: $('docs-llm').checked });
+  const cloud = $('docs-llm').checked ? await confirmCloud('llm') : false;
+  if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');
+  let r;
+  try { r = await invoke('ai_docs', { project, useLlm: $('docs-llm').checked, cloud }); }
+  catch (err) {
+    const m = String(err).match(/REMOTE_LLM:(\S+)/);
+    if (!m) throw err;
+    const ok = await confirmBox('Send the transcript to another computer?', `<p>DEMOLENS_LLM_URL points at <b>${esc(m[1])}</b>, which is not this computer. The transcript text and chapter timings would be sent there.</p>`, 'Send it');
+    if (!ok) return status('Cancelled. Nothing was sent.', 'info');
+    r = await invoke('ai_docs', { project, useLlm: true, cloud, confirmRemote: true });
+  }
   status('Docs written by the ' + r.docs.generated_by, 'success');
   modal('Demo docs', `<p>Written by ${esc(r.docs.generated_by)}.</p>
-    <div class="row"><button class="btn" id="doc-save">${icon('i-save')}<span>Save guide.md...</span></button><button class="btn" id="doc-copy-ch">Copy chapters</button><button class="btn" id="doc-copy-post">Copy post</button></div>
+    <div class="row"><button class="btn" id="doc-save">${icon('i-save')}<span>Save guide.md...</span></button><button class="btn" id="doc-copy-ch">Copy chapters</button><button class="btn" id="doc-copy-post">Copy post</button>${cloudState.choice?.tts ? '<button class="btn" id="doc-tts">Voiceover (cloud)...</button>' : ''}</div>
     <pre class="doc">${esc(r.markdown)}</pre>`);
   $('doc-save').onclick = async () => { const p = await dialog.save({ defaultPath: 'guide.md', filters: [{ name: 'Markdown', extensions: ['md'] }] }); if (p) { await invoke('write_text', { path: p, text: r.markdown }); status('Saved ' + baseName(p), 'success'); } };
   $('doc-copy-ch').onclick = () => navigator.clipboard.writeText(r.chapters).then(() => status('Chapters copied', 'success'));
+  if ($('doc-tts')) $('doc-tts').onclick = () => cloudVoiceover(r.docs);
   $('doc-copy-post').onclick = () => navigator.clipboard.writeText(r.docs.social_post).then(() => status('Post copied', 'success'));
 });
 $('cap-export').onclick = async () => {
@@ -534,3 +556,165 @@ window.addEventListener('keydown', e => {
 // ---------- Start ----------
 enableControls(); refreshModels(); loadTemplates().catch(fail);
 invoke('initial_project').then(r => { if (r) { setProject(r.project, r.path); status('Opened ' + baseName(r.path || r.project.source), 'success'); } }).catch(fail);
+
+// ---------- Privacy, cloud AI and storage ----------
+let cloudState = { providers: [], choice: {} }, storageReady = false;
+const TASKS = { stt: 'Speech to text', llm: 'Writing docs', tts: 'Text to speech' };
+const kb = n => n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+async function loadCloud() {
+  try { cloudState = await invoke('cloud_status'); } catch { }
+  try { const s = await invoke('s3_get'); storageReady = !!(s.config.bucket && s.secret_set); } catch { }
+  const on = Object.keys(cloudState.choice || {});
+  $('ai-badge').textContent = on.length ? 'cloud: ' + on.join(', ') : 'offline';
+  $('ai-badge').title = on.length ? 'Some tasks use a cloud provider you turned on in Settings. You will see what is sent first.' : 'Models run on this computer. Nothing is uploaded.';
+}
+
+// Resolves true/false; the modal's close button counts as no.
+function confirmBox(title, html, yes = 'Continue', no = 'Cancel') {
+  return new Promise(res => {
+    modal(title, html + `<div class="row end"><button class="btn ghost" id="cb-no">${esc(no)}</button><button class="btn primary" id="cb-yes">${esc(yes)}</button></div>`);
+    let done = false; const fin = v => { if (done) return; done = true; $('modal').close(); res(v); };
+    $('cb-yes').onclick = () => fin(true); $('cb-no').onclick = () => fin(false);
+    $('modal').addEventListener('close', () => fin(false), { once: true });
+  });
+}
+
+// Shows exactly what would be sent. Returns true (send), false (no cloud
+// provider for this task, run locally) or null (the user cancelled).
+async function confirmCloud(task) {
+  const pv = await invoke('cloud_preview', { task, project, text: null });
+  if (!pv) return false;
+  const ok = await confirmBox('Send to ' + pv.provider + '?', `<p class="warn-note">This leaves your device.</p>
+    <dl class="kv"><dt>Provider</dt><dd>${esc(pv.provider)} (${esc(pv.model)})</dd><dt>Endpoint</dt><dd><code>${esc(pv.endpoint)}</code></dd>
+    <dt>Data</dt><dd>${esc(pv.data)}</dd><dt>Size</dt><dd>about ${kb(pv.bytes)}</dd>
+    <dt>Their terms</dt><dd><a href="${esc(pv.terms)}" target="_blank" rel="noreferrer">Terms</a> and <a href="${esc(pv.privacy)}" target="_blank" rel="noreferrer">privacy policy</a></dd>
+    <dt>You turned this on</dt><dd>${esc(pv.consented_on || 'unknown')}</dd></dl>
+    <p class="muted small">Switch back to local any time in Settings > Cloud AI.</p>`, 'Send');
+  return ok ? true : null;
+}
+
+function reviewWarning() {
+  if (sessionStorage.getItem('reviewed')) return Promise.resolve(true);
+  return confirmBox('Before you share', `<p><b>Auto blur may miss text. Watch the export before sharing.</b></p>
+    <p class="muted">Blur boxes come from text recognition on sampled frames. Small, moving or low contrast text can slip through.</p>`, 'Export').then(v => { if (v) sessionStorage.setItem('reviewed', '1'); return v; });
+}
+
+async function cloudVoiceover(docs) {
+  const text = [docs.summary, ...docs.steps.map(s => s.said || s.title || '')].filter(Boolean).join(' ');
+  const pv = await invoke('cloud_preview', { task: 'tts', project, text });
+  if (!pv) return;
+  if (!(await confirmBox('Send to ' + pv.provider + '?', `<p class="warn-note">This leaves your device.</p><p>${esc(pv.data)} to <code>${esc(pv.endpoint)}</code>.</p>`, 'Send'))) return;
+  const p = await dialog.save({ defaultPath: 'voiceover.mp3', filters: [{ name: 'MP3 audio', extensions: ['mp3'] }] });
+  if (!p) return;
+  status('Generating the voiceover...', 'busy');
+  try { await invoke('cloud_tts', { text, path: p }); status('Saved ' + baseName(p), 'success'); } catch (e) { fail(e); }
+}
+
+$('ex-upload').onclick = async () => {
+  if (!lastExport) return;
+  if (!(await confirmBox('Upload this video?', `<p class="warn-note">This leaves your device.</p><p>${esc(baseName(lastExport))} goes to your own bucket as a private object. You get a signed link that expires. The event log and project file are never uploaded.</p>`, 'Upload'))) return;
+  status('Uploading...', 'busy');
+  try {
+    const u = await invoke('s3_upload', { path: lastExport });
+    await navigator.clipboard.writeText(u.url).catch(() => { });
+    status(`Uploaded${u.encrypted ? ' (encrypted at rest)' : ''}. Link copied; it expires in ${Math.round(u.expires_in_s / 3600)} h.`, 'success');
+  } catch (e) { fail(e); }
+};
+
+async function showSettings(tab = 'privacy') {
+  await loadCloud();
+  const st = await invoke('get_settings'), recs = await invoke('list_recordings').catch(() => []);
+  const s3 = await invoke('s3_get').catch(() => ({ config: {}, secret_set: false }));
+  const tabs = ['privacy', 'cloud', 'storage'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', cloud: 'Cloud AI', storage: 'Storage' }[t]}</button>`).join('');
+  let body = '';
+  if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
+    <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
+    <h3 class="section">Recordings (${recs.length})</h3><div class="list">${recs.map(r => `<div class="item"><span>${esc(baseName(r.path))} <small class="muted">${kb(r.bytes)}</small></span><button class="btn ghost sm" data-del="${esc(r.path)}">Delete</button></div>`).join('') || '<p class="muted small">None.</p>'}</div>
+    <div class="row"><button class="btn" id="set-wipe">Delete all DemoLens data...</button></div>
+    <p class="muted small">See PRIVACY.md for exactly what is stored and sent.</p>`;
+  if (tab === 'cloud') body = `<p>Cloud providers are off. Turn one on per task only if you want to; <b>the audio or text for that task then leaves your device</b> and goes to the provider, under their terms. Keys are kept in your system keychain.</p>` +
+    cloudState.providers.map(p => `<div class="model"><div><b>${esc(p.info.name)}</b><small><a href="${esc(p.info.terms)}" target="_blank" rel="noreferrer">Terms</a> &middot; <a href="${esc(p.info.privacy)}" target="_blank" rel="noreferrer">Privacy</a>${p.info.key_url ? ` &middot; <a href="${esc(p.info.key_url)}" target="_blank" rel="noreferrer">Get a key</a>` : ''}</small>
+      <div class="row">${p.info.tasks.map(t => `<label><input type="checkbox" data-p="${p.id}" data-t="${t}" ${cloudState.choice[t] === p.id ? 'checked' : ''}/> ${TASKS[t]}${p.consents[t] ? ` <small class="muted">since ${esc(p.consents[t])}</small>` : ''}</label>`).join('')}</div></div>
+      <div class="row">${p.key_set ? `<code>${esc(p.key_masked)}</code><button class="btn ghost sm" data-rm="${p.id}">Remove key</button>` : `<input type="password" class="field sm" data-key="${p.id}" placeholder="API key" autocomplete="off" /><button class="btn sm" data-save="${p.id}">Save</button>`}</div></div>`).join('') +
+    `<label class="stack">OpenAI compatible endpoint (for "Custom")<input id="set-base" class="field" value="${esc(cloudState.custom_base || '')}" placeholder="https://example.com/v1" /></label><div class="row"><button class="btn sm" id="set-base-save">Save endpoint</button></div>`;
+  if (tab === 'storage') { const c = s3.config || {}; body = `<p>Upload exports to your own S3 or Cloudflare R2 bucket. Objects are private, encrypted at rest where supported, and shared with a signed link (24 hours by default, 7 days at most). Event logs are never uploaded.</p>
+    ${['endpoint', 'region', 'bucket', 'prefix', 'access_key_id'].map(k => `<label class="stack">${k.replace(/_/g, ' ')}<input class="field" data-s3="${k}" value="${esc(c[k] || '')}" /></label>`).join('')}
+    <label class="stack">Link lifetime (hours, max 168)<input class="field" id="s3-exp" type="number" min="1" max="168" value="${Math.round((c.expiry_s || 86400) / 3600)}" /></label>
+    <label class="stack">Secret access key ${s3.secret_set ? '(saved in the keychain; leave blank to keep)' : ''}<input class="field" id="s3-secret" type="password" autocomplete="off" /></label>
+    <div class="row"><button class="btn primary" id="s3-save">Save storage</button></div>`; }
+  modal('Settings', `<div class="row">${tabs}</div>${body}`);
+  document.querySelectorAll('[data-st]').forEach(b => (b.onclick = () => showSettings(b.dataset.st)));
+  const again = () => showSettings(tab);
+  if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };
+  document.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => { await invoke('delete_recording', { path: b.dataset.del }).catch(fail); again(); }));
+  if ($('set-wipe')) $('set-wipe').onclick = async () => {
+    const ok = await confirmBox('Delete all DemoLens data?', '<p>This deletes every recording in Videos/DemoLens, the transcript cache and the built in sample. Templates and models are kept.</p><label><input type="checkbox" id="wipe-keys" /> Also remove saved API keys</label>', 'Delete everything');
+    if (ok) { const n = await invoke('delete_all_data', { includeKeys: !!document.getElementById('wipe-keys')?.checked }).catch(fail); status(`Deleted ${n || 0} item(s).`, 'success'); }
+  };
+  document.querySelectorAll('[data-t]').forEach(c => (c.onchange = async () => {
+    if (c.checked) {
+      const name = cloudState.providers.find(p => p.id === c.dataset.p).info.name;
+      const ok = await confirmBox(`Use ${name} for ${TASKS[c.dataset.t].toLowerCase()}?`, `<p class="warn-note">Data leaves your device.</p><p>When you run this task, the ${c.dataset.t === 'stt' ? 'audio track' : 'text'} is sent to ${esc(name)} and handled under their terms. You will see exactly what is sent each time. Today's date is recorded as your consent.</p>`, 'Turn on');
+      if (!ok) return showSettings('cloud');
+    }
+    await invoke('cloud_consent', { provider: c.dataset.p, task: c.dataset.t, accepted: c.checked }).catch(fail);
+    showSettings('cloud');
+  }));
+  document.querySelectorAll('[data-save]').forEach(b => (b.onclick = async () => { const i = document.querySelector(`[data-key="${b.dataset.save}"]`); await invoke('cloud_set_key', { provider: b.dataset.save, key: i.value }).catch(fail); i.value = ''; showSettings('cloud'); }));
+  document.querySelectorAll('[data-rm]').forEach(b => (b.onclick = async () => { await invoke('cloud_remove_key', { provider: b.dataset.rm }).catch(fail); showSettings('cloud'); }));
+  if ($('set-base-save')) $('set-base-save').onclick = () => invoke('cloud_configure', { customBase: $('set-base').value, models: null, voice: cloudState.voice || null }).then(() => status('Saved.', 'success'), fail);
+  if ($('s3-save')) $('s3-save').onclick = async () => {
+    const config = { expiry_s: Math.min(168, Math.max(1, +$('s3-exp').value || 24)) * 3600 };
+    document.querySelectorAll('[data-s3]').forEach(i => (config[i.dataset.s3] = i.value.trim()));
+    try { await invoke('s3_set', { config, secret: $('s3-secret').value || null }); status('Storage saved.', 'success'); showSettings('storage'); } catch (e) { fail(e); }
+  };
+}
+$('settings-btn').onclick = () => showSettings();
+
+// ---------- Drawing rectangles on a frame (area picker, blur boxes) ----------
+// Shows `url` (an image of w x h source pixels) and lets the user drag
+// rectangles. Resolves with rects in source pixels.
+function drawRects(title, url, w, h, multi, hint) {
+  return new Promise(res => {
+    modal(title, `<p class="muted small">${esc(hint)}</p><div class="draw" id="draw"><img src="${url}" alt="" draggable="false" /></div>
+      <div class="row end"><button class="btn ghost" id="dr-clear">Clear</button><button class="btn primary" id="dr-ok">Done</button></div>`);
+    const box = $('draw'), rects = []; let cur = null, start = null;
+    const at = e => { const b = box.getBoundingClientRect(); return [Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)), Math.max(0, Math.min(1, (e.clientY - b.top) / b.height))]; };
+    const paint = () => { box.querySelectorAll('.rect').forEach(x => x.remove()); [...rects, cur].filter(Boolean).forEach(r => { const d = document.createElement('div'); d.className = 'rect'; Object.assign(d.style, { left: r[0] * 100 + '%', top: r[1] * 100 + '%', width: r[2] * 100 + '%', height: r[3] * 100 + '%' }); box.appendChild(d); }); };
+    box.onpointerdown = e => { box.setPointerCapture(e.pointerId); start = at(e); if (!multi) rects.length = 0; };
+    box.onpointermove = e => { if (!start) return; const p = at(e); cur = [Math.min(p[0], start[0]), Math.min(p[1], start[1]), Math.abs(p[0] - start[0]), Math.abs(p[1] - start[1])]; paint(); };
+    box.onpointerup = () => { if (cur && cur[2] > 0.005 && cur[3] > 0.005) rects.push(cur); cur = null; start = null; paint(); };
+    let done = false; const fin = v => { if (done) return; done = true; $('modal').close(); res(v.map(r => ({ x: Math.round(r[0] * w), y: Math.round(r[1] * h), w: Math.round(r[2] * w) & ~1, h: Math.round(r[3] * h) & ~1 }))); };
+    $('dr-clear').onclick = () => { rects.length = 0; paint(); };
+    $('dr-ok').onclick = () => fin(rects);
+    $('modal').addEventListener('close', () => fin([]), { once: true });
+  });
+}
+$('rec-pick').onclick = async () => {
+  status('Taking a screenshot to pick from...', 'busy');
+  try {
+    const s = await invoke('screen_snapshot');
+    const [r] = await drawRects('Pick the area to record', s.url, s.w, s.h, false, 'Drag a rectangle over the part of the screen to record.');
+    if (r) { $('rec-arg').value = `${r.x},${r.y},${r.w},${r.h}`; status(`Area ${r.w}x${r.h} at ${r.x},${r.y}.`, 'success'); } else status('Ready');
+  } catch (e) { fail(e); }
+};
+$('blur-draw').onclick = async () => {
+  if (!project) return;
+  const src = tl.outToSrc(tl.playhead);
+  try {
+    const f = await invoke('raw_frame', { project, srcMs: src });
+    const rs = await drawRects('Draw blur boxes', f.url, f.w, f.h, true, 'Drag over anything to hide. Each box blurs from the playhead to the end; trim it later in the list.');
+    rs.forEach(r => project.blur.push({ ...r, start_ms: src, end_ms: project.duration_ms, radius: 18 }));
+    if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
+  } catch (e) { fail(e); }
+};
+['cam-visible', 'cam-circle', 'cam-size', 'cam-corner'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+
+// ---------- First run ----------
+if (!localStorage.getItem('privacy-ack')) {
+  modal('Welcome to DemoLens', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
+    <ul><li>A red REC badge shows while recording. Ctrl/Cmd+Shift+P pauses.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud AI and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
+    <div class="row end"><button class="btn primary" id="fr-ok">Got it</button></div>`);
+  $('fr-ok').onclick = () => { localStorage.setItem('privacy-ack', '1'); $('modal').close(); };
+}
+loadCloud();

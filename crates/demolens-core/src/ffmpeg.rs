@@ -111,7 +111,7 @@ pub struct MediaInfo {
 pub fn probe(path: &Path) -> Result<MediaInfo> {
     let out = Command::new(ffprobe_bin())
         .args(["-v", "error", "-show_streams", "-show_format", "-of", "json"])
-        .arg(path)
+        .arg(file_url(path))
         .output()
         .context("failed to run ffprobe (is ffmpeg installed?)")?;
     if !out.status.success() {
@@ -144,11 +144,29 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
     })
 }
 
+/// A path as an ffmpeg URL that can only ever mean a local file.
+///
+/// ffmpeg treats its inputs and outputs as URLs, so a project file whose
+/// source is `http://...`, `concat:...` or `subfile,,...` would make it fetch
+/// or splice other data, and an output named `-x.mp4` would be read as an
+/// option. Making the path absolute and adding the `file:` protocol closes
+/// both.
+pub fn file_url(path: &Path) -> std::ffi::OsString {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map(|d| d.join(path)).unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut u = std::ffi::OsString::from("file:");
+    u.push(abs.as_os_str());
+    u
+}
+
 /// Decode a single frame at `t_ms` (used by the editor preview).
 pub fn frame_at(path: &Path, t_ms: f64, w: u32, h: u32) -> Result<Frame> {
     let out = Command::new(ffmpeg_bin())
         .args(["-v", "error", "-ss", &format!("{:.3}", t_ms / 1000.0), "-i"])
-        .arg(path)
+        .arg(file_url(path))
         .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}"), "-"])
         .output()?;
     let need = (w * h * 4) as usize;
@@ -162,7 +180,7 @@ pub fn frame_at(path: &Path, t_ms: f64, w: u32, h: u32) -> Result<Frame> {
 pub fn load_image_cover(path: &Path, w: u32, h: u32) -> Result<Frame> {
     let out = Command::new(ffmpeg_bin())
         .args(["-v", "error", "-i"])
-        .arg(path)
+        .arg(file_url(path))
         .args([
             "-vf",
             &format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"),
@@ -194,10 +212,16 @@ pub struct FrameReader {
 
 impl FrameReader {
     pub fn open(path: &Path, start_ms: f64, fps: f64, w: u32, h: u32) -> Result<Self> {
+        Self::open_filtered(path, start_ms, fps, &format!("scale={w}:{h}"), w, h)
+    }
+
+    /// Like `open` with a custom filter chain that must output `w`x`h`.
+    pub fn open_filtered(path: &Path, start_ms: f64, fps: f64, vf: &str, w: u32, h: u32) -> Result<Self> {
         let mut child = Command::new(ffmpeg_bin())
-            .args(["-v", "error", "-ss", &format!("{:.3}", start_ms / 1000.0), "-i"])
-            .arg(path)
-            .args(["-an", "-vf", &format!("fps={fps},scale={w}:{h}"), "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+            .args(["-v", "error", "-nostdin", "-ss", &format!("{:.3}", start_ms.max(0.0) / 1000.0), "-i"])
+            .arg(file_url(path))
+            .args(["-an", "-vf", &format!("fps={fps},{vf}"), "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -215,6 +239,73 @@ impl FrameReader {
             }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// Editor preview decoder. While playing, requests move forward in small
+/// steps, so one ffmpeg process keeps decoding instead of a new process per
+/// frame. Seeking backwards or far ahead reopens it. Scrubbing to a random
+/// spot falls back to a one shot decode.
+pub struct PreviewDecoder {
+    path: std::path::PathBuf,
+    w: u32,
+    h: u32,
+    reader: Option<FrameReader>,
+    start_ms: f64,
+    last: Option<(f64, Frame)>,
+}
+
+pub const PREVIEW_FPS: f64 = 30.0;
+
+impl PreviewDecoder {
+    pub fn new(path: &Path, w: u32, h: u32) -> Self {
+        Self { path: path.to_path_buf(), w, h, reader: None, start_ms: 0.0, last: None }
+    }
+
+    pub fn matches(&self, path: &Path, w: u32, h: u32) -> bool {
+        self.path == path && self.w == w && self.h == h
+    }
+
+    fn next_ms(&self) -> f64 {
+        self.reader.as_ref().map(|r| self.start_ms + r.index as f64 * 1000.0 / PREVIEW_FPS).unwrap_or(f64::NAN)
+    }
+
+    /// Frame at `t_ms` (source time). `sequential` is true during playback.
+    pub fn frame(&mut self, t_ms: f64, sequential: bool) -> Result<Frame> {
+        let step = 1000.0 / PREVIEW_FPS;
+        if let Some((lt, f)) = &self.last {
+            if (t_ms - lt).abs() < step / 2.0 {
+                return Ok(f.clone());
+            }
+        }
+        if !sequential {
+            self.reader = None;
+            let f = frame_at(&self.path, t_ms, self.w, self.h)?;
+            self.last = Some((t_ms, f.clone()));
+            return Ok(f);
+        }
+        let next = self.next_ms();
+        if self.reader.is_none() || !(t_ms + step / 2.0 >= next && t_ms - next < 2000.0) {
+            self.reader = Some(FrameReader::open(&self.path, t_ms, PREVIEW_FPS, self.w, self.h)?);
+            self.start_ms = t_ms;
+        }
+        let r = self.reader.as_mut().unwrap();
+        loop {
+            let ft = self.start_ms + r.index as f64 * step;
+            match r.next()? {
+                Some(f) if ft + step / 2.0 >= t_ms => {
+                    self.last = Some((t_ms, f.clone()));
+                    return Ok(f);
+                }
+                Some(_) => continue,
+                None => {
+                    self.reader = None;
+                    let f = frame_at(&self.path, t_ms, self.w, self.h)?;
+                    self.last = Some((t_ms, f.clone()));
+                    return Ok(f);
+                }
+            }
         }
     }
 }
@@ -264,6 +355,11 @@ impl Encoder {
             a.extend(["-b:v".into(), bits.to_string()]);
         }
         a
+    }
+
+    /// VP9 for WebM exports (always software).
+    pub fn webm_args() -> Vec<String> {
+        ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"].map(String::from).to_vec()
     }
 
     /// Encoder arguments while recording (speed first, near lossless).
@@ -338,5 +434,18 @@ mod encoder_tests {
             return;
         }
         assert!(!encoder_works("definitely_not_an_encoder"));
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::file_url;
+    use std::path::Path;
+    #[test]
+    fn paths_become_local_file_urls() {
+        let u = file_url(Path::new("-evil.mp4")).into_string().unwrap();
+        assert!(u.starts_with("file:") && !u.starts_with("file:-"), "{u}");
+        let u = file_url(Path::new("http://example.com/x.mp4")).into_string().unwrap();
+        assert!(u.starts_with("file:/") || u.starts_with("file:C:"), "{u}");
     }
 }

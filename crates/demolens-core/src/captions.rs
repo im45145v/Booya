@@ -88,11 +88,41 @@ pub fn to_vtt(p: &Project) -> String {
     s
 }
 
-const FILLERS: &[&str] = &["um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm"];
+/// Filler sounds after repeated letters are collapsed ("ummm" -> "um").
+const FILLERS: &[&str] = &["um", "uh", "uhm", "erm", "er", "ah", "hm", "m", "eh", "em"];
 
+fn collapse(word: &str) -> String {
+    let mut out = String::new();
+    for c in word.chars().filter(|c| c.is_alphabetic()).flat_map(char::to_lowercase) {
+        if !out.ends_with(c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// "um", "Uhhh,", "(um)", "hmmm..." and the like.
 pub fn is_filler(word: &str) -> bool {
-    let w: String = word.chars().filter(|c| c.is_alphabetic()).collect::<String>().to_lowercase();
-    FILLERS.contains(&w.as_str())
+    let w = collapse(word);
+    !w.is_empty() && FILLERS.contains(&w.as_str())
+}
+
+/// Whisper's tags for non-speech, like "[BLANK_AUDIO]" or "(sighs)".
+pub fn is_nonspeech(word: &str) -> bool {
+    let t = word.trim();
+    (t.starts_with('[') && t.ends_with(']')) || (t.starts_with('(') && t.ends_with(')') && !is_filler(t))
+}
+
+/// Indices of words that are an immediate stutter repeat ("the the", "I I"):
+/// the first copy is marked so the cut keeps the clean second one.
+pub fn stutters(words: &[CaptionWord]) -> Vec<usize> {
+    let norm = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric() || *c == '\'').collect::<String>().to_lowercase();
+    (0..words.len().saturating_sub(1))
+        .filter(|&i| {
+            let (a, b) = (norm(&words[i]), norm(&words[i + 1]));
+            !a.is_empty() && a == b && words[i + 1].start_ms - words[i].end_ms < 400.0 && !words[i].text.ends_with(['.', ',', '!', '?'])
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +174,9 @@ pub fn plan_cuts(words: &[CaptionWord], silences: &[(f64, f64)], o: &AutoCutOpti
         for w in words.iter().filter(|w| is_filler(&w.text)) {
             r.push((w.start_ms - 40.0, w.end_ms + 40.0));
         }
+        for i in stutters(words) {
+            r.push((words[i].start_ms - 20.0, words[i + 1].start_ms - 20.0));
+        }
     }
     if o.cut_silences {
         for &(a, b) in silences {
@@ -167,6 +200,19 @@ pub fn plan_cuts(words: &[CaptionWord], silences: &[(f64, f64)], o: &AutoCutOpti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filler_detection_handles_variants() {
+        for f in ["um", "Ummm,", "uhh...", "(uh)", "Hmmm", "erm", "Eh"] {
+            assert!(is_filler(f), "{f}");
+        }
+        for f in ["umbrella", "her", "a", "I", "mhm-yes", "emm a"] {
+            assert!(!is_filler(f), "{f}");
+        }
+        assert!(is_nonspeech("[BLANK_AUDIO]") && is_nonspeech("(sighs)") && !is_nonspeech("(um)"));
+        let ws = vec![w(0.0, 200.0, "the"), w(250.0, 400.0, "the"), w(450.0, 700.0, "invoice"), w(800.0, 900.0, "is."), w(950.0, 1000.0, "is")];
+        assert_eq!(stutters(&ws), vec![0]);
+    }
 
     #[test]
     fn words_snap_out_of_silence() {

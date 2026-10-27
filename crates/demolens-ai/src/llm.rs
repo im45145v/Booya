@@ -5,7 +5,9 @@
 //! 3. a llama.cpp server already running on 127.0.0.1:8080
 //! 4. the managed llama.cpp runtime plus a GGUF model from the model manager,
 //!    started on a free port for the duration of the job.
-//! Nothing is ever sent off the machine.
+//! Nothing is sent off the machine unless the user points
+//! `DEMOLENS_LLM_URL` at a remote https server and sets
+//! `DEMOLENS_ALLOW_REMOTE_LLM=1`; the app then asks before each use.
 
 use crate::models::{self, Kind};
 use anyhow::{bail, Context, Result};
@@ -18,6 +20,27 @@ pub struct Llm {
     pub model: String,
     pub label: String,
     child: Option<Child>,
+    /// Bearer key for an opted in cloud provider. Never logged.
+    pub(crate) api_key: Option<String>,
+}
+
+impl Llm {
+    /// True when prompts (transcript text, project title) leave this machine.
+    pub fn is_remote(&self) -> bool {
+        !is_local(&self.base)
+    }
+
+    pub fn host(&self) -> String {
+        host_of(&self.base)
+    }
+
+    /// An OpenAI compatible cloud endpoint the user opted into.
+    pub fn cloud(base: &str, model: &str, key: &str, label: &str) -> Result<Llm> {
+        if !is_local(base) && !base.to_ascii_lowercase().starts_with("https://") {
+            bail!("cloud endpoints must use https://");
+        }
+        Ok(Llm { base: base.trim_end_matches('/').into(), model: model.into(), label: label.into(), child: None, api_key: Some(key.into()) })
+    }
 }
 
 impl Drop for Llm {
@@ -38,9 +61,19 @@ fn get_json(url: &str, timeout_ms: u64) -> Option<Value> {
     a.get(url).call().ok()?.body_mut().read_json().ok()
 }
 
-fn is_local(url: &str) -> bool {
+/// Host part of a URL (no user info, no port), lower case.
+pub fn host_of(url: &str) -> String {
     let rest = url.split("://").nth(1).unwrap_or(url);
-    ["127.0.0.1", "localhost", "[::1]", "0.0.0.0"].iter().any(|h| rest.starts_with(h))
+    let auth = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let auth = auth.rsplit('@').next().unwrap_or(auth);
+    let host = if auth.starts_with('[') { auth.split(']').next().map(|h| format!("{h}]")).unwrap_or_default() } else { auth.split(':').next().unwrap_or("").to_string() };
+    host.to_ascii_lowercase()
+}
+
+/// True only for loopback hosts. v0.1.x used a prefix match, so
+/// `http://localhost.example.com` counted as local.
+pub fn is_local(url: &str) -> bool {
+    matches!(host_of(url).as_str(), "127.0.0.1" | "localhost" | "[::1]")
 }
 
 impl Llm {
@@ -48,20 +81,25 @@ impl Llm {
     /// caller can fall back to the rule based writer.
     pub fn detect() -> Result<Option<Llm>> {
         if let Ok(url) = std::env::var("DEMOLENS_LLM_URL") {
-            if !is_local(&url) && std::env::var("DEMOLENS_ALLOW_REMOTE_LLM").is_err() {
-                bail!("DEMOLENS_LLM_URL must point at this machine (set DEMOLENS_ALLOW_REMOTE_LLM=1 to override)");
+            if !is_local(&url) {
+                if std::env::var("DEMOLENS_ALLOW_REMOTE_LLM").is_err() {
+                    bail!("DEMOLENS_LLM_URL must point at this machine (set DEMOLENS_ALLOW_REMOTE_LLM=1 to override)");
+                }
+                if !url.to_ascii_lowercase().starts_with("https://") {
+                    bail!("a remote DEMOLENS_LLM_URL must use https://");
+                }
             }
             let model = std::env::var("DEMOLENS_LLM_MODEL").unwrap_or_else(|_| "local".into());
-            return Ok(Some(Llm { base: url.trim_end_matches('/').into(), model, label: "custom endpoint".into(), child: None }));
+            return Ok(Some(Llm { base: url.trim_end_matches('/').into(), model, label: "custom endpoint".into(), child: None, api_key: None }));
         }
         if let Some(tags) = get_json("http://127.0.0.1:11434/api/tags", 800) {
             if let Some(name) = tags["models"].as_array().and_then(|m| m.first()).and_then(|m| m["name"].as_str()) {
                 let model = std::env::var("DEMOLENS_LLM_MODEL").unwrap_or_else(|_| name.to_string());
-                return Ok(Some(Llm { base: "http://127.0.0.1:11434/v1".into(), label: format!("Ollama ({model})"), model, child: None }));
+                return Ok(Some(Llm { base: "http://127.0.0.1:11434/v1".into(), label: format!("Ollama ({model})"), model, child: None, api_key: None }));
             }
         }
         if get_json("http://127.0.0.1:8080/v1/models", 800).is_some() {
-            return Ok(Some(Llm { base: "http://127.0.0.1:8080/v1".into(), model: "local".into(), label: "llama.cpp server".into(), child: None }));
+            return Ok(Some(Llm { base: "http://127.0.0.1:8080/v1".into(), model: "local".into(), label: "llama.cpp server".into(), child: None, api_key: None }));
         }
         Self::start_managed()
     }
@@ -79,7 +117,7 @@ impl Llm {
             cmd.env(key, dir);
         }
         let child = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().context("failed to start llama-server")?;
-        let llm = Llm { base: format!("http://127.0.0.1:{port}/v1"), model: gguf.id.into(), label: format!("managed llama.cpp ({})", gguf.id), child: Some(child) };
+        let llm = Llm { base: format!("http://127.0.0.1:{port}/v1"), model: gguf.id.into(), label: format!("managed llama.cpp ({})", gguf.id), child: Some(child), api_key: None };
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_secs(120) {
             if let Some(h) = get_json(&format!("http://127.0.0.1:{port}/health"), 1000) {
@@ -101,10 +139,13 @@ impl Llm {
             "frequency_penalty": 0.4,
             "stream": false
         });
-        let v: Value = agent()
-            .post(&format!("{}/chat/completions", self.base))
+        let mut req = agent().post(&format!("{}/chat/completions", self.base));
+        if let Some(k) = &self.api_key {
+            req = req.header("Authorization", &format!("Bearer {k}"));
+        }
+        let v: Value = req
             .send_json(&body)
-            .context("local LLM request failed")?
+            .map_err(|e| anyhow::anyhow!("LLM request to {} failed: {}", self.host(), crate::providers::redact_err(&e.to_string())))?
             .body_mut()
             .read_json()?;
         let text = v["choices"][0]["message"]["content"].as_str().context("unexpected LLM response")?;
@@ -133,5 +174,21 @@ mod tests {
         assert_eq!(clean("<think>hmm</think>\n```markdown\nHi \u{2014} there\n```"), "Hi, there");
         assert!(is_local("http://127.0.0.1:11434/v1"));
         assert!(!is_local("https://api.example.com/v1"));
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::{host_of, is_local};
+    #[test]
+    fn only_loopback_counts_as_local() {
+        assert!(is_local("http://127.0.0.1:11434/v1"));
+        assert!(is_local("http://localhost:8080"));
+        assert!(is_local("http://[::1]:8080/v1"));
+        assert!(!is_local("http://localhost.evil.com/v1"));
+        assert!(!is_local("http://127.0.0.1.nip.io/v1"));
+        assert!(!is_local("http://user@evil.com:80"));
+        assert!(!is_local("http://0.0.0.0:8080"));
+        assert_eq!(host_of("https://a:b@Api.Example.com:443/x"), "api.example.com");
     }
 }

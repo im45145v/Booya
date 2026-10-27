@@ -67,7 +67,7 @@ pub struct KeyOverlay {
 
 impl Default for KeyOverlay {
     fn default() -> Self {
-        Self { enabled: true, shortcuts_only: false, hold_ms: 1200.0 }
+        Self { enabled: true, shortcuts_only: true, hold_ms: 1200.0 }
     }
 }
 
@@ -188,6 +188,19 @@ impl Aspect {
 pub enum Format {
     Mp4,
     Gif,
+    /// VP9 + Opus, for the web.
+    Webm,
+}
+
+impl Format {
+    pub fn from_path(p: &Path) -> Option<Self> {
+        match p.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "mp4" | "m4v" | "mov" => Some(Format::Mp4),
+            "gif" => Some(Format::Gif),
+            "webm" => Some(Format::Webm),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,11 +210,48 @@ pub struct ExportSettings {
     pub quality: u32,
     pub fps: u32,
     pub format: Format,
+    /// Cross-fade length at every cut, ms. 0 = hard cuts.
+    #[serde(default = "default_crossfade")]
+    pub crossfade_ms: f64,
+}
+
+fn default_crossfade() -> f64 {
+    180.0
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { aspect: Aspect::Landscape, quality: 1080, fps: 30, format: Format::Mp4 }
+        Self { aspect: Aspect::Landscape, quality: 1080, fps: 30, format: Format::Mp4, crossfade_ms: default_crossfade() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Picture-in-picture webcam recorded alongside the screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Webcam {
+    pub path: PathBuf,
+    pub visible: bool,
+    pub corner: Corner,
+    /// Diameter as a fraction of the shorter output side.
+    pub size: f64,
+    /// Circle (true) or rounded square.
+    pub circle: bool,
+    /// The camera started this many ms after the screen recording.
+    #[serde(default)]
+    pub offset_ms: f64,
+}
+
+impl Webcam {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0 }
     }
 }
 
@@ -228,6 +278,8 @@ pub struct Project {
     pub caption_style: CaptionStyle,
     #[serde(default)]
     pub audio: AudioSettings,
+    #[serde(default)]
+    pub webcam: Option<Webcam>,
 }
 
 /// Serializable wrapper so old project files without zoom config still load.
@@ -262,6 +314,7 @@ impl Project {
             captions: Vec::new(),
             caption_style: CaptionStyle::default(),
             audio: AudioSettings::default(),
+            webcam: None,
         }
     }
 
@@ -279,6 +332,9 @@ impl Project {
         fix(&mut p.source);
         if let Some(e) = p.events.as_mut() {
             fix(e);
+        }
+        if let Some(w) = p.webcam.as_mut() {
+            fix(&mut w.path);
         }
         Ok(p)
     }

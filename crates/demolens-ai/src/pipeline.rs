@@ -24,7 +24,21 @@ pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
 /// Transcribe the project's audio into captions (word timed, in source time).
 pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&str>) -> Result<TranscribeReport> {
     let model = speech_model(model)?;
-    let mut words = transcribe::transcribe(&p.source, &model, lang)?;
+    let words = transcribe::transcribe(&p.source, &model, lang)?;
+    finish_transcript(p, words)
+}
+
+/// Transcribe with a cloud provider the user opted into. The audio track
+/// (16 kHz mono WAV) is the only thing sent.
+pub fn transcribe_project_cloud(p: &mut Project, cfg: &crate::providers::CloudConfig, provider: crate::providers::Provider, key: &str, lang: Option<&str>) -> Result<TranscribeReport> {
+    let samples = audio::decode_mono(&p.source, 16_000)?;
+    let wav = crate::providers::wav_bytes(&samples, 16_000);
+    let words = crate::providers::transcribe(cfg, provider, key, &wav, lang)?;
+    finish_transcript(p, words)
+}
+
+fn finish_transcript(p: &mut Project, mut words: Vec<demolens_core::project::CaptionWord>) -> Result<TranscribeReport> {
+    words.retain(|w| !captions::is_nonspeech(&w.text));
     let samples = audio::decode_mono(&p.source, 16_000)?;
     captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0));
     p.captions = captions::words_to_captions(&words, 42, 900.0);
@@ -55,6 +69,9 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
     if let Some(log) = p.events.as_ref().and_then(|e| demolens_core::events::EventLog::load(e).ok()) {
         let activity: Vec<f64> = log.clicks().map(|c| c.0).chain(log.keys().map(|k| k.0)).collect();
         planned = protect_activity(&planned, &activity, 400.0, 900.0, 300.0);
+        // Also keep the cursor travelling to each click, so a cut never
+        // makes the pointer jump straight onto the button.
+        planned = protect_ranges(&planned, &click_travel(&log), 300.0);
     }
     let cuts = planned
         .iter()
@@ -74,7 +91,35 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
 /// Remove `[t - before, t + after]` around every activity time from the cut
 /// ranges, dropping leftover pieces shorter than `min_len` ms.
 pub fn protect_activity(cuts: &[(f64, f64)], activity: &[f64], before: f64, after: f64, min_len: f64) -> Vec<(f64, f64)> {
-    let mut keep: Vec<(f64, f64)> = activity.iter().map(|&t| (t - before, t + after)).collect();
+    let keep: Vec<(f64, f64)> = activity.iter().map(|&t| (t - before, t + after)).collect();
+    protect_ranges(cuts, &keep, min_len)
+}
+
+/// For every click, the stretch where the pointer was moving towards it:
+/// back from the click while move events keep coming (gaps under 250 ms),
+/// at least 1 s and at most 2.5 s.
+pub fn click_travel(log: &demolens_core::events::EventLog) -> Vec<(f64, f64)> {
+    use demolens_core::events::EventKind;
+    let moves: Vec<f64> = log.events.iter().filter(|e| matches!(e.kind, EventKind::Move { .. })).map(|e| e.t).collect();
+    log.clicks()
+        .map(|c| {
+            let t = c.0;
+            let mut start = t;
+            for &m in moves.iter().rev().filter(|&&m| m <= t) {
+                if start - m > 250.0 || t - m > 2_500.0 {
+                    break;
+                }
+                start = m;
+            }
+            (start.min(t - 1_000.0) - 150.0, t)
+        })
+        .collect()
+}
+
+/// Remove the `keep` ranges from the cut ranges, dropping leftover pieces
+/// shorter than `min_len` ms.
+pub fn protect_ranges(cuts: &[(f64, f64)], keep: &[(f64, f64)], min_len: f64) -> Vec<(f64, f64)> {
+    let mut keep = keep.to_vec();
     keep.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut out = Vec::new();
     for &(s, e) in cuts {
@@ -108,6 +153,25 @@ mod activity_tests {
         assert!(r.is_empty());
         // No activity, no change.
         assert_eq!(protect_activity(&[(1.0, 2.0)], &[], 400.0, 900.0, 0.5), vec![(1.0, 2.0)]);
+    }
+
+    #[test]
+    fn cursor_travel_before_a_click_is_kept() {
+        use demolens_core::events::{Event, EventKind, EventLog, MouseButton};
+        let mut log = EventLog::new(1920, 1080);
+        // Pointer moves from 5.0 s to 6.8 s, clicks at 7.0 s.
+        let mut t = 5_000.0;
+        while t <= 6_800.0 {
+            log.events.push(Event { t, kind: EventKind::Move { x: t / 10.0, y: 100.0 } });
+            t += 50.0;
+        }
+        log.events.push(Event { t: 7_000.0, kind: EventKind::Click { x: 680.0, y: 100.0, button: MouseButton::Left } });
+        let r = super::click_travel(&log);
+        assert_eq!(r, vec![(4_850.0, 7_000.0)]);
+        // A click with no movement still keeps 1 s before it.
+        let mut still = EventLog::new(100, 100);
+        still.events.push(Event { t: 3_000.0, kind: EventKind::Click { x: 1.0, y: 1.0, button: MouseButton::Left } });
+        assert_eq!(super::click_travel(&still), vec![(1_850.0, 3_000.0)]);
     }
 }
 
@@ -254,12 +318,19 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
                             redact::Sensitive::ApiKey => "API key",
                             redact::Sensitive::Card => "card number",
                             redact::Sensitive::Phone => "phone number",
+                            redact::Sensitive::Aadhaar => "Aadhaar number",
+                            redact::Sensitive::Pan => "PAN",
+                            redact::Sensitive::Upi => "UPI ID",
+                            redact::Sensitive::Iban => "IBAN",
+                            redact::Sensitive::Ip => "IP address",
+                            redact::Sensitive::Token => "token or password",
+                            redact::Sensitive::Password => "password field",
                         };
                         if !kinds.contains(&n) {
                             kinds.push(n);
                         }
                     }
-                    step("Blur secrets", "done", format!("blurred {} ({} boxes)", kinds.join(", "), r.added))
+                    step("Blur secrets", "done", format!("blurred {} ({} boxes). Auto blur may miss text. Watch the export before sharing.", kinds.join(", "), r.added))
                 }
                 Err(err) => step("Blur secrets", "failed", err.to_string()),
             }
