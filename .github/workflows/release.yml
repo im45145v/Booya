@@ -1,10 +1,12 @@
 name: Release
 # Builds installers for every OS. Push a tag like v0.2.0 to publish them as a
-# GitHub Release, or run it by hand (Actions > Release > Run workflow) to get
+# GitHub Release, or change this file or tauri.conf.json on main, or run it by hand (Actions > Release > Run workflow) to get
 # the installers as build artifacts without publishing anything.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    paths: [".github/workflows/release.yml", "src-tauri/tauri.conf.json"]
   workflow_dispatch:
 
 permissions:
