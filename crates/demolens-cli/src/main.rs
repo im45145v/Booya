@@ -18,6 +18,7 @@ USAGE:
   demolens record [--screen N | --window ID | --area X,Y,W,H] [--mic] [--system-audio]
                   [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
+  demolens sources [--thumbs dir]   list the screens and windows the picker shows (and save previews)
   demolens doctor [--seconds 3]     check permissions, displays and ffmpeg, run a short
                   test capture and print the result as JSON (exit 1 if it failed)
   demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
@@ -124,6 +125,30 @@ fn run() -> Result<()> {
             Ok(())
         }
         "bench" => bench::run(a),
+        "sources" => {
+            // What the app's picker shows. With --thumbs <dir> also writes the previews.
+            use demolens_core::capture::sources;
+            let dir = a.opt(&["--thumbs"]).map(PathBuf::from);
+            let list = sources::list_sources()?;
+            if let Some(d) = &dir {
+                std::fs::create_dir_all(d)?;
+                for (i, s) in list.iter().enumerate() {
+                    match sources::thumbnail(s) {
+                        Ok(t) => {
+                            if let Some(img) = t.image {
+                                std::fs::write(d.join(format!("{i:02}-{}.png", s.kind)), img)?;
+                            }
+                            if let Some(icon) = t.icon {
+                                std::fs::write(d.join(format!("{i:02}-icon.png")), icon)?;
+                            }
+                        }
+                        Err(e) => eprintln!("{i}: no preview for {}: {e}", s.title),
+                    }
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&list)?);
+            Ok(())
+        }
         "verify" => {
             // Sync report for a finished recording: A/V offset, duration, events.
             let video = PathBuf::from(a.pos("video")?);

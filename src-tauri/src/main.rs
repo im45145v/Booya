@@ -428,6 +428,25 @@ async fn raw_frame(project: Project, src_ms: f64) -> R<serde_json::Value> {
     .await
 }
 
+/// Displays and windows the picker can show (names and sizes only, fast).
+#[tauri::command]
+async fn capture_sources() -> R<serde_json::Value> {
+    blocking(|| Ok(serde_json::to_value(capture::sources::list_sources().map_err(e)?).map_err(e)?)).await
+}
+
+/// Preview image and app icon for one source, as data URLs. Fetched one at a
+/// time by the picker as items scroll into view.
+#[tauri::command]
+async fn capture_thumb(kind: String, id: String, bundle: String, x: i32, y: i32, w: u32, h: u32) -> R<serde_json::Value> {
+    blocking(move || {
+        let src = capture::sources::SourceInfo { kind, id, title: String::new(), app: String::new(), bundle, x, y, w, h };
+        let t = capture::sources::thumbnail(&src).map_err(e)?;
+        let url = |b: Option<Vec<u8>>| b.map(|b| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)));
+        Ok(serde_json::json!({ "image": url(t.image), "icon": url(t.icon) }))
+    })
+    .await
+}
+
 /// Screenshot for the visual area picker (data URL plus capture size).
 #[tauri::command]
 async fn screen_snapshot() -> R<serde_json::Value> {
@@ -1440,7 +1459,7 @@ fn main() {
             pick_save,
             pick_open,
             pause_recording,
-            screen_snapshot,
+            screen_snapshot, capture_sources, capture_thumb,
             raw_frame,
             get_settings,
             set_retention,

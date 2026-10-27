@@ -440,3 +440,127 @@ pub fn screenshot_png() -> Result<(Vec<u8>, u32, u32), String> {
     }
     Ok((out, w, h))
 }
+
+// ---------- Source picker: displays, windows, previews, app icons ----------
+
+use super::sources::{encode_png, sort_sources, SourceInfo, Thumb, THUMB_W};
+
+/// Displays and on screen windows of normal apps (not DemoLens, menu bar
+/// items or tiny helper windows).
+pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
+    let content = shareable()?;
+    let me = std::process::id() as i32;
+    let mut v = Vec::new();
+    for (i, d) in ordered_displays(&content).iter().enumerate() {
+        let info = display_info(i as u32, d);
+        let title = if info.main { "Main display".to_string() } else { format!("Display {}", i + 1) };
+        v.push(SourceInfo {
+            kind: "display".into(),
+            id: i.to_string(),
+            title,
+            app: String::new(),
+            bundle: String::new(),
+            x: 0,
+            y: 0,
+            w: info.pixels.0,
+            h: info.pixels.1,
+        });
+    }
+    let scale = ordered_displays(&content).first().map(|d| display_info(0, d).scale).unwrap_or(1.0);
+    for w in content.windows() {
+        let f = w.frame();
+        if !w.is_on_screen() || w.window_layer() != 0 || f.size.width < 120.0 || f.size.height < 80.0 {
+            continue;
+        }
+        let Some(app) = w.owning_application() else { continue };
+        if app.process_id() == me {
+            continue;
+        }
+        let name = app.application_name();
+        if name.is_empty() {
+            continue;
+        }
+        let title = w.title().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| name.clone());
+        v.push(SourceInfo {
+            kind: "window".into(),
+            id: w.window_id().to_string(),
+            title,
+            app: name,
+            bundle: app.bundle_identifier(),
+            x: (f.origin.x * scale) as i32,
+            y: (f.origin.y * scale) as i32,
+            w: (f.size.width * scale) as u32,
+            h: (f.size.height * scale) as u32,
+        });
+    }
+    sort_sources(&mut v);
+    Ok(v)
+}
+
+/// A preview of one display or window (needs macOS 14 or newer; older
+/// systems get a placeholder in the picker) and the app icon.
+pub fn thumbnail(src: &SourceInfo) -> Result<Thumb, String> {
+    use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
+    let content = shareable()?;
+    let (filter, w, h) = if src.kind == "display" {
+        let idx: usize = src.id.parse().unwrap_or(0);
+        let displays = ordered_displays(&content);
+        let d = displays.get(idx).ok_or("display not found")?;
+        let info = display_info(idx as u32, d);
+        let me = std::process::id() as i32;
+        let apps = content.applications();
+        let own: Vec<&SCRunningApplication> = apps.iter().filter(|a| a.process_id() == me).collect();
+        let mut b = SCContentFilter::create().with_display(d);
+        b = if own.is_empty() { b.with_excluding_windows(&[]) } else { b.with_excluding_applications(&own, &[]) };
+        (b.build().map_err(|e| e.to_string())?, info.pixels.0, info.pixels.1)
+    } else {
+        let id: u32 = src.id.parse().map_err(|_| "bad window id".to_string())?;
+        let windows = content.windows();
+        let win = windows.iter().find(|w| w.window_id() == id).ok_or("window is gone")?;
+        let f = win.frame();
+        (SCContentFilter::create().with_window(win).build().map_err(|e| e.to_string())?, f.size.width.max(1.0) as u32, f.size.height.max(1.0) as u32)
+    };
+    let tw = THUMB_W;
+    let th = even((tw as f64 * h as f64 / w.max(1) as f64).round() as u32);
+    let config = SCStreamConfiguration::new().with_width(tw).with_height(th).with_pixel_format(PixelFormat::BGRA).with_shows_cursor(false);
+    let img = SCScreenshotManager::capture_image(&filter, &config).map_err(|e| format!("no preview: {e}"))?;
+    let (iw, ih) = (img.width() as u32, img.height() as u32);
+    let rgba = img.rgba_data().map_err(|e| e.to_string())?;
+    let image = encode_png(&rgba, iw, ih).map_err(|e| e.to_string())?;
+    let icon = if src.kind == "window" { app_icon(&src.bundle) } else { None };
+    Ok(Thumb { image: Some(image), icon })
+}
+
+/// The app's icon as PNG, through system tools (mdfind finds the bundle,
+/// sips converts the .icns). Cached for the session.
+fn app_icon(bundle: &str) -> Option<Vec<u8>> {
+    use std::collections::HashMap;
+    use std::process::Command;
+    static CACHE: Mutex<Option<HashMap<String, Option<Vec<u8>>>>> = Mutex::new(None);
+    if bundle.is_empty() || !bundle.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+        return None;
+    }
+    if let Some(hit) = CACHE.lock().unwrap().get_or_insert_with(HashMap::new).get(bundle) {
+        return hit.clone();
+    }
+    let find = || -> Option<Vec<u8>> {
+        let out = Command::new("/usr/bin/mdfind").arg(format!("kMDItemCFBundleIdentifier == '{bundle}'")).output().ok()?;
+        let app = String::from_utf8_lossy(&out.stdout).lines().find(|l| l.ends_with(".app"))?.to_string();
+        let plist = format!("{app}/Contents/Info");
+        let name = Command::new("/usr/bin/defaults").args(["read", &plist, "CFBundleIconFile"]).output().ok()?;
+        let name = String::from_utf8_lossy(&name.stdout).trim().to_string();
+        if name.is_empty() {
+            return None;
+        }
+        let name = if name.ends_with(".icns") { name } else { format!("{name}.icns") };
+        let icns = format!("{app}/Contents/Resources/{name}");
+        let tmp = std::env::temp_dir().join(format!("demolens-icon-{}-{bundle}.png", std::process::id()));
+        let ok = Command::new("/usr/bin/sips").args(["-s", "format", "png", "-Z", "64", &icns, "--out"]).arg(&tmp).output().ok()?.status.success();
+        let bytes = if ok { std::fs::read(&tmp).ok() } else { None };
+        let _ = std::fs::remove_file(&tmp);
+        bytes
+    };
+    let r = find();
+    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bundle.to_string(), r.clone());
+    r
+}

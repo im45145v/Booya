@@ -38,3 +38,27 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     }
     Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
 }
+
+/// Windows with a title, for the picker. Recording a window is by title.
+pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
+    use super::sources::{sort_sources, SourceInfo};
+    use std::os::windows::process::CommandExt;
+    let mut v = vec![SourceInfo { kind: "display".into(), id: "0".into(), title: "Entire screen".into(), app: String::new(), bundle: String::new(), x: 0, y: 0, w: 0, h: 0 }];
+    let script = "Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { $_.ProcessName + [char]9 + $_.MainWindowTitle }";
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output();
+    if let Ok(o) = out {
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some((app, title)) = line.split_once('\t') {
+                let title = title.trim();
+                if !title.is_empty() {
+                    v.push(SourceInfo { kind: "window".into(), id: title.to_string(), title: title.to_string(), app: app.to_string(), bundle: String::new(), x: 0, y: 0, w: 0, h: 0 });
+                }
+            }
+        }
+    }
+    sort_sources(&mut v);
+    Ok(v)
+}

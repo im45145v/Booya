@@ -330,7 +330,6 @@ function showBusy(t) { $('busy-text').textContent = t; $('busy-overlay').hidden 
 function hideBusy() { $('busy-overlay').hidden = true; }
 
 // ---------- Recording ----------
-$('rec-target').onchange = () => { const k = $('rec-target').value; $('rec-arg').hidden = k === 'screen'; $('rec-pick').hidden = k !== 'area'; $('rec-arg').placeholder = k === 'window' ? (navigator.userAgent.includes('Windows') ? 'Window title' : 'Window id') : 'x,y,w,h'; };
 document.querySelectorAll('.toggle').forEach(b => (b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true')));
 // Turning key capture on explains what is kept and, on a Mac, which permission it needs.
 $('rec-keys').addEventListener('click', () => {
@@ -353,10 +352,7 @@ $('rec-btn').onclick = async () => {
   if ($('rec-btn').disabled) return;
   try {
     if (!recording) {
-      const kind = $('rec-target').value, arg = $('rec-arg').value.trim();
-      let target = { type: 'screen', display: 0 };
-      if (kind === 'window') { if (!arg) return status('Type the window id (Linux) or title (Windows) first.', 'error'); target = { type: 'window', id: arg }; }
-      if (kind === 'area') { const v = arg.split(',').map(Number); if (v.length !== 4 || v.some(isNaN)) return status('Type the area as x,y,w,h, for example 0,0,1280,720', 'error'); const [x, y, w, h] = v; target = { type: 'area', x, y, w, h }; }
+      const target = recSource.target;
       $('rec-btn').disabled = true; status('Starting in 3 seconds. Click the number to cancel. If macOS asks for permission, allow it.', 'busy');
       if (IS_WIN) meterStop();
       let warn;
@@ -968,14 +964,6 @@ function drawRects(title, url, w, h, multi, hint) {
     $('modal').addEventListener('close', () => fin([]), { once: true });
   });
 }
-$('rec-pick').onclick = async () => {
-  status('Taking a screenshot to pick from...', 'busy');
-  try {
-    const s = await invoke('screen_snapshot');
-    const [r] = await drawRects('Pick the area to record', s.url, s.w, s.h, false, 'Drag a rectangle over the part of the screen to record.');
-    if (r) { $('rec-arg').value = `${r.x},${r.y},${r.w},${r.h}`; status(`Area ${r.w}x${r.h} at ${r.x},${r.y}.`, 'success'); } else status('Ready');
-  } catch (e) { fail(e); }
-};
 $('blur-draw').onclick = async () => {
   if (!project) return;
   const src = tl.outToSrc(tl.playhead);

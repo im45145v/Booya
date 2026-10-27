@@ -74,3 +74,67 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     }
     Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
 }
+
+/// Parses `xwininfo -root -tree` into window candidates (id, title, class, w, h, absolute x, y).
+pub(crate) fn parse_tree(text: &str) -> Vec<(String, String, String, u32, u32, i32, i32)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        let Some(rest) = l.strip_prefix("0x") else { continue };
+        let Some((id, rest)) = rest.split_once(' ') else { continue };
+        let Some(rest) = rest.strip_prefix('"') else { continue };
+        let Some((title, rest)) = rest.split_once("\": (") else { continue };
+        let Some((class_part, geo)) = rest.split_once(')') else { continue };
+        let class = class_part.rsplit('"').nth(1).unwrap_or("").to_string();
+        let mut it = geo.split_whitespace();
+        let (Some(size), Some(abs)) = (it.next(), it.next()) else { continue };
+        let Some((w, h)) = size.split_once('x') else { continue };
+        let h = h.split('+').next().unwrap_or("");
+        let abs = abs.trim_start_matches('+');
+        let Some((ax, ay)) = abs.split_once('+') else { continue };
+        let (Ok(w), Ok(h), Ok(ax), Ok(ay)) = (w.parse(), h.parse(), ax.parse(), ay.parse()) else { continue };
+        out.push((format!("0x{id}"), title.to_string(), class, w, h, ax, ay));
+    }
+    out
+}
+
+/// Displays and visible top level windows, for the picker.
+pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
+    use super::sources::{sort_sources, SourceInfo};
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    let (sw, sh) = screen_size(&display)?;
+    let mut v = vec![SourceInfo { kind: "display".into(), id: "0".into(), title: "Entire screen".into(), app: String::new(), bundle: String::new(), x: 0, y: 0, w: sw, h: sh }];
+    let tree = Command::new("xwininfo").env("DISPLAY", &display).args(["-root", "-tree"]).output().context("xwininfo not found (install x11-utils)")?;
+    let mut seen = std::collections::HashSet::new();
+    for (id, title, class, w, h, x, y) in parse_tree(&String::from_utf8_lossy(&tree.stdout)) {
+        if title.is_empty() || class.to_lowercase().contains("demolens") || w < 120 || h < 80 || !seen.insert(id.clone()) {
+            continue;
+        }
+        // Only windows that are actually on screen.
+        let info = Command::new("xwininfo").env("DISPLAY", &display).args(["-id", &id]).output();
+        if !info.map(|o| String::from_utf8_lossy(&o.stdout).contains("IsViewable")).unwrap_or(false) {
+            continue;
+        }
+        v.push(SourceInfo { kind: "window".into(), id, title, app: class, bundle: String::new(), x, y, w, h });
+    }
+    sort_sources(&mut v);
+    Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tree;
+
+    #[test]
+    fn xwininfo_tree_lines_become_windows() {
+        let text = r#"
+  2 children:
+     0x800001 "xdg-desktop-portal-gtk": ("xdg-desktop-portal-gtk" "Xdg-desktop-portal-gtk")  10x10+10+10  +10+10
+     0x400001 (has no name): ()  10x10+-20+-20  +-20+-20
+        0x600004 "Terminal - ~": ("xterm" "XTerm")  640x480+4+24  +104+124
+"#;
+        let w = parse_tree(text);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[1], ("0x600004".to_string(), "Terminal - ~".to_string(), "XTerm".to_string(), 640, 480, 104, 124));
+    }
+}

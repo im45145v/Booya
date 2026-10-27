@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub mod mics;
+pub mod sources;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

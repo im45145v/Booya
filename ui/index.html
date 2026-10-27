@@ -44,6 +44,7 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M2.5 12h3M18.5 12h3M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></symbol>
     <symbol id="i-cam" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></symbol>
     <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
     <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h4L13 5v14l-5-4.5H4z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
   </defs>
 </svg>
@@ -59,15 +60,7 @@
   </div>
   <div id="project-name" class="project-name" aria-live="polite"></div>
   <div class="tb-group rec-group" role="group" aria-label="Recording">
-    <label class="sr-only" for="rec-target">What to record</label>
-    <select id="rec-target" class="field sm">
-      <option value="screen">Full screen</option>
-      <option value="window">Window</option>
-      <option value="area">Area</option>
-    </select>
-    <label class="sr-only" for="rec-arg">Window id or area</label>
-    <input id="rec-arg" class="field sm" placeholder="x,y,w,h" hidden />
-    <button id="rec-pick" class="btn icon ghost" hidden title="Pick the area on a screenshot" aria-label="Pick area"><svg class="ico"><use href="#i-crop"/></svg></button>
+    <button id="rec-source" class="btn ghost rec-source" data-kind="screen" title="What to record. Click to pick a screen, a window or an area." aria-label="Choose what to record"><svg class="ico"><use href="#i-crop"/></svg><span id="rec-source-label">Entire screen</span></button>
     <button id="rec-mic" class="btn icon ghost toggle" aria-pressed="true" title="Record microphone" aria-label="Record microphone"><svg class="ico"><use href="#i-mic"/></svg></button>
     <select id="rec-mic-dev" class="field sm mic-dev" title="Microphone" aria-label="Microphone"><option value="">Default microphone</option></select>
     <span id="mic-meter" class="mic-meter" title="Microphone level. Speak to see it move." aria-label="Microphone level" hidden><i></i><i></i><i></i><i></i><i></i><i></i></span>
@@ -318,5 +311,6 @@
 </dialog>
 <script src="timeline.js"></script>
 <script src="main.js"></script>
+<script src="picker.js"></script>
 </body>
 </html>
