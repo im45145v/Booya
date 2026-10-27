@@ -72,5 +72,5 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     if audio_inputs == 0 {
         warnings.push("recording without audio".into());
     }
-    Ok(CapturePlan { region, args, warnings })
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
 }

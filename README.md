@@ -188,10 +188,21 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS | ffmpeg `avfoundation`: screen, area | avfoundation | TODO: ScreenCaptureKit (or a loopback device such as BlackHole) | rdev (needs Accessibility permission) |
+| macOS (12.3+) | ScreenCaptureKit: screen, area, window (by id or title, CLI). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission; keys are not logged) |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
 
-Window capture on macOS and native GPU capture on Windows (Windows.Graphics.Capture) are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.
+Native GPU capture on Windows (Windows.Graphics.Capture) and system audio on macOS are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.
+
+### Is capture working? `demolens doctor`
+
+```bash
+demolens doctor            # prints JSON, exit code 1 if the test capture failed
+demolens doctor --seconds 5
+```
+
+It reports the Screen Recording permission, the displays ScreenCaptureKit sees (macOS), the ffmpeg in use, and a short test capture (file size, frame count, resolution). `next_steps` says what to fix. On macOS the permission belongs to the app that launched the command, so allow your terminal under System Settings > Privacy & Security > Screen & System Audio Recording.
+
+The macOS build is ad-hoc signed, so each update is a new app identity to macOS. If recording stops after an update, remove DemoLens from the Screen Recording list, add it again, and reopen the app.
 
 ## Building
 
@@ -288,7 +299,7 @@ Done: drawn blur boxes, a visual area picker, webcam overlay, optional cloud AI 
 - Intel Mac builds. The release ships Apple Silicon only; Intel Macs can build from source with `cargo build --release --target x86_64-apple-darwin`.
 - Local AI voiceover with Piper, to replace or fix narration.
 - Loudness normalisation for the mic track.
-- Native capture backends: ScreenCaptureKit (macOS), Windows.Graphics.Capture plus WASAPI loopback (Windows).
+- System audio on macOS through SCStream, and Windows.Graphics.Capture plus WASAPI loopback (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.
 - Motion blur on zoom transitions and cursor.
 

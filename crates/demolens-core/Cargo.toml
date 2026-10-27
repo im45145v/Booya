@@ -31,3 +31,10 @@ x11 = { version = "2.21", features = ["xlib"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"], optional = true }
+
+# macOS screen capture goes through ScreenCaptureKit. The old avfoundation
+# screen input (AVCaptureScreenInput) is deprecated and delivers no frames on
+# recent macOS releases. The crate builds a small Swift bridge, so the macOS
+# build needs Xcode (the macos runners and any Mac with Xcode tools have it).
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = "11"

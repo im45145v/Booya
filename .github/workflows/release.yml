@@ -82,6 +82,22 @@ jobs:
           codesign -dv "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg 2>&1 | grep -E 'Signature|Identifier'
           "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg -hide_banner -version | head -1
           hdiutil detach "$mnt"
+      - name: Check every macOS helper is signed the same way
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Gatekeeper and TCC treat each executable on its own, so the app,
+          # ffmpeg and ffprobe must all carry the same ad-hoc signature with
+          # the hardened runtime.
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          bad=0
+          for f in "$app"/Contents/MacOS/*; do
+            info=$(codesign -dv "$f" 2>&1)
+            echo "== $f"; echo "$info" | grep -E 'Identifier|flags|Signature'
+            echo "$info" | grep -q 'flags=.*runtime' || { echo "NOT hardened: $f"; bad=1; }
+            echo "$info" | grep -q 'Signature=adhoc' || { echo "NOT ad-hoc signed: $f"; bad=1; }
+          done
+          exit $bad
       - name: Build CLI
         run: cargo build --release -p demolens-cli
       - name: macOS recording must not hang
@@ -93,6 +109,11 @@ jobs:
           codesign -d --entitlements - "$app" 2>/dev/null | grep -E 'audio-input|camera' || codesign -d --entitlements :- "$app"
           export DEMOLENS_FFMPEG="$app/Contents/MacOS/demolens-ffmpeg" DEMOLENS_FFPROBE="$app/Contents/MacOS/demolens-ffprobe"
           "$DEMOLENS_FFMPEG" -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | head -20 || true
+          # doctor must answer with JSON and exit, whatever the permission state.
+          set +e
+          perl -e 'alarm 60; exec @ARGV' ./target/release/demolens doctor --seconds 2
+          echo "doctor exit code $?"
+          set -e
           # The runner has no Screen Recording permission. The recorder must
           # either record or fail with a clear message, never hang.
           set +e
@@ -103,6 +124,11 @@ jobs:
           ls -la "$RUNNER_TEMP/rec" || true
           if [ $code -eq 142 ]; then echo "recording hung"; exit 1; fi
           exit 0
+      - name: Sign the macOS CLI
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --sign - --options runtime target/release/demolens
+          codesign --verify --strict --verbose=2 target/release/demolens
       - name: Collect files
         shell: bash
         run: |

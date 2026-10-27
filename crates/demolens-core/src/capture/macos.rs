@@ -1,20 +1,25 @@
-//! macOS capture via ffmpeg's avfoundation input.
+//! macOS capture. Video comes from ScreenCaptureKit (`macos_sck`) and is piped
+//! to ffmpeg as raw frames. The microphone is an audio-only avfoundation input.
+//!
+//! The old avfoundation screen input (AVCaptureScreenInput) is deprecated and
+//! produces no frames on recent macOS. It is kept behind
+//! `DEMOLENS_MAC_CAPTURE=avfoundation` for machines where ScreenCaptureKit is
+//! not available.
 //!
 //! Devices are looked up by listing them first (`-list_devices true`), because
-//! the index of "Capture screen 0" depends on how many cameras are attached
-//! (FaceTime camera, iPhone Continuity Camera, virtual cameras).
+//! the index of a device depends on what is attached.
 //!
-//! TODO(macos): replace with a native ScreenCaptureKit backend
-//! (screencapturekit crate) to get per-window capture and system audio.
+//! TODO(macos): system audio through SCStream (capturesAudio) and the
+//! microphone through SCStream on macOS 15+.
 
-use super::{parse_avfoundation_devices, s, screen_index, AvDevice, CapturePlan, CaptureTarget, RecordOptions, Region};
-use anyhow::{bail, Result};
+use super::{macos_sck, parse_avfoundation_devices, s, screen_index, AvDevice, CapturePlan, CaptureTarget, Feed, RecordOptions, Region};
+use anyhow::{anyhow, bail, Result};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Runs the device listing with a timeout, so a stuck permission prompt can
 /// not freeze the app.
-fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
+pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
     let child = Command::new(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""])
         .stdin(Stdio::null())
@@ -41,7 +46,63 @@ fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
     parse_avfoundation_devices(&text)
 }
 
+/// The built in microphone when there is one: a Bluetooth headset that is
+/// listed first would drop its sound quality as soon as it is used as an input.
+fn pick_mic(audio: &[AvDevice]) -> Option<&AvDevice> {
+    audio
+        .iter()
+        .find(|d| {
+            let n = d.name.to_lowercase();
+            n.contains("macbook") || n.contains("built-in") || n.contains("microphone")
+        })
+        .or_else(|| audio.first())
+}
+
 pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
+    if std::env::var("DEMOLENS_MAC_CAPTURE").as_deref() == Ok("avfoundation") {
+        return plan_avfoundation(o);
+    }
+    let mut warnings = Vec::new();
+    if o.system_audio {
+        warnings.push("System audio on macOS needs a loopback device such as BlackHole for now.".into());
+    }
+    let fps = o.fps.clamp(1, 60);
+    let cap = macos_sck::open(&o.target, fps, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
+    let (w, h) = (cap.width, cap.height);
+    let mut out_args = vec![s("-fps_mode"), s("cfr"), s("-r"), s(fps)];
+    let region = match &o.target {
+        CaptureTarget::Area { x, y, w: aw, h: ah } => {
+            let (aw, ah) = (aw & !1, ah & !1);
+            if aw < 2 || ah < 2 || *x < 0 || *y < 0 || *x as u32 + aw > w || *y as u32 + ah > h {
+                bail!("The selected area ({x},{y} {aw}x{ah}) is outside the screen ({w}x{h}). Pick the area again.");
+            }
+            out_args.extend([s("-vf"), format!("crop={aw}:{ah}:{x}:{y}")]);
+            Region { x: *x, y: *y, w: aw, h: ah }
+        }
+        _ => Region { x: cap.origin.0, y: cap.origin.1, w, h },
+    };
+    let mut args = vec![
+        s("-thread_queue_size"), s("64"),
+        s("-use_wallclock_as_timestamps"), s("1"),
+        s("-f"), s("rawvideo"),
+        s("-pixel_format"), s("bgra"),
+        s("-video_size"), format!("{w}x{h}"),
+        s("-framerate"), s(fps),
+        s("-i"), s("pipe:0"),
+    ];
+    if o.mic {
+        let (_, audio) = list_devices();
+        match pick_mic(&audio) {
+            Some(d) => args.extend([s("-thread_queue_size"), s("1024"), s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index)]),
+            None => warnings.push("No microphone was found, so this recording has no sound.".into()),
+        }
+    }
+    let feed: Feed = Box::new(move |stdin| Box::new(macos_sck::feed(cap, stdin, fps)));
+    Ok(CapturePlan { region, args, out_args, warnings, feed: Some(feed) })
+}
+
+/// Fallback: ffmpeg's avfoundation screen input (does not work on recent macOS).
+fn plan_avfoundation(o: &RecordOptions) -> Result<CapturePlan> {
     let mut warnings = Vec::new();
     let (display, crop) = match &o.target {
         CaptureTarget::Screen { display } => (*display, None),
@@ -83,11 +144,16 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     if let Some(r) = crop {
         args.extend([s("-vf"), format!("crop={}:{}:{}:{}", r.w, r.h, r.x, r.y)]);
     }
-    Ok(CapturePlan { region, args, warnings })
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
 }
 
 /// avfoundation index of the first camera (not a screen), if any.
 pub fn camera_index() -> Option<u32> {
     let (video, _) = list_devices();
     video.iter().find(|d| !d.name.starts_with("Capture screen")).map(|d| d.index)
+}
+
+/// One PNG of the screen for the area picker.
+pub(crate) fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
+    macos_sck::screenshot_png().map_err(|e| anyhow!(e))
 }

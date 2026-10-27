@@ -4,11 +4,12 @@
 //! | OS      | Video                     | Mic          | System audio                     |
 //! |---------|---------------------------|--------------|----------------------------------|
 //! | Linux   | x11grab (X11)             | PulseAudio   | Pulse/PipeWire monitor source    |
-//! | macOS   | avfoundation              | avfoundation | TODO: ScreenCaptureKit           |
+//! | macOS   | ScreenCaptureKit (frames  | avfoundation | TODO: SCStream audio             |
+//! |         | piped to ffmpeg)          | (audio only) |                                  |
 //! | Windows | gdigrab                   | dshow        | TODO: WASAPI loopback            |
 //!
 //! TODO(wayland): xdg-desktop-portal ScreenCast + PipeWire stream.
-//! TODO(macos): native ScreenCaptureKit backend (window picking, system audio).
+//! TODO(macos): window picker UI and system audio through SCStream.
 //! TODO(windows): Windows.Graphics.Capture backend for per-window capture.
 
 use crate::events::EventLog;
@@ -25,6 +26,8 @@ use std::time::{Duration, Instant};
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_sck;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -69,9 +72,18 @@ pub struct Region {
 /// What a backend must provide: the ffmpeg arguments for its grabber.
 pub(crate) struct CapturePlan {
     pub region: Region,
+    /// ffmpeg input arguments.
     pub args: Vec<String>,
+    /// ffmpeg output arguments (filters, frame rate) placed before the encoder.
+    pub out_args: Vec<String>,
     pub warnings: Vec<String>,
+    /// Backends that push frames into ffmpeg's stdin (macOS) provide this.
+    pub feed: Option<Feed>,
 }
+
+/// Starts feeding frames into ffmpeg's stdin. The returned guard stops the
+/// capture when dropped.
+pub(crate) type Feed = Box<dyn FnOnce(std::process::ChildStdin) -> Box<dyn Send> + Send>;
 
 pub(crate) fn plan(opts: &RecordOptions) -> Result<CapturePlan> {
     #[cfg(target_os = "linux")]
@@ -89,6 +101,8 @@ pub(crate) fn plan(opts: &RecordOptions) -> Result<CapturePlan> {
 
 pub struct RecordingSession {
     child: Child,
+    /// Frame source for backends that feed ffmpeg (stopped first on `stop`).
+    feed: Option<Box<dyn Send>>,
     webcam: Option<Child>,
     logger: InputLogger,
     started: Instant,
@@ -179,6 +193,18 @@ fn start_error(err: &str) -> anyhow::Error {
 /// Returns (png bytes, width, height) in capture pixels, the same space
 /// `CaptureTarget::Area` uses.
 pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::screenshot()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        screenshot_ffmpeg()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
     let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false };
     let plan = plan(&opts)?;
     let out = Command::new(crate::ffmpeg::ffmpeg_bin())
@@ -204,10 +230,11 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     }
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
-    let spawn = |plan: &CapturePlan| -> Result<(Child, Arc<Mutex<String>>)> {
+    let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>)> {
         let _ = std::fs::remove_file(&video);
         let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
         cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&plan.args);
+        cmd.args(&plan.out_args);
         cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-c:a", "aac"]);
         // Matroska is written as it goes, so even a killed recording keeps
         // what it has; flush packets so the file grows from the first second.
@@ -221,11 +248,16 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
         let mut child = cmd.spawn().context("failed to start ffmpeg. Is ffmpeg installed?")?;
         let err = drain_stderr(&mut child);
-        Ok((child, err))
+        // Only a frame-feeding backend gives up stdin; the others keep it for "q".
+        let feed = match plan.feed.take() {
+            Some(f) => child.stdin.take().map(f),
+            None => None,
+        };
+        Ok((child, err, feed))
     };
     let mut plan = plan(opts)?;
     let mut started = Instant::now();
-    let (mut child, mut err) = spawn(&plan)?;
+    let (mut child, mut err, mut feed) = spawn(&mut plan)?;
     if let Err(e) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
         // A missing or blocked microphone should not cost the user the
         // recording, so retry once with video only and say so.
@@ -233,13 +265,14 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             let mut o = opts.clone();
             o.mic = false;
             o.system_audio = false;
+            drop(feed.take()); // stop the first capture before starting another
             let mut retry = self::plan(&o)?;
             retry.warnings.retain(|w| w != "recording without audio");
             let why = if e.starts_with("TIMEOUT") { "it did not respond".to_string() } else { first_line(&e) };
             retry.warnings.push(format!("Could not open the {}, so this recording has no sound ({why}).", if opts.mic { "microphone" } else { "system audio" }));
             plan = retry;
             started = Instant::now();
-            (child, err) = spawn(&plan)?;
+            (child, err, feed) = spawn(&mut plan)?;
             if let Err(e2) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
                 return Err(start_error(&e2));
             }
@@ -255,7 +288,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         // When the camera's first frame landed, relative to the screen's.
         let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
     }
-    Ok(RecordingSession { child, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings })
+    Ok(RecordingSession { child, feed, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings })
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -302,10 +335,26 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
 
 /// Ask ffmpeg to finish with "q", then kill it after `STOP_TIMEOUT`.
 /// Returns true when it had to be killed.
-fn finish(child: &mut Child) -> bool {
+fn finish(child: &mut Child, fed: bool) -> bool {
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(b"q\n");
         let _ = stdin.flush();
+    }
+    let t = Instant::now();
+    if fed {
+        // ffmpeg's stdin carries the video, so there is no "q". The feeder
+        // closing it ends the video; with a live microphone input ffmpeg
+        // would keep waiting, so interrupt it (it finishes the file on SIGINT).
+        while t.elapsed() < Duration::from_millis(400) {
+            if let Ok(Some(_)) = child.try_wait() {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill").args(["-INT", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
     }
     let t = Instant::now();
     loop {
@@ -360,9 +409,10 @@ impl RecordingSession {
     pub fn stop(mut self) -> Result<Recording> {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.
-        let killed = finish(&mut self.child);
+        let fed = self.feed.take().is_some(); // stops the capture, closes ffmpeg's stdin
+        let killed = finish(&mut self.child, fed);
         if let Some(c) = self.webcam.as_mut() {
-            finish(c);
+            finish(c, false);
         }
         let duration = self.started.elapsed();
         let mut log = EventLog::new(self.region.w, self.region.h);
@@ -495,4 +545,95 @@ pub(crate) fn which(bin: &str) -> bool {
 #[allow(dead_code)]
 pub(crate) fn exists(p: &Path) -> bool {
     p.exists()
+}
+
+fn frame_count(path: &Path) -> Option<u64> {
+    let out = Command::new(crate::ffmpeg::ffprobe_bin())
+        .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+        .arg(crate::ffmpeg::file_url(path))
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Self test for `demolens doctor`: permissions, displays, ffmpeg and a short
+/// test capture, as JSON. Never panics and never needs the desktop app.
+pub fn doctor(test_seconds: f64) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let mut v = json!({
+        "demolens": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "capture_backend": if cfg!(target_os = "macos") { "ScreenCaptureKit" } else if cfg!(target_os = "windows") { "gdigrab" } else { "x11grab" },
+    });
+    let mut next: Vec<String> = Vec::new();
+
+    let ffmpeg = crate::ffmpeg::ffmpeg_bin();
+    let version = Command::new(&ffmpeg).arg("-version").output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string));
+    v["ffmpeg"] = json!({ "path": ffmpeg, "version": version, "encoder": crate::ffmpeg::best_encoder().name() });
+    if version.is_none() {
+        next.push(format!("ffmpeg was not found or does not run. {}", crate::ffmpeg::install_hint()));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        v["screen_recording_permission"] = json!(macos_sck::has_permission());
+        match macos_sck::content_info() {
+            Ok(c) => v["displays"] = serde_json::to_value(&c).unwrap_or(Value::Null),
+            Err(e) => {
+                v["displays_error"] = json!(e);
+                next.push(e);
+            }
+        }
+        let (_, audio) = macos::list_devices();
+        v["microphones"] = json!(audio.iter().map(|d| d.name.clone()).collect::<Vec<_>>());
+    }
+
+    let dir = std::env::temp_dir().join(format!("demolens-doctor-{}", std::process::id()));
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false };
+    let t0 = Instant::now();
+    let mut test = serde_json::Map::new();
+    match start(&opts) {
+        Err(e) => {
+            test.insert("ok".into(), json!(false));
+            test.insert("error".into(), json!(format!("{e:#}")));
+            next.push(format!("{e:#}"));
+        }
+        Ok(session) => {
+            test.insert("start_ms".into(), json!(t0.elapsed().as_millis() as u64));
+            std::thread::sleep(Duration::from_secs_f64(test_seconds.clamp(1.0, 30.0)));
+            match session.stop() {
+                Err(e) => {
+                    test.insert("ok".into(), json!(false));
+                    test.insert("error".into(), json!(format!("{e:#}")));
+                    next.push(format!("{e:#}"));
+                }
+                Ok(rec) => {
+                    let size = std::fs::metadata(&rec.video).map(|m| m.len()).unwrap_or(0);
+                    let info = crate::ffmpeg::probe(&rec.video).ok();
+                    let frames = frame_count(&rec.video);
+                    let ok = size > 0 && frames.unwrap_or(0) > 0;
+                    test.insert("ok".into(), json!(ok));
+                    test.insert("seconds".into(), json!((rec.duration.as_secs_f64() * 10.0).round() / 10.0));
+                    test.insert("file_bytes".into(), json!(size));
+                    test.insert("frames".into(), json!(frames));
+                    if let Some(i) = info {
+                        test.insert("width".into(), json!(i.width));
+                        test.insert("height".into(), json!(i.height));
+                        test.insert("fps".into(), json!((i.fps * 10.0).round() / 10.0));
+                    }
+                    if !ok {
+                        next.push("The test recording is empty.".into());
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let ok = test.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    v["test_capture"] = Value::Object(test);
+    v["ok"] = json!(ok);
+    next.dedup();
+    v["next_steps"] = json!(next);
+    v
 }

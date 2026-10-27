@@ -17,6 +17,8 @@ USAGE:
   demolens record [--screen N | --window ID | --area X,Y,W,H] [--mic] [--system-audio]
                   [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
+  demolens doctor [--seconds 3]     check permissions, displays and ffmpeg, run a short
+                  test capture and print the result as JSON (exit 1 if it failed)
   demolens new <video> [--events FILE] [-o project.json]
   demolens zoom <events.jsonl> --duration MS
   demolens preview <project.json> --at MS [-o frame.png] [--quality 720]
@@ -85,6 +87,15 @@ fn run() -> Result<()> {
     }
     match cmd.as_str() {
         "record" => record(a),
+        "doctor" => {
+            let secs: f64 = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?.unwrap_or(3.0);
+            let report = capture::doctor(secs);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report["ok"] != true {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         "new" => {
             let video = PathBuf::from(a.pos("video")?);
             let events = a.opt(&["--events"]).map(PathBuf::from);
