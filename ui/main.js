@@ -464,6 +464,8 @@ $('ai-interactive').onclick = async () => {
     const r = await invoke('export_interactive', { project, out, title, ctaText: cta, ctaUrl: url, badge });
     lastExport = out;
     status('Interactive demo saved: ' + baseName(out) + ' (' + r + ')', 'success');
+    if (storageReady) await uploadExport(out);
+    else status('Interactive demo saved: ' + baseName(out) + ' (' + r + '). To share it with a link, add a bucket in Settings > Upload (S3).', 'success');
   });
 };
 $('ai-docs').onclick = () => aiTask('Writing docs', async () => {
@@ -815,16 +817,17 @@ async function cloudVoiceover(docs) {
   try { await invoke('cloud_tts', { text, path: p }); status('Saved ' + baseName(p), 'success'); } catch (e) { fail(e); }
 }
 
-$('ex-upload').onclick = async () => {
-  if (!lastExport) return;
-  if (!(await confirmBox('Upload this video?', `<p class="warn-note">This leaves your device.</p><p>${esc(baseName(lastExport))} goes to your own bucket as a private object. You get a signed link that expires. The event log and project file are never uploaded.</p>`, 'Upload'))) return;
+$('ex-upload').onclick = () => uploadExport(lastExport);
+async function uploadExport(file) {
+  if (!file) return;
+  if (!(await confirmBox('Upload this file?', `<p class="warn-note">This leaves your device.</p><p>${esc(baseName(file))} goes to your own bucket as a private object. You get a signed link that expires. The event log and project file are never uploaded.</p>`, 'Upload'))) return;
   status('Uploading...', 'busy');
   try {
-    const u = await invoke('s3_upload', { path: lastExport });
+    const u = await invoke('s3_upload', { path: file });
     await navigator.clipboard.writeText(u.url).catch(() => { });
     status(`Uploaded${u.encrypted ? ' (encrypted at rest)' : ''}. Link copied; it expires in ${Math.round(u.expires_in_s / 3600)} h.`, 'success');
   } catch (e) { fail(e); }
-};
+}
 
 async function showSettings(tab = 'privacy') {
   await loadCloud();

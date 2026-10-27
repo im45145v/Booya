@@ -188,6 +188,7 @@ pub fn upload(cfg: &S3Config, secret: &str, file: &Path) -> Result<Uploaded> {
         "mp4" => "video/mp4",
         "webm" => "video/webm",
         "gif" => "image/gif",
+        "html" => "text/html; charset=utf-8",
         "png" => "image/png",
         "jpg" => "image/jpeg",
         _ => "application/octet-stream",

@@ -783,7 +783,7 @@ fn s3_set(config: demolens_ai::s3::S3Config, secret: Option<String>) -> R<()> {
 /// expires.
 #[tauri::command]
 async fn s3_upload(app: tauri::AppHandle, path: String) -> R<demolens_ai::s3::Uploaded> {
-    let p = check_write(&app, &path, &["mp4", "webm", "gif"])?;
+    let p = check_write(&app, &path, &["mp4", "webm", "gif", "html"])?;
     blocking(move || {
         let raw = std::fs::read_to_string(s3_path()).map_err(|_| "Set up storage in Settings first".to_string())?;
         let cfg: demolens_ai::s3::S3Config = serde_json::from_str(&raw).map_err(e)?;
