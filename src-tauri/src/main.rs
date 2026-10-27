@@ -171,7 +171,10 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
-        let png = r.render(&src, src_t).encode_png().map_err(e)?;
+        let mut frame = r.render(&src, src_t);
+        // The camera is not in the proxy, so it is read from its own file.
+        export::draw_preview_webcam(&r, &project, &mut frame, src_t);
+        let png = frame.encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
     })
     .await

@@ -332,11 +332,18 @@ impl Renderer {
         let background = Self::paint_background(&project.style.background, out_w, out_h, bg_image);
         let short = out_w.min(out_h) as f64;
         let pad = project.style.padding.clamp(0.0, 0.4) * short;
-        let (aw, ah) = (out_w as f64 - 2.0 * pad, out_h as f64 - 2.0 * pad);
+        // A side-by-side webcam takes a column off the screen's side.
+        let col = Self::side_column(&project, out_w, out_h);
+        let (aw, ah) = (out_w as f64 - 2.0 * pad - col.map(|c| c.0).unwrap_or(0.0), out_h as f64 - 2.0 * pad);
         let src_aspect = project.source_width as f64 / project.source_height as f64;
         let (w, h) = if aw / ah > src_aspect { (ah * src_aspect, ah) } else { (aw, aw / src_aspect) };
+        // Centre the screen in the area that is left (right of the camera when it is on the left).
+        let area_x = match col {
+            Some((c, true)) => c + pad,
+            _ => pad,
+        };
         let layout = Layout {
-            x: (out_w as f64 - w) / 2.0,
+            x: if col.is_some() { area_x + (aw - w) / 2.0 } else { (out_w as f64 - w) / 2.0 },
             y: (out_h as f64 - h) / 2.0,
             w,
             h,
@@ -447,10 +454,23 @@ impl Renderer {
         }
     }
 
+    /// Width of the camera column and whether it is on the left, for the side layout.
+    fn side_column(project: &Project, out_w: u32, out_h: u32) -> Option<(f64, bool)> {
+        use crate::project::{Corner, WebcamLayout};
+        let w = project.webcam.as_ref().filter(|w| w.visible && w.layout == WebcamLayout::Side)?;
+        let short = out_w.min(out_h) as f64;
+        let d = ((w.size.clamp(0.08, 0.5) * 1.6).min(0.45) * short).max(16.0);
+        let left = matches!(w.corner, Corner::TopLeft | Corner::BottomLeft);
+        Some((d + short * 0.035, left))
+    }
+
     /// Webcam bubble diameter in output pixels.
     pub fn webcam_size(&self) -> u32 {
         let short = self.out_w.min(self.out_h) as f64;
-        let d = self.project.webcam.as_ref().map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24) * short;
+        let d = match Self::side_column(&self.project, self.out_w, self.out_h) {
+            Some((col, _)) => col - short * 0.035,
+            None => self.project.webcam.as_ref().map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24) * short,
+        };
         ((d.round() as u32) & !1).max(16)
     }
 
@@ -461,7 +481,13 @@ impl Renderer {
         let d = cam.w as f64;
         let short = self.out_w.min(self.out_h) as f64;
         let m = short * 0.035;
+        let side = Self::side_column(&self.project, self.out_w, self.out_h);
         let (x0, y0) = match w.corner {
+            _ if side.is_some() => {
+                let left = side.map(|s| s.1).unwrap_or(false);
+                // Centred vertically, a margin from its edge.
+                (if left { m } else { self.out_w as f64 - d - m }, (self.out_h as f64 - d) / 2.0)
+            }
             Corner::TopLeft => (m, m),
             Corner::TopRight => (self.out_w as f64 - d - m, m),
             Corner::BottomLeft => (m, self.out_h as f64 - d - m),
@@ -746,5 +772,31 @@ mod tests {
         // Left half (blurred) is smooth, right half keeps contrast.
         assert!((px(40, 50) - px(42, 50)).abs() < 40);
         assert!((0..8).map(|x| px(150 + x, 50)).max().unwrap() - (0..8).map(|x| px(150 + x, 50)).min().unwrap() > 60);
+    }
+}
+
+#[cfg(test)]
+mod webcam_layout_tests {
+    use super::*;
+    use crate::project::{Corner, Webcam, WebcamLayout};
+
+    fn project(layout: WebcamLayout, corner: Corner) -> Project {
+        let mut p = Project::new("a.mp4".into(), None, 1920, 1080, 5000.0);
+        let mut w = Webcam::new("c.mkv".into());
+        w.layout = layout;
+        w.corner = corner;
+        p.webcam = Some(w);
+        p
+    }
+
+    #[test]
+    fn side_layout_shrinks_the_screen_and_keeps_the_camera_clear_of_it() {
+        let bubble = Renderer::new(project(WebcamLayout::Bubble, Corner::BottomLeft), None, 1280, 720, None);
+        let side = Renderer::new(project(WebcamLayout::Side, Corner::BottomLeft), None, 1280, 720, None);
+        assert!(side.layout.w < bubble.layout.w);
+        let cam_right_edge = 720.0 * 0.035 / 1.0 + side.webcam_size() as f64;
+        assert!(side.layout.x >= cam_right_edge - 1.0, "screen starts at {} but the camera ends at {}", side.layout.x, cam_right_edge);
+        let right = Renderer::new(project(WebcamLayout::Side, Corner::TopRight), None, 1280, 720, None);
+        assert!(right.layout.x + right.layout.w <= 1280.0 - right.webcam_size() as f64);
     }
 }

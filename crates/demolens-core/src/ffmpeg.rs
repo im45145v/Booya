@@ -215,14 +215,15 @@ pub fn hwaccel_args() -> Vec<&'static str> {
     }
 }
 
-fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32) -> (Option<Frame>, String) {
-    let out = Command::new(ffmpeg_bin())
-        .args(["-v", "error", "-nostdin"])
-        .args(hwaccel_args())
-        .args(["-ss", &format!("{:.3}", t_ms.max(0.0) / 1000.0), "-i"])
-        .arg(file_url(path))
-        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}"), "-"])
-        .output();
+fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32, vf: Option<&str>) -> (Option<Frame>, String) {
+    let size = format!("{w}x{h}");
+    let mut cmd = Command::new(ffmpeg_bin());
+    cmd.args(["-v", "error", "-nostdin"]).args(hwaccel_args()).args(["-ss", &format!("{:.3}", t_ms.max(0.0) / 1000.0), "-i"]).arg(file_url(path)).args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba"]);
+    match vf {
+        Some(vf) => cmd.args(["-vf", vf]),
+        None => cmd.args(["-s", &size]),
+    };
+    let out = cmd.arg("-").output();
     let Ok(out) = out else { return (None, "ffmpeg did not start".into()) };
     let need = (w * h * 4) as usize;
     if out.stdout.len() < need {
@@ -238,13 +239,18 @@ fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32) -> (Option<Frame>, String)
 /// retried a little earlier. That way the end of a video (and recordings
 /// whose duration is rounded up) shows the last frame instead of an error.
 pub fn frame_at(path: &Path, t_ms: f64, w: u32, h: u32) -> Result<Frame> {
+    frame_at_filtered(path, t_ms, w, h, None)
+}
+
+/// Like `frame_at`, with an ffmpeg video filter that produces a `w` x `h` frame.
+pub fn frame_at_filtered(path: &Path, t_ms: f64, w: u32, h: u32, vf: Option<&str>) -> Result<Frame> {
     let mut last_err = String::new();
     for back in [0.0, 70.0, 200.0, 500.0, 1200.0] {
         let t = t_ms - back;
         if t < 0.0 && back > 0.0 {
             break;
         }
-        let (f, err) = frame_once(path, t, w, h);
+        let (f, err) = frame_once(path, t, w, h, vf);
         if let Some(f) = f {
             return Ok(f);
         }

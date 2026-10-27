@@ -22,6 +22,21 @@ pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Render
     Ok(Renderer::new(project.clone(), log.as_ref(), out_w, out_h, bg))
 }
 
+/// ffmpeg filter that makes the camera frame a square of `d` pixels.
+pub fn webcam_filter(w: &crate::project::Webcam, d: u32) -> String {
+    format!("crop='min(iw,ih)':'min(iw,ih)',scale={d}:{d}{}", if w.mirror { ",hflip" } else { "" })
+}
+
+/// Add the webcam to a preview frame, the same way export does.
+pub fn draw_preview_webcam(renderer: &Renderer, project: &Project, frame: &mut crate::render::Frame, src_t: f64) {
+    let Some(w) = project.webcam.as_ref().filter(|w| w.visible && w.path.exists()) else { return };
+    let d = renderer.webcam_size();
+    let t = (src_t - w.offset_ms).max(0.0);
+    if let Ok(c) = ffmpeg::frame_at_filtered(&w.path, t, d, d, Some(&webcam_filter(w, d))) {
+        renderer.draw_webcam(frame, &c);
+    }
+}
+
 /// Render a single preview frame at output time `out_ms` as PNG bytes.
 /// Uses the same renderer as export.
 pub fn preview_png(project: &Project, out_ms: f64, out_w: u32, out_h: u32) -> Result<Vec<u8>> {
@@ -29,7 +44,9 @@ pub fn preview_png(project: &Project, out_ms: f64, out_w: u32, out_h: u32) -> Re
     let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
     let (sw, sh) = r.decode_size();
     let src = ffmpeg::frame_at(&project.source, src_t, sw, sh)?;
-    r.render(&src, src_t).encode_png()
+    let mut f = r.render(&src, src_t);
+    draw_preview_webcam(&r, project, &mut f, src_t);
+    f.encode_png()
 }
 
 fn atempo_chain(speed: f64) -> String {
@@ -248,7 +265,7 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         Some(w) => {
             let d = renderer.webcam_size();
             let start = first_src - w.offset_ms;
-            let vf = format!("crop='min(iw,ih)':'min(iw,ih)',scale={d}:{d}");
+            let vf = webcam_filter(w, d);
             FrameReader::open_filtered(&w.path, start, fps, &vf, d, d).ok().map(|r| (r, w.offset_ms, None::<Frame>))
         }
         None => None,

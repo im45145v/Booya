@@ -88,7 +88,7 @@ function syncPanel() {
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
-  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; }
+  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = w.layout || 'bubble'; $('cam-mirror').checked = !!w.mirror; }
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
@@ -111,7 +111,7 @@ function readPanel() {
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
-  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value });
+  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value, mirror: $('cam-mirror').checked });
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
   Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value });
   outputs();
@@ -915,7 +915,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['cam-visible', 'cam-circle', 'cam-size', 'cam-corner'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {

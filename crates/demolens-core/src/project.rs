@@ -252,6 +252,16 @@ pub enum Corner {
     BottomRight,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebcamLayout {
+    /// Floating over a corner of the screen.
+    #[default]
+    Bubble,
+    /// A column beside the screen, nothing covered.
+    Side,
+}
+
 /// Picture-in-picture webcam recorded alongside the screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Webcam {
@@ -265,11 +275,16 @@ pub struct Webcam {
     /// The camera started this many ms after the screen recording.
     #[serde(default)]
     pub offset_ms: f64,
+    #[serde(default)]
+    pub layout: WebcamLayout,
+    /// Flip left to right, like a mirror (what video calls show).
+    #[serde(default)]
+    pub mirror: bool,
 }
 
 impl Webcam {
     pub fn new(path: PathBuf) -> Self {
-        Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0 }
+        Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0, layout: WebcamLayout::Bubble, mirror: false }
     }
 }
 
