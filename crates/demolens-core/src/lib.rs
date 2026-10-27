@@ -11,6 +11,7 @@ pub mod input;
 pub mod preset;
 pub mod project;
 pub mod render;
+pub mod sample;
 pub mod zoom;
 
 pub use events::{Event, EventKind, EventLog};

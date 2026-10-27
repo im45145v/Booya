@@ -190,3 +190,24 @@ pub fn audio_cmd(mut a: Args) -> Result<()> {
     println!("denoise {}, mute {}", p.audio.denoise, p.audio.mute);
     Ok(())
 }
+
+pub fn ready_cmd(mut a: Args) -> Result<()> {
+    let pp = PathBuf::from(a.pos("project")?);
+    let o = pipeline::ReadyOptions {
+        zoom: !a.flag("--no-zoom"),
+        captions: !a.flag("--no-captions"),
+        cut: !a.flag("--no-cut"),
+        blur: !a.flag("--no-blur"),
+        denoise: !a.flag("--no-denoise"),
+        ..Default::default()
+    };
+    let mut p = Project::load(&pp)?;
+    let r = pipeline::demo_ready(&mut p, &o, |f, msg| eprint!("\r{:>3}% {msg:<45}", (f * 100.0) as u32));
+    eprintln!();
+    for s in &r.steps {
+        println!("  [{}] {}: {}", s.state, s.name, s.detail);
+    }
+    println!("length {:.1}s -> {:.1}s", r.before_ms / 1000.0, r.after_ms / 1000.0);
+    p.save(&pp)?;
+    Ok(())
+}

@@ -104,3 +104,126 @@ pub fn redact_project(p: &mut Project, every_ms: f64, dry_run: bool, progress: i
     }
     Ok(RedactReport { found, detections: hits.len(), added })
 }
+
+/// One step of [`demo_ready`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadyStep {
+    pub name: &'static str,
+    /// "done", "skipped" or "failed".
+    pub state: &'static str,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadyReport {
+    pub steps: Vec<ReadyStep>,
+    pub before_ms: f64,
+    pub after_ms: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadyOptions {
+    pub zoom: bool,
+    pub captions: bool,
+    pub cut: bool,
+    pub blur: bool,
+    pub denoise: bool,
+    pub min_silence_ms: f64,
+}
+
+impl Default for ReadyOptions {
+    fn default() -> Self {
+        Self { zoom: true, captions: true, cut: true, blur: true, denoise: true, min_silence_ms: 700.0 }
+    }
+}
+
+/// One click "make it demo-ready": auto zoom, transcribe and caption, cut
+/// filler words and long pauses, blur secrets and clean up the audio. Steps
+/// whose model is missing are skipped with a note instead of failing.
+pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f64, &str)) -> ReadyReport {
+    let before_ms = p.output_duration_ms();
+    let mut steps = Vec::new();
+    let mut step = |name, state, detail: String| steps.push(ReadyStep { name, state, detail });
+    let has_audio = demolens_core::ffmpeg::probe(&p.source).map(|i| i.has_audio).unwrap_or(false);
+
+    if o.zoom {
+        progress(0.05, "Adding auto zoom...");
+        match p.events.as_ref().map(|e| demolens_core::events::EventLog::load(e)) {
+            Some(Ok(log)) => {
+                p.zoom = demolens_core::zoom::generate_zoom_segments(&log, p.duration_ms, &demolens_core::zoom::ZoomConfig::default());
+                step("Auto zoom", "done", format!("{} zoom segments from clicks and typing", p.zoom.len()));
+            }
+            Some(Err(err)) => step("Auto zoom", "failed", format!("could not read the input log: {err}")),
+            None => step("Auto zoom", "skipped", "no input log next to this video".into()),
+        }
+    }
+
+    let mut have_words = !p.captions.is_empty();
+    if o.captions {
+        progress(0.15, "Transcribing on this computer...");
+        if !has_audio {
+            step("Captions", "skipped", "the video has no audio".into());
+        } else if models::first_installed(models::Kind::Speech).is_none() {
+            step("Captions", "skipped", "download a speech model (Whisper) in Models to get captions".into());
+        } else {
+            match transcribe_project(p, None, None) {
+                Ok(r) => {
+                    p.caption_style.burn_in = true;
+                    have_words = true;
+                    step("Captions", "done", format!("{} words, {} caption lines, burned in", r.words, r.lines));
+                }
+                Err(err) => step("Captions", "failed", err.to_string()),
+            }
+        }
+    }
+
+    if o.cut {
+        progress(0.45, "Cutting filler words and long pauses...");
+        if !has_audio {
+            step("Auto cut", "skipped", "the video has no audio".into());
+        } else {
+            let co = AutoCutOptions { cut_fillers: have_words, cut_silences: true, min_silence_ms: o.min_silence_ms, ..Default::default() };
+            match autocut_project(p, &co, false) {
+                Ok(r) => {
+                    let f = r.cuts.iter().filter(|c| c.2 == "filler").count();
+                    step("Auto cut", "done", format!("{} filler words and {} pauses removed", f, r.cuts.len() - f));
+                }
+                Err(err) => step("Auto cut", "failed", err.to_string()),
+            }
+        }
+    }
+
+    if o.blur {
+        progress(0.55, "Scanning frames for secrets...");
+        if models::first_installed(models::Kind::Ocr).is_none() || models::require("ocr-detection").is_err() || models::require("ocr-recognition").is_err() {
+            step("Blur secrets", "skipped", "download the two text recognition models (13 MB) in Models".into());
+        } else {
+            match redact_project(p, 500.0, false, |f| progress(0.55 + f * 0.4, "Scanning frames for secrets...")) {
+                Ok(r) if r.found.is_empty() => step("Blur secrets", "done", "nothing sensitive found".into()),
+                Ok(r) => {
+                    let mut kinds: Vec<&str> = Vec::new();
+                    for (k, _) in &r.found {
+                        let n = match k {
+                            redact::Sensitive::Email => "email",
+                            redact::Sensitive::ApiKey => "API key",
+                            redact::Sensitive::Card => "card number",
+                            redact::Sensitive::Phone => "phone number",
+                        };
+                        if !kinds.contains(&n) {
+                            kinds.push(n);
+                        }
+                    }
+                    step("Blur secrets", "done", format!("blurred {} ({} boxes)", kinds.join(", "), r.added))
+                }
+                Err(err) => step("Blur secrets", "failed", err.to_string()),
+            }
+        }
+    }
+
+    if o.denoise && has_audio {
+        p.audio.denoise = true;
+        step("Clean audio", "done", "background noise removal on".into());
+    }
+    progress(1.0, "Done");
+    ReadyReport { steps, before_ms, after_ms: p.output_duration_ms() }
+}

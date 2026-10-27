@@ -104,8 +104,10 @@ fn initial_project() -> R<Option<serde_json::Value>> {
 }
 
 #[tauri::command]
-fn list_presets() -> Vec<String> {
-    preset::list_presets()
+fn list_presets() -> serde_json::Value {
+    let builtin: Vec<String> = preset::builtin_presets().into_iter().map(|p| p.name).collect();
+    let user: Vec<String> = preset::list_presets().into_iter().filter(|n| !builtin.contains(n)).collect();
+    serde_json::json!({ "builtin": builtin, "user": user })
 }
 
 #[tauri::command]
@@ -231,6 +233,42 @@ async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool) -> R<se
     .await
 }
 
+/// Build the sample recording in the app's data folder and open it.
+#[tauri::command]
+async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
+    let dir = app.path().app_data_dir().map_err(e)?.join("sample");
+    blocking(move || {
+        let speech = demolens_core::sample::can_speak();
+        let proj = demolens_core::sample::make(&dir, speech, true).or_else(|_| demolens_core::sample::make(&dir, false, false)).map_err(e)?;
+        let project = Project::load(&proj).map_err(e)?;
+        Ok(serde_json::json!({ "project": project, "path": proj }))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool) -> R<AiResult<pipeline::ReadyReport>> {
+    blocking(move || {
+        let o = pipeline::ReadyOptions { zoom, captions, cut, blur, denoise, ..Default::default() };
+        let report = pipeline::demo_ready(&mut project, &o, |p, m| progress(&app, "ready", p, m));
+        Ok(AiResult { project, report })
+    })
+    .await
+}
+
+/// Show a file in the system file manager.
+#[tauri::command]
+fn reveal(path: String) -> R<()> {
+    let p = std::path::PathBuf::from(&path);
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-R").arg(&p).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let r = std::process::Command::new("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
+    r.map(|_| ()).map_err(e)
+}
+
 #[tauri::command]
 fn export_captions(project: Project, path: String) -> R<()> {
     let text = if path.to_lowercase().ends_with(".vtt") { captions::to_vtt(&project) } else { captions::to_srt(&project) };
@@ -267,7 +305,10 @@ fn main() {
             ai_redact,
             ai_docs,
             export_captions,
-            write_text
+            write_text,
+            make_sample,
+            ai_demo_ready,
+            reveal
         ])
         .run(tauri::generate_context!())
         .expect("error while running DemoLens");

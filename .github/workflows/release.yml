@@ -1,0 +1,65 @@
+name: Release
+# Builds installers for every OS. Push a tag like v0.2.0 to publish them as a
+# GitHub Release, or run it by hand (Actions > Release > Run workflow) to get
+# the installers as build artifacts without publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev cmake clang libclang-dev patchelf file
+      - name: Build installers
+        working-directory: src-tauri
+        run: npx --yes @tauri-apps/cli@2 build
+      - name: Build CLI
+        run: cargo build --release -p demolens-cli
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir -p dist
+          b=target/release/bundle
+          find "$b" -maxdepth 2 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} dist/ \;
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "dist/demolens-cli-${{ matrix.name }}.zip" ./target/release/demolens.exe
+          else
+            tar -czf "dist/demolens-cli-${{ matrix.name }}.tar.gz" -C target/release demolens
+          fi
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demolens-${{ matrix.name }}
+          path: dist/*
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true
+          generate_release_notes: true

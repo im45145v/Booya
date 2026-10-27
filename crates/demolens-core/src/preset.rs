@@ -57,8 +57,36 @@ pub fn save_preset(p: &Preset) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Built in looks, so a first export looks good without designing a style.
+pub fn builtin_presets() -> Vec<Preset> {
+    use crate::project::Background::{Gradient, Solid};
+    let mk = |name: &str, bg, padding, corner_radius, shadow, cursor_size, ripple: [u8; 3]| {
+        let mut p = Preset { name: name.into(), style: Style::default(), cursor: CursorStyle::default(), keys: KeyOverlay::default() };
+        p.style.background = bg;
+        p.style.padding = padding;
+        p.style.corner_radius = corner_radius;
+        p.style.shadow = shadow;
+        p.cursor.size = cursor_size;
+        p.cursor.ripple_color = ripple;
+        p
+    };
+    vec![
+        mk("Sunset", Gradient { from: [99, 102, 241], to: [236, 72, 153], angle_deg: 35.0 }, 0.07, 0.018, 0.035, 1.5, [255, 255, 255]),
+        mk("Midnight", Gradient { from: [15, 23, 42], to: [49, 46, 129], angle_deg: 120.0 }, 0.08, 0.02, 0.05, 1.6, [129, 140, 248]),
+        mk("Ocean", Gradient { from: [14, 165, 233], to: [16, 185, 129], angle_deg: 60.0 }, 0.07, 0.018, 0.035, 1.5, [255, 255, 255]),
+        mk("Clean light", Solid { color: [241, 245, 249] }, 0.06, 0.014, 0.025, 1.4, [79, 70, 229]),
+        mk("Minimal", Solid { color: [17, 17, 20] }, 0.0, 0.0, 0.0, 1.3, [255, 255, 255]),
+        mk("Social card", Gradient { from: [251, 191, 36], to: [239, 68, 68], angle_deg: 45.0 }, 0.1, 0.03, 0.05, 1.8, [255, 255, 255]),
+    ]
+}
+
 pub fn load_preset(name: &str) -> Result<Preset> {
     let path = presets_dir().join(file_name(name));
+    if !path.exists() {
+        if let Some(b) = builtin_presets().into_iter().find(|p| p.name == name) {
+            return Ok(b);
+        }
+    }
     let s = std::fs::read_to_string(&path).with_context(|| format!("no preset named {name}"))?;
     Ok(serde_json::from_str(&s)?)
 }
@@ -97,5 +125,14 @@ mod tests {
         assert_eq!(b.style, a.style);
         assert_eq!(b.cursor.size, 2.5);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn builtins_load_by_name() {
+        let names: Vec<_> = builtin_presets().into_iter().map(|p| p.name).collect();
+        assert!(names.len() >= 5);
+        let mut p = Project::new("a.mp4".into(), None, 10, 10, 1000.0);
+        load_preset("Midnight").unwrap().apply(&mut p);
+        assert_eq!(p.cursor.ripple_color, [129, 140, 248]);
     }
 }
