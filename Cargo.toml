@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/demolens-core", "crates/demolens-cli", "src-tauri"]
-default-members = ["crates/demolens-core", "crates/demolens-cli", "src-tauri"]
+members = ["crates/demolens-core", "crates/demolens-ai", "crates/demolens-cli", "src-tauri"]
+default-members = ["crates/demolens-core", "crates/demolens-ai", "crates/demolens-cli", "src-tauri"]
 
 [workspace.package]
 rust-version = "1.88"
