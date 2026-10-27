@@ -1,10 +1,12 @@
 //! DemoLens core: event log, auto zoom, compositor, export and capture.
 
+pub mod captions;
 pub mod capture;
 pub mod events;
 pub mod export;
 pub mod ffmpeg;
-pub mod font;
+pub mod audio;
+pub mod text;
 pub mod input;
 pub mod preset;
 pub mod project;

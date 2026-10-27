@@ -104,6 +104,52 @@ fn default_blur() -> u32 {
     16
 }
 
+/// One timed word inside a caption (source ms).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptionWord {
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub text: String,
+}
+
+/// One caption line, usually produced by local speech recognition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Caption {
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub text: String,
+    #[serde(default)]
+    pub words: Vec<CaptionWord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CaptionStyle {
+    /// Burn captions into the exported video.
+    pub burn_in: bool,
+    /// Text size as a fraction of the shorter output side.
+    pub size: f64,
+    pub color: [u8; 3],
+    /// Colour of the word being spoken right now.
+    pub highlight: [u8; 3],
+    pub background_opacity: f64,
+}
+
+impl Default for CaptionStyle {
+    fn default() -> Self {
+        Self { burn_in: true, size: 0.042, color: [255, 255, 255], highlight: [250, 204, 21], background_opacity: 0.72 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    /// Run RNNoise (nnnoiseless) on the audio track during export.
+    pub denoise: bool,
+    /// Mute the original audio (for example when a voiceover replaces it).
+    pub mute: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Aspect {
     #[serde(rename = "16:9")]
@@ -176,6 +222,12 @@ pub struct Project {
     pub keys: KeyOverlay,
     pub blur: Vec<BlurBox>,
     pub export: ExportSettings,
+    #[serde(default)]
+    pub captions: Vec<Caption>,
+    #[serde(default)]
+    pub caption_style: CaptionStyle,
+    #[serde(default)]
+    pub audio: AudioSettings,
 }
 
 /// Serializable wrapper so old project files without zoom config still load.
@@ -207,6 +259,9 @@ impl Project {
             keys: KeyOverlay::default(),
             blur: Vec::new(),
             export: ExportSettings::default(),
+            captions: Vec::new(),
+            caption_style: CaptionStyle::default(),
+            audio: AudioSettings::default(),
         }
     }
 
@@ -235,6 +290,43 @@ impl Project {
             acc += len;
         }
         None
+    }
+
+    /// Map source time to output time. None if the moment was cut out.
+    pub fn output_time(&self, src_ms: f64) -> Option<f64> {
+        let mut acc = 0.0;
+        for c in &self.clips {
+            if src_ms >= c.src_start_ms && src_ms < c.src_end_ms {
+                return Some(acc + (src_ms - c.src_start_ms) / c.speed);
+            }
+            acc += c.out_len();
+        }
+        None
+    }
+
+    /// Remove the given source ranges from the clip list (used by auto cut).
+    pub fn cut_ranges(&mut self, ranges: &[(f64, f64)]) {
+        let mut clips = self.clips.clone();
+        for &(a, b) in ranges {
+            let mut next = Vec::new();
+            for c in clips {
+                if b <= c.src_start_ms || a >= c.src_end_ms {
+                    next.push(c);
+                    continue;
+                }
+                if a > c.src_start_ms {
+                    next.push(Clip { src_start_ms: c.src_start_ms, src_end_ms: a, speed: c.speed });
+                }
+                if b < c.src_end_ms {
+                    next.push(Clip { src_start_ms: b, src_end_ms: c.src_end_ms, speed: c.speed });
+                }
+            }
+            clips = next;
+        }
+        clips.retain(|c| c.src_end_ms - c.src_start_ms >= 1.0);
+        if !clips.is_empty() {
+            self.clips = clips;
+        }
     }
 
     /// Trim the source to [start, end] (source ms), keeping existing speeds.
@@ -306,6 +398,23 @@ mod tests {
         assert_eq!(p.source_time(5000.0), Some(7000.0));
         assert_eq!(p.source_time(6000.0), None);
         p.validate().unwrap();
+    }
+
+    #[test]
+    fn cut_ranges_and_output_time() {
+        let mut p = Project::new("a.mp4".into(), None, 100, 100, 10_000.0);
+        p.cut_ranges(&[(1000.0, 2000.0), (5000.0, 6000.0)]);
+        assert_eq!(p.clips.len(), 3);
+        assert_eq!(p.output_duration_ms(), 8000.0);
+        assert_eq!(p.output_time(1500.0), None);
+        assert_eq!(p.output_time(2500.0), Some(1500.0));
+        assert_eq!(p.output_time(6000.0), Some(4000.0));
+        // Old project files without the new fields still load.
+        let mut v: serde_json::Value = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("captions");
+        v.as_object_mut().unwrap().remove("audio");
+        let back: Project = serde_json::from_value(v).unwrap();
+        assert!(back.captions.is_empty());
     }
 
     #[test]

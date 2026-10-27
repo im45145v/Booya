@@ -101,11 +101,19 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
 
     let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-r", &fps.to_string(), "-i", "-"]);
-    let with_audio = s.format == Format::Mp4 && info.has_audio;
+    let with_audio = s.format == Format::Mp4 && info.has_audio && !project.audio.mute;
+    // Noise cleanup writes a cleaned track next to the output and uses it as
+    // the audio input instead of the original.
+    let mut audio_input = project.source.clone();
+    let denoised = out.with_extension("denoised.wav");
+    if with_audio && project.audio.denoise {
+        crate::audio::denoise_file(&project.source, &denoised)?;
+        audio_input = denoised.clone();
+    }
     match s.format {
         Format::Mp4 => {
             if with_audio {
-                cmd.arg("-i").arg(&project.source);
+                cmd.arg("-i").arg(&audio_input);
                 cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
             }
             cmd.args(["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
@@ -139,6 +147,7 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
     }
     drop(stdin);
     let res = enc.wait_with_output()?;
+    let _ = std::fs::remove_file(&denoised);
     if !res.status.success() {
         bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&res.stderr));
     }

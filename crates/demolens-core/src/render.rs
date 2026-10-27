@@ -3,7 +3,7 @@
 //! exporter both call it, so what you see is exactly what you export.
 
 use crate::events::{CursorTrack, EventLog};
-use crate::font;
+use crate::text;
 use crate::project::{Background, BlurBox, Project};
 use crate::zoom::{camera_at, Camera};
 use rayon::prelude::*;
@@ -63,6 +63,12 @@ impl Frame {
             wr.write_image_data(&self.data)?;
         }
         Ok(out)
+    }
+
+    /// Alpha blend one pixel (used by the text renderer).
+    #[inline]
+    pub fn blend_pub(&mut self, x: i64, y: i64, rgb: [f32; 3], a: f32) {
+        self.blend(x, y, rgb, a)
     }
 
     #[inline]
@@ -257,23 +263,6 @@ fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [
     }
 }
 
-fn draw_text(f: &mut Frame, x: f64, y: f64, cell: f64, text: &str, rgb: [f32; 3]) {
-    let mut cx = x;
-    for ch in text.chars() {
-        let g = font::glyph(ch);
-        for (row, bits) in g.iter().enumerate() {
-            for col in 0..5 {
-                if bits & (0x10 >> col) != 0 {
-                    let px = cx + col as f64 * cell;
-                    let py = y + row as f64 * cell;
-                    fill_round_rect(f, px, py, cell, cell, cell * 0.2, rgb, 1.0);
-                }
-            }
-        }
-        cx += 6.0 * cell;
-    }
-}
-
 /// Layout of the recording on the canvas.
 #[derive(Debug, Clone, Copy)]
 pub struct Layout {
@@ -350,6 +339,44 @@ impl Renderer {
             }
         });
         f
+    }
+
+    fn caption_at(&self, src_t: f64) -> Option<&crate::project::Caption> {
+        if !self.project.caption_style.burn_in {
+            return None;
+        }
+        self.project.captions.iter().find(|c| src_t >= c.start_ms && src_t < c.end_ms)
+    }
+
+    fn draw_caption(&self, out: &mut Frame, c: &crate::project::Caption, src_t: f64) {
+        let st = &self.project.caption_style;
+        let short = self.out_w.min(self.out_h) as f64;
+        let px = (st.size * short).max(12.0) as f32;
+        let max_w = self.out_w as f32 * 0.84;
+        let lines = text::wrap(&c.text, px, max_w);
+        let lh = text::line_height(px) * 1.15;
+        let pad = px * 0.5;
+        let block_h = lh * lines.len() as f32 + pad * 2.0;
+        let block_w = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.4;
+        let bx = (self.out_w as f32 - block_w) / 2.0;
+        let by = self.out_h as f32 - block_h - (short as f32 * 0.05);
+        fill_round_rect(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32);
+        // Which word is being spoken now (by index into the caption's words).
+        let active = c.words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
+        let col = st.color.map(|v| v as f32);
+        let hi = st.highlight.map(|v| v as f32);
+        let mut word_idx = 0usize;
+        for (li, line) in lines.iter().enumerate() {
+            let lw = text::measure(line, px);
+            let mut x = (self.out_w as f32 - lw) / 2.0;
+            let y = by + pad + li as f32 * lh;
+            for (wi, word) in line.split(' ').enumerate() {
+                let piece = if wi == 0 { word.to_string() } else { format!(" {word}") };
+                let color = if Some(word_idx) == active { hi } else { col };
+                x = text::draw(out, x, y, px, &piece, color, 1.0);
+                word_idx += 1;
+            }
+        }
     }
 
     pub fn camera(&self, src_t: f64) -> Camera {
@@ -481,18 +508,25 @@ impl Renderer {
                 let fade_in = ((src_t - lab.start_ms) / 120.0).clamp(0.0, 1.0) as f32;
                 let fade_out = ((lab.end_ms - src_t) / 200.0).clamp(0.0, 1.0) as f32;
                 let a = fade_in.min(fade_out);
-                let cell = (short / 190.0).max(2.0).round();
-                let tw = font::text_cells(&text) as f64 * cell;
-                let th = 7.0 * cell;
-                let (padx, pady) = (cell * 4.0, cell * 3.0);
+                let px = (short * 0.034).max(12.0) as f32;
+                let tw = text::measure(&text, px) as f64;
+                let th = text::line_height(px) as f64;
+                let (padx, pady) = (px as f64 * 0.8, px as f64 * 0.45);
                 let bw = tw + padx * 2.0;
                 let bh = th + pady * 2.0;
                 let bx = (self.out_w as f64 - bw) / 2.0;
-                let by = self.out_h as f64 - bh - (short * 0.045).max(pady);
+                // Sit above captions when both are visible.
+                let lift = if self.caption_at(src_t).is_some() { short * 0.16 } else { 0.0 };
+                let by = self.out_h as f64 - bh - (short * 0.045).max(pady) - lift;
                 fill_round_rect(&mut out, bx, by, bw, bh, bh * 0.3, [15.0, 15.0, 18.0], 0.82 * a);
-                if a > 0.5 {
-                    draw_text(&mut out, bx + padx, by + pady, cell, &text, [250.0, 250.0, 250.0]);
-                }
+                text::draw(&mut out, (bx + padx) as f32, (by + pady) as f32, px, &text, [250.0, 250.0, 250.0], a);
+            }
+        }
+
+        // 6. Captions with the current word highlighted.
+        if p.caption_style.burn_in {
+            if let Some(c) = self.caption_at(src_t) {
+                self.draw_caption(&mut out, c, src_t);
             }
         }
         out
