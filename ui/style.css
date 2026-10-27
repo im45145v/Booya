@@ -369,3 +369,9 @@ dialog.wide { width: min(980px, 94vw); }
 .list .item.sel { outline: 1px solid var(--accent); }
 .list .item { cursor: default; }
 #sh-tools { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+
+/* Wallpapers */
+.walls { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: var(--sp-2) 0; }
+.wall { aspect-ratio: 16 / 10; border-radius: 6px; border: 2px solid var(--line); padding: 0; cursor: pointer; }
+.wall:hover { border-color: var(--muted); }
+.wall[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--accent); }

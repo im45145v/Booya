@@ -91,3 +91,33 @@ async function loadKeyTrack() {
   try { tl.keyTrack = project.events ? await invoke('key_track', { project }) : []; } catch { tl.keyTrack = []; }
   tl.draw();
 }
+
+// ---------- Wallpapers ----------
+// Four corner colours each (top left, top right, bottom left, bottom right).
+const WALLPAPERS = [
+  ['Aurora', ['#0f172a', '#14b8a6', '#6366f1', '#a855f7']], ['Sunset', ['#f97316', '#ec4899', '#facc15', '#7c3aed']],
+  ['Ocean', ['#0ea5e9', '#1e3a8a', '#22d3ee', '#4f46e5']], ['Candy', ['#f9a8d4', '#a5b4fc', '#fde68a', '#fb7185']],
+  ['Forest', ['#064e3b', '#65a30d', '#0f766e', '#a3e635']], ['Midnight', ['#020617', '#312e81', '#1e293b', '#6d28d9']],
+  ['Peach', ['#fed7aa', '#fda4af', '#fef3c7', '#f0abfc']], ['Lavender', ['#ddd6fe', '#c4b5fd', '#e0e7ff', '#f5d0fe']],
+  ['Slate', ['#0f172a', '#334155', '#1e293b', '#64748b']], ['Citrus', ['#fde047', '#fb923c', '#a3e635', '#f43f5e']],
+  ['Dusk', ['#1e1b4b', '#be185d', '#4c1d95', '#fb923c']], ['Mint', ['#d1fae5', '#67e8f9', '#a7f3d0', '#a5b4fc']],
+];
+const wallRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+function wallCss(c) {
+  return `radial-gradient(at 0% 0%, ${c[0]}, transparent 65%), radial-gradient(at 100% 0%, ${c[1]}, transparent 65%), radial-gradient(at 0% 100%, ${c[2]}, transparent 65%), radial-gradient(at 100% 100%, ${c[3]}, transparent 65%), ${c[0]}`;
+}
+function markWall() {
+  const b = project && project.style.background, on = b && b.type === 'mesh' ? JSON.stringify(b.colors) : '';
+  document.querySelectorAll('#walls .wall').forEach(el => el.setAttribute('aria-pressed', String(on !== '' && el.dataset.colors === on)));
+}
+(function initWalls() {
+  const box = $('walls');
+  WALLPAPERS.forEach(([name, cols]) => {
+    const rgb = cols.map(wallRgb), b = document.createElement('button');
+    b.className = 'wall'; b.title = name; b.setAttribute('aria-label', 'Wallpaper ' + name); b.dataset.colors = JSON.stringify(rgb);
+    b.style.background = wallCss(cols);
+    b.onclick = () => { if (!project) return; project.style.background = { type: 'mesh', colors: rgb }; setBgType('mesh'); markWall(); refresh(); };
+    box.appendChild(b);
+  });
+  const sp2 = syncPanel; syncPanel = function () { sp2(); markWall(); };
+})();

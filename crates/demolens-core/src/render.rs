@@ -112,6 +112,26 @@ fn sd_round_rect(px: f64, py: f64, cx: f64, cy: f64, hw: f64, hh: f64, r: f64) -
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+/// A soft wallpaper: bilinear blend of four corner colours through a gentle
+/// sine warp, so the colours swirl instead of forming a flat quad.
+fn paint_mesh(mut f: Frame, c: &[[u8; 3]; 4]) -> Frame {
+    let (w, h) = (f.w as usize, f.h as usize);
+    let smooth = |t: f64| t * t * (3.0 - 2.0 * t);
+    f.data.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        let v0 = y as f64 / h.max(1) as f64;
+        for x in 0..w {
+            let u0 = x as f64 / w.max(1) as f64;
+            let u = smooth((u0 + 0.14 * (v0 * 4.4 + 1.0).sin()).clamp(0.0, 1.0));
+            let v = smooth((v0 + 0.14 * (u0 * 4.4).sin()).clamp(0.0, 1.0));
+            let top = lerp3(c[0], c[1], u);
+            let bot = lerp3(c[2], c[3], u);
+            let p = lerp3(top, bot, v);
+            row[x * 4..x * 4 + 4].copy_from_slice(&[p[0], p[1], p[2], 255]);
+        }
+    });
+    f
+}
+
 /// Distance from a point to the segment a-b.
 fn sd_segment(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     let (dx, dy) = (bx - ax, by - ay);
@@ -410,10 +430,13 @@ impl Renderer {
             }
         }
         let mut f = Frame::new(w, h);
+        if let Background::Mesh { colors } = bg {
+            return paint_mesh(f, colors);
+        }
         let (from, to, angle) = match bg {
             Background::Solid { color } => (*color, *color, 0.0),
             Background::Gradient { from, to, angle_deg } => (*from, *to, *angle_deg),
-            Background::Image { .. } => ([24, 24, 27], [24, 24, 27], 0.0),
+            Background::Image { .. } | Background::Mesh { .. } => ([24, 24, 27], [24, 24, 27], 0.0),
         };
         let (dx, dy) = (angle.to_radians().cos(), angle.to_radians().sin());
         // Project corners to find the gradient range.
@@ -1102,5 +1125,28 @@ mod shape_tests {
         let mut s = shape(ShapeKind::Box);
         s.color = "nope".into();
         assert_eq!(s.rgb(), [251.0, 191.0, 36.0]);
+    }
+}
+
+#[cfg(test)]
+mod mesh_tests {
+    use super::*;
+
+    #[test]
+    fn a_mesh_wallpaper_blends_its_four_corners() {
+        let colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+        let f = paint_mesh(Frame::new(200, 120), &colors);
+        let px = |x: usize, y: usize| [f.data[(y * 200 + x) * 4], f.data[(y * 200 + x) * 4 + 1], f.data[(y * 200 + x) * 4 + 2]];
+        assert!(px(1, 1)[0] > 200 && px(1, 1)[2] < 60, "top left is red: {:?}", px(1, 1));
+        assert!(px(198, 118)[0] > 200 && px(198, 118)[1] > 200, "bottom right is yellow: {:?}", px(198, 118));
+        assert_ne!(px(100, 60), px(1, 1));
+    }
+
+    #[test]
+    fn mesh_round_trips_through_json() {
+        let b = Background::Mesh { colors: [[1, 2, 3]; 4] };
+        let s = serde_json::to_string(&b).unwrap();
+        assert!(s.contains("\"type\":\"mesh\""));
+        assert_eq!(serde_json::from_str::<Background>(&s).unwrap(), b);
     }
 }

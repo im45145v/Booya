@@ -12,6 +12,8 @@ pub enum Background {
     /// Linear gradient, `angle_deg` 0 = left to right, 90 = top to bottom.
     Gradient { from: [u8; 3], to: [u8; 3], angle_deg: f64 },
     Image { path: PathBuf },
+    /// A soft four colour wallpaper: top left, top right, bottom left, bottom right.
+    Mesh { colors: [[u8; 3]; 4] },
 }
 
 /// How a background photo fills the frame.

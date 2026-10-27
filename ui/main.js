@@ -112,7 +112,7 @@ function readPanel() {
   const t = $('bg-type').value, s = project.style;
   s.bg_fit = $('bg-fit-seg').dataset.fit || 'fill'; s.bg_dim = +$('bg-dim').value;
   s.background = t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
-    : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : { type: t, path: $('bg-image').value };
+    : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : t === 'mesh' ? s.background : { type: t, path: $('bg-image').value };
   s.padding = +$('padding').value; s.corner_radius = +$('radius').value; s.shadow = +$('shadow').value;
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
@@ -132,7 +132,8 @@ function setBgType(t) {
   $('bg-type').value = t;
   document.querySelectorAll('.seg button[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === t));
   $('bg-to-wrap').hidden = $('bg-angle-wrap').hidden = t !== 'gradient';
-  $('bg-colors').hidden = t === 'image'; $('bg-image-row').hidden = t !== 'image';
+  $('bg-colors').hidden = t === 'image' || t === 'mesh'; $('bg-image-row').hidden = t !== 'image';
+  if (typeof markWall === 'function') markWall();
 }
 document.querySelectorAll('.seg button[data-bg]').forEach(b => (b.onclick = () => { setBgType(b.dataset.bg); if (project) { readPanel(); refresh(); } }));
 function setFit(f) { $('bg-fit-seg').dataset.fit = f; document.querySelectorAll('#bg-fit-seg button').forEach(b => b.setAttribute('aria-checked', b.dataset.fit === f)); }
