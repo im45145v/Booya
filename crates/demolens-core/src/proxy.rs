@@ -203,6 +203,22 @@ mod tests {
         let loud = crate::audio::measure_file(&s.path).unwrap().unwrap().input_i;
         assert!((loud - crate::audio::TARGET_LUFS).abs() < 3.0, "{loud}");
         assert!(build(&dir, &src, |_| {}).unwrap().cached);
+        // Seeking stays cheap: a keyframe at least every 15 frames.
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=flags", "-of", "csv=p=0"])
+            .arg(&s.path)
+            .output();
+        if let Some(o) = probe.ok().filter(|o| o.status.success() && !o.stdout.is_empty()) {
+            let (mut gap, mut worst) = (0, 0);
+            for l in String::from_utf8_lossy(&o.stdout).lines() {
+                if l.starts_with('K') {
+                    worst = worst.max(gap);
+                    gap = 0;
+                }
+                gap += 1;
+            }
+            assert!(worst <= 15, "largest keyframe gap {worst}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

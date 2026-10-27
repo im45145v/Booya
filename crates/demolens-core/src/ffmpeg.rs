@@ -218,7 +218,12 @@ pub fn hwaccel_args() -> Vec<&'static str> {
 fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32, vf: Option<&str>) -> (Option<Frame>, String) {
     let size = format!("{w}x{h}");
     let mut cmd = Command::new(ffmpeg_bin());
-    cmd.args(["-v", "error", "-nostdin"]).args(hwaccel_args()).args(["-ss", &format!("{:.3}", t_ms.max(0.0) / 1000.0), "-i"]).arg(file_url(path)).args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba"]);
+    // One frame from a small proxy decodes faster in software than it takes to
+    // start a VideoToolbox session, and every scrub spawns a fresh ffmpeg, so
+    // hardware decode is only used for the long running readers below.
+    // `DEMOLENS_HWACCEL_FRAMES=1` brings it back for single frames.
+    let hw = if std::env::var("DEMOLENS_HWACCEL_FRAMES").as_deref() == Ok("1") { hwaccel_args() } else { Vec::new() };
+    cmd.args(["-v", "error", "-nostdin"]).args(hw).args(["-ss", &format!("{:.3}", t_ms.max(0.0) / 1000.0), "-i"]).arg(file_url(path)).args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba"]);
     match vf {
         Some(vf) => cmd.args(["-vf", vf]),
         None => cmd.args(["-s", &size]),
