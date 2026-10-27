@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/demolens-core", "crates/demolens-cli"]
-default-members = ["crates/demolens-core", "crates/demolens-cli"]
+members = ["crates/demolens-core", "crates/demolens-cli", "src-tauri"]
+default-members = ["crates/demolens-core", "crates/demolens-cli", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>DemoLens</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <strong>DemoLens</strong>
+  <div class="group">
+    <select id="rec-target">
+      <option value="screen">Full screen</option>
+      <option value="window">Window</option>
+      <option value="area">Area</option>
+    </select>
+    <input id="rec-arg" placeholder="window id or x,y,w,h" />
+    <label><input type="checkbox" id="rec-mic" checked /> Mic</label>
+    <label><input type="checkbox" id="rec-sys" /> System audio</label>
+    <button id="rec-btn" class="primary">Record</button>
+  </div>
+  <div class="group">
+    <input id="open-video" placeholder="/path/to/recording.mkv" />
+    <button id="open-btn">Open video</button>
+    <input id="project-path" placeholder="/path/to/project.demolens.json" />
+    <button id="load-btn">Load</button>
+    <button id="save-btn">Save</button>
+  </div>
+</header>
+
+<main>
+  <section id="stage">
+    <div id="preview-wrap"><img id="preview" alt="preview" /><div id="empty">Record or open a video to start.</div></div>
+    <div id="transport">
+      <button id="play">Play</button>
+      <span id="time">0.0 / 0.0 s</span>
+      <button id="split">Split</button>
+      <button id="del-clip">Delete clip</button>
+      <label>Speed <select id="speed"><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option><option>8</option></select></label>
+      <button id="add-zoom">Add zoom</button>
+      <button id="del-zoom">Delete zoom</button>
+      <label>Zoom <input id="zoom-scale" type="number" min="1" max="4" step="0.1" value="2" /></label>
+      <button id="auto-zoom">Auto zoom</button>
+    </div>
+    <canvas id="timeline" height="120"></canvas>
+  </section>
+
+  <aside id="panel">
+    <h3>Background</h3>
+    <select id="bg-type"><option value="gradient">Gradient</option><option value="solid">Solid</option><option value="image">Image</option></select>
+    <div class="row"><input type="color" id="bg-from" value="#6366f1" /><input type="color" id="bg-to" value="#ec4899" /><input id="bg-angle" type="number" value="35" title="angle" /></div>
+    <input id="bg-image" placeholder="/path/to/wallpaper.jpg" />
+    <h3>Frame</h3>
+    <label>Padding <input id="padding" type="range" min="0" max="0.3" step="0.005" /></label>
+    <label>Corners <input id="radius" type="range" min="0" max="0.06" step="0.002" /></label>
+    <label>Shadow <input id="shadow" type="range" min="0" max="0.1" step="0.002" /></label>
+    <h3>Cursor</h3>
+    <label><input type="checkbox" id="cur-visible" /> Show cursor</label>
+    <label>Size <input id="cur-size" type="range" min="0.5" max="4" step="0.1" /></label>
+    <label>Smoothing <input id="cur-smooth" type="range" min="0" max="300" step="10" /></label>
+    <label><input type="checkbox" id="cur-ripple" /> Click ripples</label>
+    <h3>Keys</h3>
+    <label><input type="checkbox" id="keys-on" /> Keystroke overlay</label>
+    <label><input type="checkbox" id="keys-short" /> Shortcuts only</label>
+    <h3>Blur</h3>
+    <div class="row"><input id="blur-rect" placeholder="x,y,w,h (source px)" /><button id="blur-add">Add</button></div>
+    <div id="blur-list"></div>
+    <h3>Preset</h3>
+    <div class="row"><select id="preset-list"></select><button id="preset-apply">Apply</button></div>
+    <div class="row"><input id="preset-name" placeholder="Product name" /><button id="preset-save">Save</button></div>
+    <h3>Export</h3>
+    <div class="row">
+      <select id="ex-aspect"><option>16:9</option><option>9:16</option><option>1:1</option></select>
+      <select id="ex-quality"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select>
+      <select id="ex-fps"><option>24</option><option selected>30</option><option>60</option></select>
+    </div>
+    <div class="row"><input id="ex-path" placeholder="/path/to/out.mp4 or .gif" /><button id="ex-btn" class="primary">Export</button></div>
+    <progress id="ex-progress" max="1" value="0"></progress>
+    <div id="status"></div>
+  </aside>
+</main>
+<script src="timeline.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
