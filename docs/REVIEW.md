@@ -132,4 +132,11 @@ The engine is good and the AI is a real differentiator, but the app did not look
 
 ## What was built from this review
 
-See the README and `docs/media/before-after/`. Items 1 to 9 of the backlog were built in this round. Items 10 to 15 remain open.
+Built and checked in the app on a virtual X display (screenshots in `docs/media/before-after/`):
+
+- Items 1, 2, 3, 5, 6, 7, 8 and 9: welcome screen with Try the sample, one click Make it demo-ready with a per step report and one undo, recording that falls back to video only when the mic fails, six built in templates, export destinations with progress and Show in folder, the new toolbar / preview / timeline / inspector layout with dark and light themes, the new timeline (ruler, labelled lanes, scrubbing, timeline zoom, move and resize zooms) and keyboard shortcuts with a cheat sheet on `?`.
+- Item 4: `.github/workflows/release.yml` builds installers on Linux, macOS and Windows. A tag `v*` publishes them as a draft release.
+
+Critical bug found while testing: in the old `ui/main.js` every Local AI button handler was nested by mistake inside the preset Save handler, so the AI buttons did nothing until you saved a preset. The rewritten UI fixes it.
+
+Still open: items 10 to 15 (draw blur boxes on the preview, window and area picker, webcam, Wayland, bundled ffmpeg, signed builds). Also: dragging a zoom segment can overlap its neighbour.

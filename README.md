@@ -6,7 +6,29 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 
 ![Demo GIF rendered by DemoLens from the built in sample](docs/media/demo.gif)
 
-![The editor with the Local AI panel](docs/media/editor-ai.png)
+![The editor after one click on Make it demo-ready](docs/media/editor-ai.png)
+
+## Quick start
+
+1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux) and install [ffmpeg](https://ffmpeg.org/download.html).
+2. Open DemoLens and click **Try the sample**, or **Record screen**.
+3. Click **Make it demo-ready**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and cleans the audio. Each step says what it did, and Ctrl+Z undoes all of it.
+4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
+
+Press `?` in the app for all keyboard shortcuts.
+
+## Why DemoLens
+
+| | DemoLens | Screen Studio | Cap | Loom / Tella |
+|---|---|---|---|---|
+| Price | Free, MIT | Paid | Free core, paid cloud | Subscription |
+| Windows, macOS, Linux | All three | macOS only | macOS, Windows | Browser and desktop |
+| AI captions and cuts | Offline, on your machine | No | Cloud | Cloud |
+| Auto blur of API keys, emails, cards | Yes | No | No | No |
+| Scriptable CLI | Yes | No | No | No |
+
+If you record demos of developer tools, your screen is full of tokens, emails and customer data. DemoLens finds and blurs them for you and never uploads a frame.
+
 
 ## Features
 
@@ -18,8 +40,9 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 - **Styling**: gradient, solid or image background, padding, rounded corners and a soft shadow.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: hide private data with manual blur regions that move correctly with the zoom.
-- **Product presets**: save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
-- **Editor comforts**: undo and redo (Ctrl+Z, Ctrl+Shift+Z), native Open / Save / Export dialogs, Ctrl+S and Ctrl+O. Opening a video also loads the event log next to it.
+- **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
+- **Make it demo-ready**: one button (or `D`, or `demolens ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
+- **Editor comforts**: dark and light themes, undo and redo, a timeline you can zoom and scrub, draggable zoom segments, keyboard shortcuts for everything (press `?`). Opening a video also loads the event log next to it.
 - **Local AI** (optional, offline, see below): captions, auto cut of filler words and long pauses, auto blur of emails, API keys and card numbers, and written docs (title, chapters, step by step guide, social post).
 - **Audio cleanup**: background noise removal and mute.
 - **Export**: MP4 (H.264 + AAC) or GIF (palette optimised), 720p to 4K, in 16:9, 9:16 or 1:1.
@@ -191,6 +214,7 @@ demolens autocut demo.json --pause 0.7
 demolens redact demo.json
 demolens docs demo.json -o docs/                 # --no-llm for the rule based writer
 demolens audio demo.json --denoise
+demolens ready demo.json                         # all of the above in one go
 demolens sample samples --speech                 # sample with espeak-ng narration and fake secrets
 ```
 
@@ -198,8 +222,10 @@ Run the tests with `cargo test -p demolens-core -p demolens-ai`.
 
 ## Roadmap
 
-Done: local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
+Done: one click demo-ready, templates, new editor layout and timeline, shortcuts, installers for all OSes, local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
 
+- Draw blur boxes on the preview, and a visual window and area picker.
+- Bundled ffmpeg and signed builds.
 - Wayland capture through the PipeWire portal (Wayland is not supported yet; use an X11 session).
 - Webcam overlay (corner bubble, shape and size per preset).
 - Local AI voiceover with Piper, to replace or fix narration.
