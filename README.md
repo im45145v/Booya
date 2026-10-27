@@ -188,7 +188,7 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area, window (by id or title, CLI). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission; keys are not logged) |
+| macOS (12.3+) | ScreenCaptureKit: screen, area, window (by id or title, CLI). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in, class-only poller that needs Input Monitoring (0.3.0, not yet tested on a real Mac) |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
 
 Native GPU capture on Windows (Windows.Graphics.Capture) and system audio on macOS are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.

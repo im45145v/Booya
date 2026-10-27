@@ -10,7 +10,9 @@
 //!   global keyboard hook (rdev) runs in a short lived child process
 //!   (`<exe> --demolens-keyhook`) that classifies keys before they leave it,
 //!   and is killed when recording stops or pauses, so no hook outlives a
-//!   recording. macOS does not log keys.
+//!   recording. macOS has no hook at all: a poller reads the key state
+//!   through CoreGraphics (needs Input Monitoring, nothing else), and only
+//!   while recording with key logging on.
 
 use crate::capture::Region;
 use crate::events::Event;
@@ -77,6 +79,8 @@ pub struct InputLogger {
     keys: KeyLogging,
     hook: Option<std::process::Child>,
     poller: Option<std::thread::JoinHandle<()>>,
+    /// macOS key state poller: a stop flag and its thread.
+    keypoll: Option<(Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>)>,
 }
 
 /// What the logger saw, in ms since the epoch.
@@ -90,7 +94,7 @@ impl InputLogger {
     pub fn start(region: Region, keys: KeyLogging) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new() }));
         let poller = poll::spawn(shared.clone(), region);
-        let mut me = Self { shared, keys, hook: None, poller };
+        let mut me = Self { shared, keys, hook: None, poller, keypoll: None };
         me.start_hook();
         Ok(me)
     }
@@ -102,6 +106,7 @@ impl InputLogger {
             keys: KeyLogging::Off,
             hook: None,
             poller: None,
+            keypoll: None,
         }
     }
 
@@ -113,6 +118,10 @@ impl InputLogger {
         {
             self.hook = keyhook::spawn(self.shared.clone());
         }
+        #[cfg(target_os = "macos")]
+        {
+            self.keypoll = mac_keys::spawn(self.shared.clone());
+        }
     }
 
     fn stop_hook(&mut self) {
@@ -120,11 +129,15 @@ impl InputLogger {
             let _ = c.kill();
             let _ = c.wait();
         }
+        if let Some((stop, h)) = self.keypoll.take() {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = h.join();
+        }
     }
 
     /// Is the keyboard hook process running right now?
     pub fn hook_running(&mut self) -> bool {
-        self.hook.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+        self.keypoll.as_ref().is_some_and(|(_, h)| !h.is_finished()) || self.hook.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
     }
 
     pub fn set_epoch(&self, t: Instant) {
@@ -456,7 +469,7 @@ mod poll {
 }
 
 /// macOS pointer access through CoreGraphics. Needs no Accessibility or
-/// Input Monitoring permission. Keys are not logged on macOS.
+/// Input Monitoring permission. Key state is polled here too, see `mac_keys`.
 #[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::c_void;
@@ -485,6 +498,10 @@ mod mac {
         fn CGEventCreate(source: *const c_void) -> *mut c_void;
         fn CGEventGetLocation(event: *const c_void) -> CGPoint;
         fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+        fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+        fn CGEventSourceFlagsState(state: i32) -> u64;
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
         fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(display: u32) -> CGRect;
         fn CGDisplayCopyDisplayMode(display: u32) -> *mut c_void;
@@ -523,9 +540,111 @@ mod mac {
         }
     }
 
+    /// Is the key with this virtual key code held right now?
+    pub fn key_down(code: u16) -> bool {
+        unsafe { CGEventSourceKeyState(0, code) }
+    }
+
+    /// Modifier flags of the combined session state.
+    pub fn flags() -> u64 {
+        unsafe { CGEventSourceFlagsState(0) }
+    }
+
+    /// Whether Input Monitoring is granted. Without it key state reads as "up".
+    pub fn input_monitoring(prompt: bool) -> bool {
+        unsafe {
+            if CGPreflightListenEventAccess() {
+                return true;
+            }
+            if prompt {
+                CGRequestListenEventAccess();
+            }
+            false
+        }
+    }
+
     pub fn buttons() -> [bool; 3] {
         // 0 = combined session state; buttons 0, 1, 2 = left, right, middle.
         [0u32, 1, 2].map(|i| unsafe { CGEventSourceButtonState(0, i) })
+    }
+}
+
+/// US layout names for macOS virtual key codes. Names only, never what the
+/// user typed with another layout, and no call into the text input services
+/// (they are what made the old hook crash). Modifier keys have no entry.
+pub mod mackeys {
+    pub fn name(code: u16) -> Option<&'static str> {
+        Some(match code {
+            0 => "a", 1 => "s", 2 => "d", 3 => "f", 4 => "h", 5 => "g", 6 => "z", 7 => "x", 8 => "c", 9 => "v",
+            11 => "b", 12 => "q", 13 => "w", 14 => "e", 15 => "r", 16 => "y", 17 => "t",
+            18 => "1", 19 => "2", 20 => "3", 21 => "4", 22 => "6", 23 => "5", 24 => "=", 25 => "9", 26 => "7",
+            27 => "-", 28 => "8", 29 => "0", 30 => "]", 31 => "o", 32 => "u", 33 => "[", 34 => "i", 35 => "p",
+            36 | 76 => "Enter", 37 => "l", 38 => "j", 39 => "'", 40 => "k", 41 => ";", 42 => "\\", 43 => ",", 44 => "/",
+            45 => "n", 46 => "m", 47 => ".", 48 => "Tab", 49 => "Space", 50 => "`", 51 => "Backspace", 53 => "Esc",
+            117 => "Delete", 123 => "Left", 124 => "Right", 125 => "Down", 126 => "Up",
+            122 => "F1", 120 => "F2", 99 => "F3", 118 => "F4", 96 => "F5", 97 => "F6", 98 => "F7", 100 => "F8",
+            101 => "F9", 109 => "F10", 103 => "F11", 111 => "F12",
+            _ => return None,
+        })
+    }
+
+    /// Modifier names from CoreGraphics event flags.
+    pub fn modifiers(flags: u64) -> Vec<String> {
+        let mut m = Vec::new();
+        for (bit, n) in [(0x40000u64, "Ctrl"), (0x80000, "Alt"), (0x100000, "Meta"), (0x20000, "Shift")] {
+            if flags & bit != 0 {
+                m.push(n.to_string());
+            }
+        }
+        m
+    }
+
+    /// Codes worth polling.
+    pub const CODES: [u16; 62] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+        46, 47, 48, 49, 50, 51, 53, 76, 117, 123, 124, 125, 126, 122, 120, 99, 118,
+    ];
+}
+
+/// Polls the key state on macOS. Only runs while key logging is on and
+/// recording is active; it records key *classes* (see [`classify`]).
+#[cfg(target_os = "macos")]
+mod mac_keys {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)> {
+        if !mac::input_monitoring(true) {
+            eprintln!("demolens: Input Monitoring is not granted, so typing and shortcuts are not logged (System Settings > Privacy & Security > Input Monitoring)");
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        // F5 to F12 are added here so the base table stays one sorted list.
+        let mut codes: Vec<u16> = mackeys::CODES.to_vec();
+        codes.extend([96u16, 97, 98, 100, 101, 109, 103, 111]);
+        let h = std::thread::spawn(move || {
+            let mut down = std::collections::HashSet::<u16>::new();
+            while !flag.load(Ordering::SeqCst) {
+                if !shared.lock().unwrap().active {
+                    break;
+                }
+                let now = Instant::now();
+                let mods = mackeys::modifiers(mac::flags());
+                for &c in &codes {
+                    let d = mac::key_down(c);
+                    if d && down.insert(c) {
+                        if let Some(n) = mackeys::name(c) {
+                            let key = classify(n, &mods);
+                            shared.lock().unwrap().push(now, crate::events::EventKind::Key { key, modifiers: mods.clone() });
+                        }
+                    } else if !d {
+                        down.remove(&c);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(12));
+            }
+        });
+        Some((stop, h))
     }
 }
 
@@ -533,6 +652,21 @@ mod mac {
 mod tests {
     use super::{classify, KeyLogging};
     use crate::events::PRINTABLE;
+    #[test]
+    fn mac_key_codes_map_to_names_and_modifiers() {
+        use super::mackeys;
+        assert_eq!(mackeys::name(0), Some("a"));
+        assert_eq!(mackeys::name(36), Some("Enter"));
+        assert_eq!(mackeys::name(55), None, "modifier keys are read from flags, not codes");
+        assert_eq!(mackeys::modifiers(0x100000 | 0x20000), vec!["Meta".to_string(), "Shift".to_string()]);
+        // Cmd+S is a shortcut, plain s is just "typing".
+        assert_eq!(classify("s", &mackeys::modifiers(0x100000)), "S");
+        assert_eq!(classify("s", &[]), PRINTABLE);
+        for c in mackeys::CODES {
+            assert!(mackeys::name(c).is_some(), "code {c} has no name");
+        }
+    }
+
     #[test]
     fn keys_are_classified_never_stored_as_characters() {
         assert_eq!(classify("p", &[]), PRINTABLE);
