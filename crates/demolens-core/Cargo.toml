@@ -37,4 +37,4 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_Inpu
 # recent macOS releases. The crate builds a small Swift bridge, so the macOS
 # build needs Xcode (the macos runners and any Mac with Xcode tools have it).
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = "11"
+screencapturekit = { version = "11", features = ["macos_14_0"] }
