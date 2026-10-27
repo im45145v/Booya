@@ -36,6 +36,16 @@ struct AppState {
     /// write files only write to these paths, so a compromised web view
     /// cannot write anywhere it likes.
     granted: Mutex<HashSet<PathBuf>>,
+    /// Microphone level meter (before and during a recording).
+    meter: Mutex<Option<demolens_core::capture::mics::MicMeter>>,
+    /// Sources a proxy is being built for right now.
+    proxying: Mutex<HashSet<String>>,
+    /// Set to abort the 3-2-1 countdown.
+    cancel_countdown: std::sync::atomic::AtomicBool,
+}
+
+fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir().join("demolens-cache"))
 }
 
 fn grant(app: &tauri::AppHandle, p: &Path) {
@@ -147,12 +157,17 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
                 r
             }
         };
-        let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
+        // Never ask for a frame past the last one; the decoder would fail there.
+        let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms).min((project.duration_ms - 40.0).max(0.0));
         let (dw, dh) = r.decode_size();
+        // The editor decodes the 720p proxy when it is ready and big enough.
+        let decode_path = demolens_core::proxy::existing(&cache_dir(&app), &project.source)
+            .filter(|_| demolens_core::proxy::fits(demolens_core::proxy::proxy_size(project.source_width, project.source_height), (dw, dh)))
+            .unwrap_or_else(|| project.source.clone());
         let src = {
             let mut dec = state.decoder.lock().unwrap();
-            if !dec.as_ref().is_some_and(|d| d.matches(&project.source, dw, dh)) {
-                *dec = Some(demolens_core::ffmpeg::PreviewDecoder::new(&project.source, dw, dh));
+            if !dec.as_ref().is_some_and(|d| d.matches(&decode_path, dw, dh)) {
+                *dec = Some(demolens_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh));
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
@@ -213,7 +228,16 @@ fn apply_preset(name: String, mut project: Project) -> R<Project> {
 // Recording commands are async and do their work on a blocking thread, so a
 // slow or stuck ffmpeg can never freeze the window.
 #[tauri::command]
-async fn start_recording(app: tauri::AppHandle, target: CaptureTarget, mic: bool, system_audio: bool, keys: Option<demolens_core::input::KeyLogging>, webcam: Option<bool>) -> R<Vec<String>> {
+async fn start_recording(
+    app: tauri::AppHandle,
+    target: CaptureTarget,
+    mic: bool,
+    system_audio: bool,
+    keys: Option<demolens_core::input::KeyLogging>,
+    webcam: Option<bool>,
+    mic_device: Option<String>,
+    countdown: Option<u32>,
+) -> R<Vec<String>> {
     let keys = keys.unwrap_or_default();
     let webcam = webcam.unwrap_or(false);
     {
@@ -224,13 +248,29 @@ async fn start_recording(app: tauri::AppHandle, target: CaptureTarget, mic: bool
             Some(RecSlot::Running(_)) => return Err("Already recording".into()),
             None => *slot = Some(RecSlot::Starting),
         }
+        state.cancel_countdown.store(false, std::sync::atomic::Ordering::SeqCst);
     }
-    // Recordings go to Videos/DemoLens/<timestamp>, not the app's working
-    // directory (which is read only inside a macOS app bundle).
-    let base = app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("DemoLens");
+    let fail_reset = |app: &tauri::AppHandle| {
+        *app.state::<AppState>().recording.lock().unwrap() = None;
+    };
+    // A 3-2-1 countdown on screen, so there is time to switch to the thing
+    // being recorded. Clicking the number cancels it.
+    let secs = countdown.unwrap_or(0).min(10);
+    if secs > 0 {
+        let a2 = app.clone();
+        let cancelled = blocking(move || Ok(run_countdown(&a2, secs))).await.unwrap_or(true);
+        if cancelled {
+            fail_reset(&app);
+            return Err("Recording cancelled".into());
+        }
+    }
+    // Recordings go to Videos/DemoLens/<timestamp>. The folder is only
+    // created once capture really starts (see capture::start).
+    let base = recordings_dir(&app)?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let out_dir = base.join(format!("recording-{stamp}"));
-    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam }).map_err(e)).await;
+    let mic_device = mic_device.filter(|m| !m.is_empty());
+    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device }).map_err(e)).await;
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().unwrap();
     match res {
@@ -239,6 +279,10 @@ async fn start_recording(app: tauri::AppHandle, target: CaptureTarget, mic: bool
             *slot = Some(RecSlot::Running(s));
             drop(slot);
             show_indicator(&app);
+            // Get the editor out of the picture while recording.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.minimize();
+            }
             Ok(warnings)
         }
         Err(err) => {
@@ -246,6 +290,95 @@ async fn start_recording(app: tauri::AppHandle, target: CaptureTarget, mic: bool
             Err(err)
         }
     }
+}
+
+/// Show the countdown window and wait. True when the user cancelled.
+fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
+    use std::sync::atomic::Ordering;
+    let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()))
+        .title("DemoLens countdown")
+        .inner_size(200.0, 200.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .center()
+        .content_protected(true)
+        .build();
+    let Ok(w) = w else { return false };
+    let state = app.state::<AppState>();
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(secs as u64 * 1000 + 150);
+    let mut cancelled = false;
+    while std::time::Instant::now() < end {
+        if state.cancel_countdown.load(Ordering::SeqCst) {
+            cancelled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = w.close();
+    // Let the window actually disappear before the first frame is captured.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    cancelled
+}
+
+#[tauri::command]
+fn cancel_countdown(app: tauri::AppHandle) {
+    app.state::<AppState>().cancel_countdown.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// State for the recording badge: whether recording, paused, and time.
+#[tauri::command]
+fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    let slot = state.recording.lock().unwrap();
+    match &*slot {
+        Some(RecSlot::Running(s)) => serde_json::json!({
+            "recording": true, "paused": s.is_paused(),
+            "elapsed_ms": s.elapsed().as_millis() as u64, "paused_ms": s.paused().as_millis() as u64,
+        }),
+        Some(RecSlot::Starting) => serde_json::json!({ "recording": false, "starting": true }),
+        None => serde_json::json!({ "recording": false }),
+    }
+}
+
+/// The badge's Stop button: bring the editor back and let it run the same
+/// stop flow as its own Stop button.
+#[tauri::command]
+fn request_stop(app: tauri::AppHandle) {
+    restore_main(&app);
+    let _ = app.emit("rec-stop-request", ());
+}
+
+fn restore_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Stop and throw the recording away.
+#[tauri::command]
+async fn discard_recording(app: tauri::AppHandle) -> R<()> {
+    let s = {
+        let state = app.state::<AppState>();
+        let mut slot = state.recording.lock().unwrap();
+        match slot.take() {
+            Some(RecSlot::Running(s)) => s,
+            other => {
+                *slot = other;
+                return Err("Not recording".into());
+            }
+        }
+    };
+    hide_indicator(&app);
+    restore_main(&app);
+    let r = blocking(move || s.discard().map_err(e)).await;
+    let _ = app.emit("rec-discarded", ());
+    r
 }
 
 #[tauri::command]
@@ -262,8 +395,16 @@ async fn stop_recording(app: tauri::AppHandle) -> R<Project> {
         }
     };
     hide_indicator(&app);
+    restore_main(&app);
+    let app2 = app.clone();
     blocking(move || {
         let rec = s.stop().map_err(e)?;
+        // The 720p editing proxy is built in the background while the editor opens.
+        let src = rec.video.clone();
+        let a3 = app2.clone();
+        std::thread::spawn(move || {
+            let _ = build_proxy(&a3, &src);
+        });
         new_project(&rec.video, Some(&rec.events)).map_err(e)
     })
     .await
@@ -307,27 +448,38 @@ fn pause_recording(app: tauri::AppHandle, paused: Option<bool>) -> R<bool> {
     Ok(want)
 }
 
-/// A small always on top "recording" badge. It is content protected, so
-/// macOS and Windows leave it out of the recording.
+/// The recording pill: always on top, draggable, left out of the recording
+/// (content protected), frosted on macOS. It sits at the top centre of the
+/// screen with the cursor on it.
 fn show_indicator(app: &tauri::AppHandle) {
     if app.get_webview_window("indicator").is_some() {
         return;
     }
     let w = tauri::WebviewWindowBuilder::new(app, "indicator", tauri::WebviewUrl::App("indicator.html".into()))
         .title("DemoLens is recording")
-        .inner_size(230.0, 44.0)
+        .inner_size(344.0, 52.0)
         .resizable(false)
         .decorations(false)
+        .transparent(true)
+        .shadow(false)
         .always_on_top(true)
+        .visible_on_all_workspaces(true)
         .skip_taskbar(true)
         .focused(false)
         .content_protected(true)
         .build();
     if let Ok(w) = w {
-        if let Ok(Some(m)) = w.current_monitor() {
+        #[cfg(target_os = "macos")]
+        {
+            use tauri::window::{Effect, EffectState, EffectsBuilder};
+            let _ = w.set_effects(EffectsBuilder::new().effect(Effect::HudWindow).state(EffectState::Active).radius(26.0).build());
+        }
+        if let Ok(Some(m)) = w.current_monitor().or_else(|_| w.primary_monitor()) {
             let sz = m.size();
             let sf = m.scale_factor();
-            let _ = w.set_position(tauri::PhysicalPosition::new(sz.width as i32 - (250.0 * sf) as i32, (16.0 * sf) as i32));
+            let x = m.position().x + ((sz.width as f64 - 344.0 * sf) / 2.0) as i32;
+            let y = m.position().y + (18.0 * sf) as i32;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
     }
 }
@@ -831,26 +983,298 @@ fn ffmpeg_status() -> serde_json::Value {
     })
 }
 
+
+// ---------- Editing proxy ----------
+
+/// Build (or find) the 720p proxy for `src`, telling the UI how far along it is.
+fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<demolens_core::proxy::ProxyStats> {
+    let key = src.to_string_lossy().to_string();
+    {
+        let st = app.state::<AppState>();
+        if !st.proxying.lock().unwrap().insert(key.clone()) {
+            return Err("A proxy is already being built for this video".into());
+        }
+    }
+    let a2 = app.clone();
+    let k2 = key.clone();
+    let r = demolens_core::proxy::build(&cache_dir(app), src, move |p| {
+        let _ = a2.emit("proxy-progress", serde_json::json!({ "source": k2, "progress": p, "done": false }));
+    });
+    app.state::<AppState>().proxying.lock().unwrap().remove(&key);
+    match &r {
+        Ok(st) => {
+            let _ = app.emit("proxy-progress", serde_json::json!({ "source": key, "progress": 1.0, "done": true, "path": st.path, "seconds": st.seconds, "encoder": st.encoder }));
+        }
+        Err(err) => {
+            let _ = app.emit("proxy-progress", serde_json::json!({ "source": key, "progress": 0.0, "done": true, "error": format!("{err:#}") }));
+        }
+    }
+    r.map_err(e)
+}
+
+/// Make sure the editing proxy exists for a video (runs in the background).
+#[tauri::command]
+async fn proxy_ensure(app: tauri::AppHandle, source: String) -> R<serde_json::Value> {
+    let src = PathBuf::from(source);
+    blocking(move || {
+        let st = build_proxy(&app, &src)?;
+        Ok(serde_json::json!({ "path": st.path, "seconds": st.seconds, "encoder": st.encoder, "cached": st.cached, "width": st.width, "height": st.height }))
+    })
+    .await
+}
+
+/// Path of the finished proxy, if there is one. The editor plays its audio.
+#[tauri::command]
+fn proxy_path(app: tauri::AppHandle, source: String) -> Option<String> {
+    demolens_core::proxy::existing(&cache_dir(&app), &PathBuf::from(source)).map(|p| p.to_string_lossy().to_string())
+}
+
+// ---------- Microphone ----------
+
+#[tauri::command]
+async fn mic_list() -> R<Vec<String>> {
+    blocking(|| Ok(demolens_core::capture::mics::list_mics())).await
+}
+
+/// Start the level meter on a microphone (None = the default one). Levels
+/// arrive as `mic-level` events about ten times a second.
+#[tauri::command]
+async fn mic_meter_start(app: tauri::AppHandle, device: Option<String>) -> R<()> {
+    let a2 = app.clone();
+    blocking(move || {
+        let state = a2.state::<AppState>();
+        if let Some(mut m) = state.meter.lock().unwrap().take() {
+            m.stop();
+        }
+        let a3 = a2.clone();
+        let device = device.filter(|d| !d.is_empty());
+        let m = demolens_core::capture::mics::MicMeter::start(device.as_deref(), move |rms, peak| {
+            let _ = a3.emit("mic-level", serde_json::json!({ "rms": rms, "peak": peak }));
+        })
+        .map_err(e)?;
+        *state.meter.lock().unwrap() = Some(m);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+fn mic_meter_stop(app: tauri::AppHandle) {
+    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
+        m.stop();
+    }
+}
+
+// ---------- Storage ----------
+
+#[tauri::command]
+async fn storage_report(app: tauri::AppHandle) -> R<demolens_core::storage::StorageReport> {
+    let root = recordings_dir(&app)?;
+    let cache = cache_dir(&app);
+    blocking(move || Ok(demolens_core::storage::scan(&root, Some(&cache)))).await
+}
+
+/// Delete the given recording folders (the UI asked the user first). Each one
+/// is checked again here: it must be a real `recording-*` folder inside the
+/// recordings folder.
+#[tauri::command]
+async fn storage_delete(app: tauri::AppHandle, paths: Vec<String>) -> R<serde_json::Value> {
+    let root = recordings_dir(&app)?;
+    blocking(move || {
+        let (mut n, mut bytes, mut failed) = (0u32, 0u64, Vec::new());
+        for p in paths {
+            match demolens_core::storage::delete_recording(&root, &PathBuf::from(&p)) {
+                Ok(b) => {
+                    n += 1;
+                    bytes += b;
+                }
+                Err(err) => failed.push(format!("{}: {err:#}", p)),
+            }
+        }
+        Ok(serde_json::json!({ "deleted": n, "bytes": bytes, "failed": failed }))
+    })
+    .await
+}
+
+/// Remove cached editing proxies (they are rebuilt when needed).
+#[tauri::command]
+fn storage_clear_proxies(app: tauri::AppHandle) -> u64 {
+    demolens_core::proxy::prune(&cache_dir(&app), 0)
+}
+
+// ---------- AI status ----------
+
+fn cloud_provider_name(t: Task) -> Option<String> {
+    cloud_key_for(t).ok().flatten().map(|(_, p, _)| p.info().name.to_string())
+}
+
+#[tauri::command]
+fn ai_status() -> serde_json::Value {
+    serde_json::json!({
+        "features": demolens_ai::status::features(&cloud_provider_name),
+        "recommended_missing": demolens_ai::status::missing_recommended(),
+        "models_dir": models::models_dir(),
+    })
+}
+
+#[tauri::command]
+async fn ai_self_test(id: String) -> R<demolens_ai::status::TestResult> {
+    blocking(move || Ok(demolens_ai::status::self_test(&id))).await
+}
+
+/// Download every recommended model that is missing, one after the other.
+/// Progress arrives as `ai-progress` events with the task `download:all`.
+#[tauri::command]
+async fn models_download_recommended(app: tauri::AppHandle) -> R<usize> {
+    blocking(move || {
+        let todo = demolens_ai::status::missing_recommended();
+        let total: u64 = todo.iter().map(|m| m.size).sum::<u64>().max(1);
+        let mut done_before = 0u64;
+        let mut n = 0;
+        for m in &todo {
+            let base = done_before;
+            let id = m.id;
+            let title = m.title;
+            models::download(id, |d, _t| {
+                let all = (base + d) as f64 / total as f64;
+                progress(&app, "download:all", all.min(1.0), &format!("{title} ({} of {})", models::human(base + d), models::human(total)));
+            })
+            .map_err(|err| format!("{title}: {err:#}"))?;
+            done_before += m.size;
+            n += 1;
+        }
+        progress(&app, "download:all", 1.0, "Done");
+        Ok(n)
+    })
+    .await
+}
+
+// ---------- Menu (macOS) ----------
+
+#[cfg(target_os = "macos")]
+fn build_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let item = |id: &str, text: &str, acc: Option<&str>| -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
+        let mut b = MenuItemBuilder::with_id(id, text);
+        if let Some(a) = acc {
+            b = b.accelerator(a);
+        }
+        b.build(app)
+    };
+    let settings = item("settings", "Settings...", Some("Cmd+,"))?;
+    let app_menu = SubmenuBuilder::new(app, "DemoLens")
+        .about(None)
+        .separator()
+        .item(&settings)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&item("open", "Open...", Some("Cmd+O"))?)
+        .item(&item("save", "Save", Some("Cmd+S"))?)
+        .item(&item("save-as", "Save As...", Some("Shift+Cmd+S"))?)
+        .separator()
+        .item(&item("export", "Export...", Some("Cmd+E"))?)
+        .separator()
+        .close_window()
+        .build()?;
+    // Undo and Redo are DemoLens commands (the web view routes them to a text
+    // field when one has focus), so the standard Cmd+Z actually works.
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&item("undo", "Undo", Some("Cmd+Z"))?)
+        .item(&item("redo", "Redo", Some("Shift+Cmd+Z"))?)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let rec = SubmenuBuilder::new(app, "Record")
+        .item(&item("record", "Start or Stop Recording  (Shift+Cmd+R)", None)?)
+        .item(&item("pause", "Pause or Resume  (Shift+Cmd+P)", None)?)
+        .build()?;
+    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().fullscreen().build()?;
+    let help = SubmenuBuilder::new(app, "Help").item(&item("shortcuts", "Keyboard Shortcuts", Some("Cmd+/"))?).item(&item("ai-status", "AI Status", None)?).build()?;
+    let menu = MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&rec).item(&window).item(&help).build()?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+static SHORTCUT_FAILURES: Mutex<String> = Mutex::new(String::new());
+
+/// Global shortcuts that could not be registered (empty when all work).
+#[tauri::command]
+fn shortcut_status() -> String {
+    SHORTCUT_FAILURES.lock().unwrap().clone()
+}
+
+/// When idle, the global record shortcut brings the editor forward so the
+/// choices are visible. While recording the editor is minimised on purpose.
+fn restore_main_if_idle(app: &tauri::AppHandle) {
+    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+    if recording {
+        restore_main(app);
+    }
+}
+
 fn main() {
     demolens_core::input::run_keyhook_if_requested();
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-    let pause_key = Shortcut::new(Some(Modifiers::SHIFT | if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL }), Code::KeyP);
+    // Cmd on macOS, Ctrl elsewhere.
+    let cmd = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
+    let pause_key = Shortcut::new(Some(Modifiers::SHIFT | cmd), Code::KeyP);
+    let record_key = Shortcut::new(Some(Modifiers::SHIFT | cmd), Code::KeyR);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, sc, ev| {
-                    if *sc == pause_key && ev.state() == ShortcutState::Pressed {
+                    if ev.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if *sc == pause_key {
                         let _ = pause_recording(app.clone(), None);
+                    } else if *sc == record_key {
+                        // The editor owns the choices (screen, mic, ...), so it starts or stops.
+                        restore_main_if_idle(app);
+                        let _ = app.emit("global-record", ());
                     }
                 })
                 .build(),
         )
-        .setup(move |app| {
-            // Ctrl/Cmd+Shift+P pauses input capture from any app.
-            if let Err(err) = app.global_shortcut().register(pause_key) {
-                eprintln!("pause shortcut unavailable: {err}");
+        .on_menu_event(|app, event| {
+            let id = event.id().0.clone();
+            match id.as_str() {
+                "pause" => {
+                    let _ = pause_recording(app.clone(), None);
+                }
+                "record" => {
+                    let _ = app.emit("global-record", ());
+                }
+                _ => {
+                    let _ = app.emit("menu", id);
+                }
             }
+        })
+        .setup(move |app| {
+            // Cmd/Ctrl+Shift+P pauses and Cmd/Ctrl+Shift+R starts or stops from any app.
+            // A failure (another app owns the key) is shown in the editor.
+            let mut failed = Vec::new();
+            for (sc, name) in [(pause_key, "pause"), (record_key, "record")] {
+                if let Err(err) = app.global_shortcut().register(sc) {
+                    eprintln!("{name} shortcut unavailable: {err}");
+                    failed.push(name);
+                }
+            }
+            *SHORTCUT_FAILURES.lock().unwrap() = failed.join(",");
+            #[cfg(target_os = "macos")]
+            build_menu(app)?;
             let removed = apply_retention(app.handle());
             if removed > 0 {
                 eprintln!("retention: removed {removed} old recordings");
@@ -871,6 +1295,22 @@ fn main() {
             apply_preset,
             start_recording,
             stop_recording,
+            cancel_countdown,
+            rec_status,
+            request_stop,
+            discard_recording,
+            proxy_ensure,
+            proxy_path,
+            mic_list,
+            mic_meter_start,
+            mic_meter_stop,
+            storage_report,
+            storage_delete,
+            storage_clear_proxies,
+            ai_status,
+            ai_self_test,
+            models_download_recommended,
+            shortcut_status,
             models_list,
             model_download,
             model_delete,

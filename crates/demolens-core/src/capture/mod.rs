@@ -443,6 +443,30 @@ impl RecordingSession {
         self.started.elapsed()
     }
 
+    /// Time spent paused so far.
+    pub fn paused(&self) -> Duration {
+        self.logger.paused_total()
+    }
+
+    /// Stop and throw the recording away: the folder is deleted if this
+    /// recording created it (never a folder that already existed).
+    pub fn discard(mut self) -> Result<()> {
+        let fed = self.feed.take().is_some();
+        finish(&mut self.child, fed);
+        if let Some(c) = self.webcam.as_mut() {
+            finish(c, false);
+        }
+        let _ = std::mem::replace(&mut self.logger, InputLogger::idle()).stop();
+        if self.created {
+            std::fs::remove_dir_all(&self.dir)?;
+        } else {
+            for f in [&self.video, &self.events] {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+        Ok(())
+    }
+
     pub fn stop(mut self) -> Result<Recording> {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.

@@ -21,7 +21,7 @@
     "security": {
       "csp": {
         "default-src": "'self' ipc: http://ipc.localhost",
-        "img-src": "'self' asset: data: blob:",
+        "img-src": "'self' asset: http://asset.localhost data: blob:",
         "style-src": "'self' 'unsafe-inline'",
         "script-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost",
@@ -29,10 +29,21 @@
         "object-src": "'none'",
         "base-uri": "'none'",
         "frame-src": "'none'",
-        "form-action": "'none'"
+        "form-action": "'none'",
+        "media-src": "'self' asset: http://asset.localhost blob:"
       },
-      "freezePrototype": true
-    }
+      "freezePrototype": true,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPCACHE/**",
+          "$APPCACHE/proxies/**",
+          "$CACHE/**",
+          "$VIDEO/DemoLens/**"
+        ]
+      }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

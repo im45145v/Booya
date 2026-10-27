@@ -156,6 +156,13 @@ impl InputLogger {
         self.shared.lock().unwrap().paused_at.is_some()
     }
 
+    /// Total time spent paused so far (finished pauses plus the current one).
+    pub fn paused_total(&self) -> std::time::Duration {
+        let s = self.shared.lock().unwrap();
+        let done: std::time::Duration = s.pauses.iter().map(|(a, b)| b.saturating_duration_since(*a)).sum();
+        done + s.paused_at.map(|a| a.elapsed()).unwrap_or_default()
+    }
+
     pub fn stop(mut self) -> Logged {
         self.stop_hook();
         let mut s = self.shared.lock().unwrap();
