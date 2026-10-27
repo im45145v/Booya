@@ -91,6 +91,9 @@ function syncPanel() {
   const w = project.webcam; $('cam-section').hidden = !w;
   if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = w.layout || 'bubble'; $('cam-mirror').checked = !!w.mirror; }
   const wm = project.watermark || {}; $('wm-text').value = wm.text || ''; $('wm-corner').value = wm.corner || 'bottom-right'; $('wm-opacity').value = wm.opacity || 0.7;
+  const ic = project.intro || {}, oc = project.outro || {};
+  $('in-title').value = ic.title || ''; $('in-sub').value = ic.subtitle || ''; $('out-title').value = oc.title || ''; $('out-sub').value = oc.subtitle || '';
+  $('card-len').value = ((ic.duration_ms || oc.duration_ms || 2500) / 1000);
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
@@ -102,7 +105,7 @@ function syncPanel() {
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
   s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%');
-  s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
+  s('card-len', (+$('card-len').value).toFixed(1) + ' s'); s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
   s('aud-fadein', (+$('aud-fadein').value / 1000).toFixed(1) + ' s'); s('aud-fadeout', (+$('aud-fadeout').value / 1000).toFixed(1) + ' s'); s('aud-offset', (+$('aud-offset').value) + ' ms');
 }
 function readPanel() {
@@ -116,6 +119,8 @@ function readPanel() {
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
   if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value, mirror: $('cam-mirror').checked });
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
+  { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
+    project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
   { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
   Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value });
   outputs();
@@ -956,7 +961,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {

@@ -234,6 +234,14 @@
       <label class="stack">Corner<select id="wm-corner" class="field"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option></select></label>
       <label class="slider">Opacity <input id="wm-opacity" type="range" min="0.2" max="1" step="0.05" /></label>
 
+      <h3 class="section">Intro and outro</h3>
+      <p class="small muted">Title cards on your background. They show in the exported video, not in the editor preview.</p>
+      <label class="stack">Intro title <input class="field" id="in-title" maxlength="80" placeholder="Leave empty for no intro" /></label>
+      <label class="stack">Intro subtitle <input class="field" id="in-sub" maxlength="120" /></label>
+      <label class="stack">Outro title <input class="field" id="out-title" maxlength="80" placeholder="Leave empty for no outro" /></label>
+      <label class="stack">Outro subtitle <input class="field" id="out-sub" maxlength="120" placeholder="e.g. a link or call to action" /></label>
+      <label class="slider">Card length <input id="card-len" type="range" min="1" max="6" step="0.5" /><output id="card-len-out">2.5 s</output></label>
+
       <h3 class="section">Zoom</h3>
       <label class="stack" title="Quick settings for how bold the zooms are. You can fine tune below.">Zoom style<select id="zc-style" class="field"><option value="">Custom</option><option value="subtle">Subtle (gentle, slow)</option><option value="moderate">Moderate (default)</option><option value="intense">Intense (close and quick)</option></select></label>
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>

@@ -294,6 +294,8 @@ pub struct Renderer {
     clicks: Vec<(f64, f64, f64)>,
     labels: Vec<KeyLabel>,
     background: Frame,
+    /// The plain backdrop, used behind title cards.
+    card_bg: Frame,
     pub layout: Layout,
 }
 
@@ -349,9 +351,10 @@ impl Renderer {
             h,
             radius: (project.style.corner_radius * short).min(w.min(h) / 2.0),
         };
+        let card_bg = background.clone();
         let mut background = background;
         Self::bake_shadow(&mut background, &project, layout, out_w, out_h);
-        Self { project, out_w, out_h, track, clicks, labels, background, layout }
+        Self { project, out_w, out_h, track, clicks, labels, background, card_bg, layout }
     }
 
     /// The drop shadow never changes between frames, so it is painted into the
@@ -694,6 +697,46 @@ impl Renderer {
         out
     }
 
+    /// A title card over the style's background. `k` (0 to 1) is how visible the text is,
+    /// so a card can fade its words in and out.
+    pub fn card_frame(&self, card: &crate::project::Card, k: f32) -> Frame {
+        let mut f = self.card_bg.clone();
+        let short = self.out_w.min(self.out_h) as f32;
+        // Dark text on a light backdrop, white on a dark one.
+        let n = (f.data.len() / 4).max(1);
+        let step = (n / 400).max(1);
+        let (mut sum, mut cnt) = (0.0f32, 0.0f32);
+        for i in (0..n).step_by(step) {
+            let d = &f.data[i * 4..i * 4 + 3];
+            sum += 0.2126 * d[0] as f32 + 0.7152 * d[1] as f32 + 0.0722 * d[2] as f32;
+            cnt += 1.0;
+        }
+        let light = sum / cnt > 150.0;
+        let (ink, shadow) = if light { ([15.0, 15.0, 20.0], [255.0, 255.0, 255.0]) } else { ([255.0, 255.0, 255.0], [0.0, 0.0, 0.0]) };
+        let tpx = short * 0.085;
+        let spx = tpx * 0.42;
+        let max_w = self.out_w as f32 * 0.8;
+        let title = text::wrap(card.title.trim(), tpx, max_w);
+        let sub = text::wrap(card.subtitle.trim(), spx, max_w);
+        let th = text::line_height(tpx) * title.len() as f32;
+        let sh = text::line_height(spx) * 1.15 * sub.len() as f32;
+        let gap = if title.is_empty() || sub.is_empty() { 0.0 } else { tpx * 0.35 };
+        let mut y = (self.out_h as f32 - (th + gap + sh)) / 2.0;
+        for line in &title {
+            let x = (self.out_w as f32 - text::measure(line, tpx)) / 2.0;
+            text::draw(&mut f, x + 2.0, y + 2.0, tpx, line, shadow, k * 0.25);
+            text::draw(&mut f, x, y, tpx, line, ink, k);
+            y += text::line_height(tpx);
+        }
+        y += gap;
+        for line in &sub {
+            let x = (self.out_w as f32 - text::measure(line, spx)) / 2.0;
+            text::draw(&mut f, x, y, spx, line, ink, k * 0.8);
+            y += text::line_height(spx) * 1.15;
+        }
+        f
+    }
+
     /// The watermark text, in its corner with a soft shadow so it reads on any background.
     fn draw_watermark(&self, out: &mut Frame) {
         use crate::project::Corner;
@@ -846,5 +889,25 @@ mod watermark_tests {
         let diff = |x0: usize, x1: usize, y0: usize, y1: usize| (y0..y1).any(|y| (x0..x1).any(|x| with.data[(y * 640 + x) * 4] != without.data[(y * 640 + x) * 4]));
         assert!(diff(480, 640, 300, 360), "nothing drawn in the bottom right");
         assert!(!diff(0, 320, 0, 180), "something drawn far from the corner");
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+    use crate::project::Card;
+
+    #[test]
+    fn a_card_draws_its_title_in_the_middle_and_can_fade() {
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 1000.0);
+        p.style.background = crate::project::Background::Solid { color: [10, 10, 10] };
+        let r = Renderer::new(p, None, 640, 360, None);
+        let card = Card { title: "Hello".into(), subtitle: "World".into(), duration_ms: 2000.0 };
+        let on = r.card_frame(&card, 1.0);
+        let off = r.card_frame(&card, 0.0);
+        assert_ne!(on.data, off.data, "text should show");
+        assert_eq!(off.data[0], 10);
+        // Nothing drawn in a far corner.
+        assert_eq!(on.data[(5 * 640 + 5) * 4], 10);
     }
 }

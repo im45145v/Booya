@@ -300,6 +300,29 @@ impl Default for Watermark {
     }
 }
 
+/// A title card shown before or after the recording.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Card {
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default = "Card::default_ms")]
+    pub duration_ms: f64,
+}
+
+impl Card {
+    fn default_ms() -> f64 {
+        2500.0
+    }
+    pub fn is_empty(&self) -> bool {
+        self.title.trim().is_empty() && self.subtitle.trim().is_empty()
+    }
+    /// Length actually used: 1 to 6 seconds.
+    pub fn length_ms(&self) -> f64 {
+        self.duration_ms.clamp(1000.0, 6000.0)
+    }
+}
+
 /// Picture-in-picture webcam recorded alongside the screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Webcam {
@@ -353,6 +376,10 @@ pub struct Project {
     pub webcam: Option<Webcam>,
     #[serde(default)]
     pub watermark: Option<Watermark>,
+    #[serde(default)]
+    pub intro: Option<Card>,
+    #[serde(default)]
+    pub outro: Option<Card>,
 }
 
 /// Zoom settings stored in a project. Old project files only had
@@ -407,6 +434,8 @@ impl Project {
             audio: AudioSettings::default(),
             webcam: None,
             watermark: None,
+            intro: None,
+            outro: None,
         }
     }
 
@@ -434,6 +463,12 @@ impl Project {
     pub fn save(&self, path: &Path) -> Result<()> {
         std::fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
+    }
+
+    /// Lengths of the intro and outro cards in ms (0 when absent or empty).
+    pub fn card_lengths_ms(&self) -> (f64, f64) {
+        let len = |c: &Option<Card>| c.as_ref().filter(|c| !c.is_empty()).map(Card::length_ms).unwrap_or(0.0);
+        (len(&self.intro), len(&self.outro))
     }
 
     pub fn output_duration_ms(&self) -> f64 {

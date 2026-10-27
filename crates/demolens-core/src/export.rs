@@ -188,6 +188,8 @@ pub fn passthrough_ok(p: &Project) -> bool {
         && !p.cursor.visible
         && !p.keys.enabled
         && p.webcam.as_ref().is_none_or(|w| !w.visible)
+        && p.card_lengths_ms() == (0.0, 0.0)
+        && p.watermark.as_ref().is_none_or(|w| w.text.trim().is_empty())
         && !p.audio.denoise
         && (ow, oh) == (p.source_width, p.source_height)
 }
@@ -261,6 +263,11 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     if total == 0 {
         bail!("nothing to export");
     }
+    // Title cards sit before and after the recording.
+    let (intro_ms, outro_ms) = project.card_lengths_ms();
+    let intro_n = (intro_ms / 1000.0 * fps).round() as u64;
+    let outro_n = (outro_ms / 1000.0 * fps).round() as u64;
+    let grand = total + intro_n + outro_n;
 
     // Decode the source at a high enough rate that sped-up clips still have
     // a frame for every output frame.
@@ -296,7 +303,14 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     }
     let audio_graph_text = if with_audio {
         let m = if project.audio.normalize { measure_export_audio(project, &audio_input) } else { None };
-        audio_graph(project, 1, &post_chain(project, m.as_ref(), true))
+        let g = audio_graph(project, 1, &post_chain(project, m.as_ref(), true));
+        if intro_n + outro_n > 0 {
+            // Silence under the intro, and padding so the outro is not cut short.
+            let delay = if intro_n > 0 { format!("adelay={:.0}:all=1,", intro_ms) } else { String::new() };
+            format!("{}[ao0];[ao0]{delay}apad=whole_dur={:.3}[aout]", g.trim_end_matches("[aout]"), (out_dur + intro_ms + outro_ms) / 1000.0)
+        } else {
+            g
+        }
     } else {
         String::new()
     };
@@ -331,6 +345,26 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     }).collect();
     let mut last_frame: Option<Frame> = None;
     let mut hold: Option<(f64, Frame)> = None;
+
+    let mut written = 0u64;
+    let write_card = |card: &crate::project::Card, n: u64, stdin: &mut std::process::ChildStdin, written: &mut u64, progress: &mut dyn FnMut(f64)| -> bool {
+        let fade = (fps * 0.45).max(1.0);
+        for i in 0..n {
+            let (a, b) = (i as f64, (n - 1 - i) as f64);
+            let k = (a.min(b) / fade).clamp(0.0, 1.0) as f32;
+            let k = k * k * (3.0 - 2.0 * k);
+            let f = renderer.card_frame(card, k);
+            if stdin.write_all(&f.data).is_err() {
+                return false;
+            }
+            *written += 1;
+            progress(*written as f64 / grand as f64);
+        }
+        true
+    };
+    if let (Some(c), true) = (project.intro.as_ref(), intro_n > 0) {
+        write_card(c, intro_n, &mut stdin, &mut written, progress);
+    }
 
     for i in 0..total {
         let out_t = i as f64 * 1000.0 / fps;
@@ -381,7 +415,11 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         if stdin.write_all(&frame.data).is_err() {
             break;
         }
-        progress((i + 1) as f64 / total as f64);
+        written += 1;
+        progress(written as f64 / grand as f64);
+    }
+    if let (Some(c), true) = (project.outro.as_ref(), outro_n > 0) {
+        write_card(c, outro_n, &mut stdin, &mut written, progress);
     }
     drop(stdin);
     let res = guard.0.take().unwrap().wait_with_output()?;
@@ -391,7 +429,7 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     if !res.status.success() {
         bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&res.stderr));
     }
-    Ok(ExportStats { frames: total, width: ow, height: oh, seconds: out_dur / 1000.0 })
+    Ok(ExportStats { frames: grand, width: ow, height: oh, seconds: (out_dur + intro_ms + outro_ms) / 1000.0 })
 }
 
 #[cfg(test)]
@@ -458,6 +496,48 @@ mod tests {
         export(&p, &raw, |_| {}).unwrap();
         let unchanged = crate::audio::measure_file(&raw).unwrap().unwrap().input_i;
         assert!((unchanged - before).abs() < 2.0, "{unchanged} vs {before}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn title_cards_extend_the_video_and_keep_the_sound_in_place() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-cards-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.mp4");
+        let ok = Command::new(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let mut p = Project::new(src, None, 1920, 1080, 3000.0);
+        p.export.quality = 360;
+        p.audio.normalize = false;
+        p.intro = Some(crate::project::Card { title: "Intro".into(), subtitle: String::new(), duration_ms: 1000.0 });
+        p.outro = Some(crate::project::Card { title: "Bye".into(), subtitle: "see you".into(), duration_ms: 2000.0 });
+        assert!(!passthrough_ok(&p));
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let d = crate::ffmpeg::probe(&out).unwrap().duration_ms;
+        assert!((d - 6000.0).abs() < 250.0, "duration {d}");
+        // The first second is silent (the intro), the sound follows.
+        let quiet = Command::new(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-i"]).arg(&out)
+            .args(["-t", "0.8", "-af", "volumedetect", "-f", "null", "-"])
+            .output().unwrap();
+        let log = String::from_utf8_lossy(&quiet.stderr).to_string();
+        let loud = Command::new(ffmpeg::ffmpeg_bin())
+            .args(["-v", "info", "-ss", "1.5", "-t", "1", "-i"]).arg(&out)
+            .args(["-af", "volumedetect", "-f", "null", "-"])
+            .output().unwrap();
+        let loud_log = String::from_utf8_lossy(&loud.stderr).to_string();
+        let mean = |l: &str| l.lines().find_map(|x| x.split("mean_volume:").nth(1)).and_then(|v| v.trim().trim_end_matches(" dB").parse::<f64>().ok());
+        let _ = log;
+        assert!(mean(&loud_log).unwrap_or(-91.0) > -40.0, "no sound after the intro: {loud_log}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
