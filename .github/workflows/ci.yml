@@ -24,6 +24,15 @@ jobs:
         run: cargo test -p demolens-core -p demolens-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
+      - name: Speed numbers (macOS, VideoToolbox)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          brew install ffmpeg
+          target/release/demolens bench --seconds 8 | tee bench.txt
+          target/release/demolens bench --seconds 8 --json > bench.json
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat bench.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
   audit:
     runs-on: ubuntu-latest
     steps:

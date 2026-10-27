@@ -3,14 +3,30 @@
 <head>
 <meta charset="utf-8">
 <title>DemoLens is recording</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="indicator.css">
 </head>
-<body class="indicator">
-  <div class="ind" role="status" aria-live="polite">
-    <span class="ind-dot" id="dot"></span>
-    <span id="label">REC</span>
-    <span id="time">0:00</span>
-    <button id="pause" title="Pause input capture (Ctrl/Cmd+Shift+P)">Pause</button>
+<body>
+  <div class="pill" id="pill" data-tauri-drag-region role="status" aria-live="polite">
+    <span class="dot" id="dot" data-tauri-drag-region></span>
+    <span class="time" id="time" data-tauri-drag-region>0:00</span>
+    <span class="meter" id="meter" data-tauri-drag-region title="Microphone level" hidden><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="state" id="state" data-tauri-drag-region></span>
+    <span class="gap" data-tauri-drag-region></span>
+    <button id="pause" class="ib" title="Pause: stops cursor and key logging and cuts this part (Shift+Cmd/Ctrl+P)" aria-label="Pause">
+      <svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>
+    </button>
+    <button id="stop" class="ib stop" title="Stop and open in the editor (Shift+Cmd/Ctrl+R)" aria-label="Stop recording">
+      <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.4"/></svg>
+    </button>
+    <span class="sep" data-tauri-drag-region></span>
+    <button id="trash" class="ib ghost" title="Discard this recording" aria-label="Discard recording">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+    </button>
+    <div class="confirm" id="confirm" hidden>
+      <span>Discard this recording?</span>
+      <button id="no" class="txt">Keep</button>
+      <button id="yes" class="txt danger">Discard</button>
+    </div>
   </div>
 <script src="indicator.js"></script>
 </body>

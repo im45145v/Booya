@@ -10,6 +10,7 @@ use demolens_core::{export, new_project, zoom};
 use std::path::{Path, PathBuf};
 
 mod ai;
+mod bench;
 
 const HELP: &str = "DemoLens: local screen recorder for product demos
 
@@ -19,6 +20,9 @@ USAGE:
                   [--fps 30] [--seconds N] [--out DIR]
   demolens doctor [--seconds 3]     check permissions, displays and ffmpeg, run a short
                   test capture and print the result as JSON (exit 1 if it failed)
+  demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
+                  measure decode, proxy and export speed on a synthetic recording of that size
+  demolens verify <video> [events.jsonl]   A/V sync report for a finished recording
   demolens new <video> [--events FILE] [-o project.json]
   demolens zoom <events.jsonl> --duration MS
   demolens preview <project.json> --at MS [-o frame.png] [--quality 720]
@@ -116,6 +120,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        "bench" => bench::run(a),
         "verify" => {
             // Sync report for a finished recording: A/V offset, duration, events.
             let video = PathBuf::from(a.pos("video")?);

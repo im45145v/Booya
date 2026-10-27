@@ -69,6 +69,8 @@
     <input id="rec-arg" class="field sm" placeholder="x,y,w,h" hidden />
     <button id="rec-pick" class="btn icon ghost" hidden title="Pick the area on a screenshot" aria-label="Pick area"><svg class="ico"><use href="#i-crop"/></svg></button>
     <button id="rec-mic" class="btn icon ghost toggle" aria-pressed="true" title="Record microphone" aria-label="Record microphone"><svg class="ico"><use href="#i-mic"/></svg></button>
+    <select id="rec-mic-dev" class="field sm mic-dev" title="Microphone" aria-label="Microphone"><option value="">Default microphone</option></select>
+    <span id="mic-meter" class="mic-meter" title="Microphone level. Speak to see it move." aria-label="Microphone level" hidden><i></i><i></i><i></i><i></i><i></i><i></i></span>
     <button id="rec-sys" class="btn icon ghost toggle" aria-pressed="false" title="Record system audio" aria-label="Record system audio"><svg class="ico"><use href="#i-speaker"/></svg></button>
     <button id="rec-cam" class="btn icon ghost toggle" aria-pressed="false" title="Record the webcam for a picture in picture overlay" aria-label="Record webcam"><svg class="ico"><use href="#i-cam"/></svg></button>
     <button id="rec-keys" class="btn icon ghost toggle" aria-pressed="false" title="Capture key presses (off by default). Only shortcut names are kept, never what you type." aria-label="Capture key presses"><svg class="ico"><use href="#i-keyboard"/></svg></button>
@@ -151,7 +153,15 @@
         <ul id="ready-report" class="report" aria-live="polite"></ul>
       </div>
 
-      <h3 class="section">AI tools <span class="badge" id="ai-badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+      <h3 class="section">AI status <span class="badge" id="ai-badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+      <div class="card ai-status" id="ai-status" aria-live="polite"><p class="muted small">Checking...</p></div>
+      <div class="row ai-actions">
+        <button id="ai-dl-all" class="btn primary" hidden><svg class="ico"><use href="#i-chip"/></svg><span>Download recommended models</span></button>
+        <button id="ai-cloud-link" class="btn ghost" title="Settings > Cloud &amp; API keys">Cloud &amp; API keys</button>
+      </div>
+      <div class="bar-wrap" id="ai-dl-wrap" hidden><div class="bar"><div id="ai-dl-bar"></div></div><small class="muted" id="ai-dl-text"></small></div>
+
+      <h3 class="section">AI tools</h3>
       <div class="tool-list">
         <button id="ai-transcribe" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Transcribe</b><small>Captions and word timings</small></span></button>
         <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Remove fillers and pauses</small></span></button>
@@ -210,9 +220,20 @@
       <label class="stack">Corner<select id="cam-corner" class="field"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option></select></label>
       </div>
 
+      <h3 class="section">Zoom</h3>
+      <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
+      <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="3" step="0.1" /><output id="zc-level-out">1.7x</output></label>
+      <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-wand"/></svg><span>Apply to auto zoom</span></button></div>
+
       <h3 class="section">Audio</h3>
+      <label class="switch"><input type="checkbox" id="aud-normalize" /> Even out the loudness (-16 LUFS)</label>
       <label class="switch"><input type="checkbox" id="aud-denoise" /> Remove background noise</label>
       <label class="switch"><input type="checkbox" id="aud-mute" /> Mute</label>
+      <label class="slider" title="Extra boost before the loudness is evened out. Helps very quiet microphones.">Boost <input id="aud-gain" type="range" min="0" max="24" step="1" /><output id="aud-gain-out">0 dB</output></label>
+      <label class="slider">Volume <input id="aud-volume" type="range" min="0" max="1.5" step="0.05" /><output id="aud-volume-out">100%</output></label>
+      <label class="slider">Fade in <input id="aud-fadein" type="range" min="0" max="3000" step="100" /><output id="aud-fadein-out">0 s</output></label>
+      <label class="slider">Fade out <input id="aud-fadeout" type="range" min="0" max="3000" step="100" /><output id="aud-fadeout-out">0 s</output></label>
+      <label class="slider" title="Move the sound earlier (negative) or later (positive) if it is slightly out of step with the picture.">Sync nudge <input id="aud-offset" type="range" min="-1000" max="1000" step="10" /><output id="aud-offset-out">0 ms</output></label>
     </div>
 
     <div class="pane" id="pane-edit" role="tabpanel" aria-labelledby="tab-edit" hidden>

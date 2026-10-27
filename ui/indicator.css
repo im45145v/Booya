@@ -1,0 +1,42 @@
+/* Recording pill. Brand tokens from docs/BRAND.md. */
+:root { --rec: #ef4444; --amber: #fbbf24; --indigo: #6d6af5; --ink: 14, 14, 17; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body { font: 600 13px/1 "Inter", "SF Pro Text", "Segoe UI Variable", system-ui, sans-serif; color: #f4f4f7; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+.pill {
+  position: absolute; inset: 4px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px;
+  border-radius: 999px; background: rgba(var(--ink), .86); border: 1px solid rgba(255,255,255,.10);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06);
+  transition: opacity .35s ease, transform .2s ease; cursor: grab;
+}
+body.mac .pill { background: rgba(var(--ink), .52); }
+.pill.dim { opacity: .5; }
+.pill:hover { opacity: 1; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 0 rgba(239,68,68,.6); animation: pulse 1.6s ease-out infinite; flex: none; }
+.pill.paused .dot { background: var(--amber); animation: none; box-shadow: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); } 70% { box-shadow: 0 0 0 9px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+.time { font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: .01em; min-width: 38px; }
+.state { font-size: 11px; font-weight: 600; color: var(--amber); letter-spacing: .04em; text-transform: uppercase; }
+.gap { flex: 1; align-self: stretch; }
+.sep { width: 1px; height: 18px; background: rgba(255,255,255,.14); margin: 0 2px; }
+.meter { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; flex: none; }
+.meter i { width: 3px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.28); transition: height 90ms linear, background 90ms linear; }
+.meter.quiet i.on { background: var(--amber); }
+.meter i.on { background: #4ade80; }
+.ib { width: 32px; height: 32px; border: 0; border-radius: 999px; display: grid; place-items: center; background: rgba(255,255,255,.10); color: #fff; cursor: pointer; transition: background .12s ease, transform .12s ease; }
+.ib svg { width: 16px; height: 16px; fill: currentColor; }
+.ib:hover { background: rgba(255,255,255,.2); }
+.ib:active { transform: scale(.94); }
+.ib.stop { background: var(--rec); }
+.ib.stop:hover { background: #f26a6a; }
+.ib.ghost { background: transparent; color: rgba(255,255,255,.65); }
+.ib.ghost:hover { background: rgba(239,68,68,.22); color: #fff; }
+.ib:focus-visible, .txt:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 1px; }
+.confirm { position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 18px; border-radius: 999px; background: rgb(var(--ink)); }
+.confirm[hidden] { display: none; }
+.confirm span { flex: 1; font-weight: 600; }
+.txt { border: 0; border-radius: 999px; padding: 8px 12px; font: inherit; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
+.txt:hover { background: rgba(255,255,255,.22); }
+.txt.danger { background: var(--rec); }
+.txt.danger:hover { background: #f26a6a; }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } .pill { transition: none; } }

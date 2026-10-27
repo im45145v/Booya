@@ -215,7 +215,7 @@ impl Drop for KillOnDrop {
     }
 }
 
-fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
+pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     project.validate()?;
     if passthrough_ok(project) {
         return export_passthrough(project, out, progress);

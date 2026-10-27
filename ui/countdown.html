@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>DemoLens countdown</title>
+<style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;font-family:"Inter","SF Pro Display",system-ui,sans-serif;user-select:none;-webkit-user-select:none}
+.c{position:absolute;inset:10px;border-radius:50%;display:grid;place-items:center;background:rgba(14,14,17,.78);border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 36px rgba(0,0,0,.4);cursor:pointer}
+.n{font-size:92px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;animation:pop 1s ease-out both}
+.h{position:absolute;bottom:34px;font-size:11px;color:rgba(255,255,255,.6)}
+@keyframes pop{0%{transform:scale(1.35);opacity:0}25%{opacity:1}100%{transform:scale(.9);opacity:.9}}
+@media (prefers-reduced-motion:reduce){.n{animation:none}}
+</style></head>
+<body><div class="c" id="c" title="Click to cancel"><div class="n" id="n"></div><div class="h">Click to cancel</div></div>
+<script>
+const T = window.__TAURI__;
+let n = parseInt(new URLSearchParams(location.search).get('n') || '3', 10);
+const el = document.getElementById('n');
+function tick() { if (n <= 0) return; el.textContent = n; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; n--; setTimeout(tick, 1000); }
+tick();
+document.getElementById('c').onclick = () => T.core.invoke('cancel_countdown');
+</script></body></html>

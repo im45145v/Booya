@@ -67,7 +67,7 @@ function setProject(p, path = null) {
   $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
   document.body.classList.add('has-project');
-  enableControls(); syncPanel(); syncSelection(); refresh();
+  enableControls(); syncPanel(); syncSelection(); refresh(); prepareProxy();
 }
 function applyResult(p) { const t = tl.playhead; project = p; tl.project = p; tl.playhead = Math.min(t, tl.outDur()); tl.fitted = true; syncPanel(); syncSelection(); tl.draw(); refresh(); checkpoint(); }
 function enableControls() {
@@ -89,9 +89,19 @@ function syncPanel() {
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
   if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; }
-  $('aud-denoise').checked = project.audio.denoise; $('aud-mute').checked = project.audio.mute;
+  const au = project.audio;
+  $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
+  $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level;
+  outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); markTemplate(); markDestination();
+}
+function outputs() {
+  const s = (id, t) => ($(id + '-out').textContent = t);
+  s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x');
+  s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
+  s('aud-fadein', (+$('aud-fadein').value / 1000).toFixed(1) + ' s'); s('aud-fadeout', (+$('aud-fadeout').value / 1000).toFixed(1) + ' s'); s('aud-offset', (+$('aud-offset').value) + ' ms');
 }
 function readPanel() {
   const t = $('bg-type').value, s = project.style;
@@ -102,7 +112,9 @@ function readPanel() {
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
   if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value });
-  Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked });
+  Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
+  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value });
+  outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
 document.querySelectorAll('#pane-style input, #pane-export select').forEach(el => el.addEventListener('input', () => { if (project) { readPanel(); markTemplate(); markDestination(); refresh(); } }));
@@ -192,7 +204,7 @@ function deleteSelected() {
 }
 function addZoom() {
   const at = tl.outToSrc(tl.playhead);
-  project.zoom.push({ start_ms: at, end_ms: Math.min(project.duration_ms, at + 2000), scale: 2, follow_cursor: true, focus: [project.source_width / 2, project.source_height / 2], reason: 'manual' });
+  project.zoom.push({ start_ms: at, end_ms: Math.min(project.duration_ms, at + 2000), scale: project.zoom_config?.level || 1.7, follow_cursor: true, focus: [project.source_width / 2, project.source_height / 2], reason: 'manual' });
   project.zoom.sort((a, b) => a.start_ms - b.start_ms);
   tl.selectedZoom = project.zoom.findIndex(z => z.start_ms === at);
   tl.draw(); syncSelection(); refresh(); status('Zoom added. Drag it on the timeline to adjust.');
@@ -204,6 +216,7 @@ $('add-zoom').onclick = () => project && addZoom();
 $('speed').onchange = () => { const c = project?.clips[tl.selectedClip]; if (c) { c.speed = +$('speed').value; tl.draw(); refresh(); } };
 $('zoom-scale').oninput = () => { const z = project?.zoom[tl.selectedZoom]; $('zoom-scale-out').textContent = (+$('zoom-scale').value).toFixed(1) + 'x'; if (z) { z.scale = +$('zoom-scale').value; tl.draw(); refresh(); } };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
+$('zc-apply').onclick = () => $('auto-zoom').click();
 $('auto-zoom').onclick = async () => {
   try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
 };
@@ -286,19 +299,21 @@ $('rec-btn').onclick = async () => {
       let target = { type: 'screen', display: 0 };
       if (kind === 'window') { if (!arg) return status('Type the window id (Linux) or title (Windows) first.', 'error'); target = { type: 'window', id: arg }; }
       if (kind === 'area') { const v = arg.split(',').map(Number); if (v.length !== 4 || v.some(isNaN)) return status('Type the area as x,y,w,h, for example 0,0,1280,720', 'error'); const [x, y, w, h] = v; target = { type: 'area', x, y, w, h }; }
-      $('rec-btn').disabled = true; status('Starting the recording. If macOS asks for permission, allow it.', 'busy');
+      $('rec-btn').disabled = true; status('Starting in 3 seconds. Click the number to cancel. If macOS asks for permission, allow it.', 'busy');
+      if (IS_WIN) meterStop();
       let warn;
-      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true' }); }
+      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true', micDevice: $('rec-mic-dev').value || null, countdown: 3 }); }
       finally { $('rec-btn').disabled = false; }
-      setRecUi(true);
+      setRecUi(true); localStorage.setItem('mic-ok', '1');
+      if (!IS_WIN && $('rec-mic').getAttribute('aria-pressed') === 'true') meterStart();
       const w = warn.filter(x => x !== 'recording without audio');
       status(w.length ? 'Recording. ' + w.join(' ') : 'Recording. Press Stop or Ctrl+R when you are done.', w.length ? 'error' : 'busy');
     } else {
-      setRecUi(false); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
-      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Make it demo-ready.', 'success');
+      setRecUi(false); meterStop(); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
+      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Make it demo-ready.', 'success'); setTimeout(() => meterStart(), 500);
       hideBusy();
     }
-  } catch (e) { setRecUi(false); hideBusy(); fail(e); }
+  } catch (e) { setRecUi(false); hideBusy(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
 };
 
 // ---------- Tabs ----------
@@ -392,7 +407,7 @@ async function aiTask(label, fn) {
     fail(e);
     if (/model|install|download/i.test(String(e))) showModels(humanError(e));
   }
-  busy = false; $('ai-bar-wrap').hidden = true; enableControls(); refreshModels();
+  busy = false; $('ai-bar-wrap').hidden = true; enableControls(); refreshModels(); loadAiStatus();
 }
 window.__TAURI__.event.listen('ai-progress', e => {
   const p = e.payload;
@@ -417,7 +432,7 @@ $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
   if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');
   const r = await invoke('ai_transcribe', { project, model: null, cloud });
   r.project.caption_style.burn_in = true; applyResult(r.project);
-  status(`${r.report.words} words and ${r.report.fillers} filler words. Captions are burned in; switch that off in Style.`, 'success');
+  status(r.report.words ? `Transcribed ${r.report.words} words (${r.report.fillers} filler words). Captions are burned in; switch that off in Style.` : 'Transcribed, but no speech was found. Is the microphone track silent? Check the level meter next time.', r.report.words ? 'success' : 'error');
 });
 $('ai-autocut').onclick = () => aiTask('Finding pauses and filler words', async () => {
   const r = await invoke('ai_autocut', { project, fillers: $('cut-fillers').checked, silences: $('cut-silences').checked, minSilenceMs: +$('cut-min').value });
@@ -428,7 +443,7 @@ $('ai-autocut').onclick = () => aiTask('Finding pauses and filler words', async 
 $('ai-redact').onclick = () => aiTask('Scanning for secrets', async () => {
   const r = await invoke('ai_redact', { project });
   applyResult(r.project);
-  status(r.report.found.length ? `Blurred ${r.report.added} regions: ${r.report.found.map(f => f[0]).join(', ')}` : 'Nothing sensitive found.', 'success');
+  status(r.report.found.length ? `Found ${r.report.found.length} secret${r.report.found.length === 1 ? '' : 's'} (${[...new Set(r.report.found.map(f => f[0]))].join(', ')}) and blurred ${r.report.added} region${r.report.added === 1 ? '' : 's'}.` : 'Found 0 secrets on the sampled frames. Still watch the export before sharing.', 'success');
 });
 $('ai-docs').onclick = () => aiTask('Writing docs', async () => {
   const cloud = $('docs-llm').checked ? await confirmCloud('llm') : false;
@@ -459,6 +474,7 @@ $('cap-export').onclick = async () => {
 };
 
 async function refreshModels() {
+  loadAiStatus();
   try { models = (await invoke('models_list')).models; } catch { return; }
   const has = k => models.some(m => m.kind === k && m.installed);
   const ocr = models.filter(m => m.kind === 'ocr').every(m => m.installed);
@@ -493,13 +509,16 @@ setTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: li
 
 // ---------- Keyboard shortcuts ----------
 const SHORTCUTS = [
-  ['Playback', [['Space', 'Play or pause'], ['Left / Right', 'Step 0.1 s (Shift: 1 s)'], ['Home / End', 'Go to start or end'], ['J / L', 'Jump 5 s back or forward']]],
+  ['Playback', [['Space / K', 'Play or pause'], ['Left / Right', 'Step 0.1 s (Shift: 1 s)'], ['Home / End', 'Go to start or end'], ['J / L', 'Jump 5 s back or forward']]],
   ['Editing', [['S', 'Split clip at playhead'], ['Z', 'Add zoom at playhead'], ['Delete', 'Delete selected zoom or clip'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo'], ['D', 'Make it demo-ready']]],
   ['Timeline', [['+ / -', 'Zoom timeline in or out'], ['0', 'Fit timeline'], ['Ctrl Wheel', 'Zoom around the mouse'], ['Wheel', 'Pan when zoomed in'], ['Double-click', 'Add a zoom on the zoom lane']]],
-  ['File', [['Ctrl O', 'Open'], ['Ctrl S', 'Save'], ['Ctrl Shift S', 'Save as'], ['Ctrl E', 'Export'], ['Ctrl R', 'Start or stop recording'], ['?', 'This list']]],
+  ['File', [['Ctrl O', 'Open'], ['Ctrl S', 'Save'], ['Ctrl Shift S', 'Save as'], ['Ctrl E', 'Export'], ['Ctrl ,', 'Settings'], ['Ctrl /', 'This list (also ?)']]],
+  ['Recording (works from any app)', [['Ctrl Shift R', 'Start or stop recording'], ['Ctrl Shift P', 'Pause or resume']]],
 ];
+const IS_MAC = /Mac/i.test(navigator.platform);
 function showShortcuts() {
-  modal('Keyboard shortcuts', `<div class="shortcuts">${SHORTCUTS.map(([g, list]) => `<h4>${g}</h4>` + list.map(([k, d]) => `<div><span>${d}</span><span>${k.split(' / ').map(x => x.split(' ').map(y => `<kbd>${esc(y)}</kbd>`).join('')).join(' / ')}</span></div>`).join('')).join('')}</div>`);
+  const map = k => IS_MAC ? k.replace(/Ctrl/g, 'Cmd') : k;
+  modal('Keyboard shortcuts', `<p class="muted small">${IS_MAC ? 'Cmd is the Command key.' : ''} Recording shortcuts also work while another app is in front.</p><div class="shortcuts">${SHORTCUTS.map(([g, list]) => `<h4>${g}</h4>` + list.map(([k0, d]) => { const k = map(k0); return `<div><span>${d}</span><span>${k.split(' / ').map(x => x.split(' ').map(y => `<kbd>${esc(y)}</kbd>`).join('')).join(' / ')}</span></div>`; }).join('')).join('')}</div>`);
 }
 $('keys-btn').onclick = showShortcuts;
 
@@ -520,29 +539,60 @@ async function showAbout() {
 $('about-btn').onclick = showAbout;
 setTimeout(() => checkFfmpeg(false), 400);
 
+// Every command goes through act(), so the native menu, the keyboard and the
+// buttons all do the same thing. The menu and the keydown can both fire for
+// one key press on macOS, so repeats within 200 ms are ignored.
+let lastAct = { name: '', t: 0 };
+const isTyping = el => (el.tagName === 'INPUT' && !['range', 'checkbox', 'color', 'radio', 'button'].includes(el.type)) || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+function act(name) {
+  const now = performance.now();
+  if (lastAct.name === name && now - lastAct.t < 200) return;
+  lastAct = { name, t: now };
+  const typing = isTyping(document.activeElement);
+  switch (name) {
+    case 'undo': if (typing) document.execCommand('undo'); else undo(); break;
+    case 'redo': if (typing) document.execCommand('redo'); else redo(); break;
+    case 'save': save(false); break;
+    case 'save-as': save(true); break;
+    case 'open': openAny(); break;
+    case 'export': doExport(); break;
+    case 'settings': showSettings(); break;
+    case 'shortcuts': showShortcuts(); break;
+    case 'ai-status': selectTab('magic'); $('ai-status').scrollIntoView({ block: 'center' }); break;
+    case 'record': $('rec-btn').click(); break;
+  }
+}
+window.__TAURI__.event.listen('menu', e => act(e.payload));
+window.__TAURI__.event.listen('global-record', () => $('rec-btn').click());
+window.__TAURI__.event.listen('rec-stop-request', () => { if (recording) $('rec-btn').click(); });
+window.__TAURI__.event.listen('rec-discarded', () => { setRecUi(false); hideBusy(); status('Recording discarded. Nothing was saved.', 'info'); });
+
 window.addEventListener('keydown', e => {
-  const el = document.activeElement, typing = (el.tagName === 'INPUT' && !['range', 'checkbox', 'color'].includes(el.type)) || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA';
-  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  const el = document.activeElement, typing = isTyping(el);
+  const mod = e.ctrlKey || e.metaKey;
+  // e.code is the physical key, so shortcuts work on any keyboard layout.
+  const k = (e.code.startsWith('Key') ? e.code.slice(3) : e.key).toLowerCase();
   if ($('modal').open && !mod) return;
-  if (mod) {
-    if (k === 'z' && !e.shiftKey) { if (typing) return; e.preventDefault(); undo(); }
-    else if ((k === 'z' && e.shiftKey) || k === 'y') { if (typing) return; e.preventDefault(); redo(); }
-    else if (k === 's') { e.preventDefault(); save(e.shiftKey); }
-    else if (k === 'o') { e.preventDefault(); openAny(); }
-    else if (k === 'e') { e.preventDefault(); doExport(); }
-    else if (k === 'r') { e.preventDefault(); $('rec-btn').click(); }
+  if (mod && !e.altKey) {
+    const m = { z: e.shiftKey ? 'redo' : 'undo', y: 'redo', s: e.shiftKey ? 'save-as' : 'save', o: 'open', e: 'export', r: e.shiftKey ? 'record' : 'record', ',': 'settings', '/': 'shortcuts' }[e.code === 'Comma' ? ',' : e.code === 'Slash' ? '/' : k];
+    if (m) {
+      if ((m === 'undo' || m === 'redo') && typing) return; // let the text field handle its own undo
+      e.preventDefault(); act(m);
+    }
     return;
   }
   if (typing || e.altKey) return;
   if (e.key === '?') { e.preventDefault(); return showShortcuts(); }
   if (!project) return;
   const step = e.shiftKey ? 1000 : 100;
-  if (e.key === ' ' && el.tagName !== 'BUTTON') { e.preventDefault(); setPlaying(!playing); }
-  else if (e.key === 'ArrowLeft' && !el.closest('.tabs')) { e.preventDefault(); seek(tl.playhead - step); }
-  else if (e.key === 'ArrowRight' && !el.closest('.tabs')) { e.preventDefault(); seek(tl.playhead + step); }
+  const onButton = el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['checkbox', 'radio'].includes(el.type));
+  if ((e.code === 'Space') && !onButton) { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === 'ArrowLeft' && !el.closest('.tabs') && el.type !== 'range') { e.preventDefault(); seek(tl.playhead - step); }
+  else if (e.key === 'ArrowRight' && !el.closest('.tabs') && el.type !== 'range') { e.preventDefault(); seek(tl.playhead + step); }
   else if (e.key === 'Home') { e.preventDefault(); seek(0); }
   else if (e.key === 'End') { e.preventDefault(); seek(tl.outDur()); }
   else if (k === 'j') seek(tl.playhead - 5000);
+  else if (k === 'k') setPlaying(!playing);
   else if (k === 'l') seek(tl.playhead + 5000);
   else if (k === 's') split();
   else if (k === 'z') addZoom();
@@ -552,6 +602,140 @@ window.addEventListener('keydown', e => {
   else if (e.key === '-') tl.zoomBy(1 / 1.6);
   else if (e.key === '0') tl.fit();
 });
+
+
+// ---------- Microphone: chooser and level meter ----------
+const IS_WIN = navigator.userAgent.includes('Windows');
+let meterOn = false, quietSince = 0;
+async function loadMics() {
+  let list = []; try { list = await invoke('mic_list'); } catch { }
+  const sel = $('rec-mic-dev'), want = localStorage.getItem('mic-dev') || '';
+  sel.innerHTML = '<option value="">Default microphone</option>' + list.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  sel.value = list.includes(want) ? want : '';
+  sel.hidden = !list.length;
+}
+$('rec-mic-dev').onchange = () => { localStorage.setItem('mic-dev', $('rec-mic-dev').value); if (!recording) meterStart(); };
+async function meterStart() {
+  if ($('rec-mic').getAttribute('aria-pressed') !== 'true') return meterStop();
+  try { await invoke('mic_meter_start', { device: $('rec-mic-dev').value || null }); meterOn = true; $('mic-meter').hidden = false; localStorage.setItem('mic-ok', '1'); }
+  catch (e) { meterOn = false; $('mic-meter').hidden = true; status('Cannot read the microphone: ' + humanError(e) + ' On a Mac, allow DemoLens under System Settings > Privacy & Security > Microphone.', 'error'); }
+}
+function meterStop() { meterOn = false; $('mic-meter').hidden = true; invoke('mic_meter_stop').catch(() => { }); }
+window.__TAURI__.event.listen('mic-level', e => {
+  const { rms, peak } = e.payload, bars = [...$('mic-meter').children];
+  const lvl = Math.max(0, Math.min(1, (peak + 60) / 60));
+  bars.forEach((b, i) => { const on = lvl > i / bars.length + 0.02; b.classList.toggle('on', on); b.style.height = (4 + (on ? (i + 1) * 2.2 : 0)) + 'px'; });
+  if (rms < -55) quietSince ||= performance.now(); else quietSince = 0;
+  const quiet = quietSince && performance.now() - quietSince > 5000;
+  $('mic-meter').classList.toggle('quiet', !!quiet);
+  $('mic-meter').title = quiet ? 'Very quiet. Raise the input volume in System Settings > Sound > Input, or pick another microphone.' : 'Microphone level. Speak to see it move.';
+});
+document.querySelectorAll('#rec-mic').forEach(b => b.addEventListener('click', () => setTimeout(() => (b.getAttribute('aria-pressed') === 'true' ? meterStart() : meterStop()), 0)));
+loadMics().then(() => { if (localStorage.getItem('mic-ok')) meterStart(); });
+
+// ---------- Editing proxy and sound ----------
+// A 720p copy of the video is built in the background. The editor reads that
+// instead of the 2940x1912 original (the backend picks it up on its own), and
+// the sound is played by a normal audio element on the proxy, in step with the
+// timeline. The proxy's loudness is already evened out.
+const pa = new Audio(); pa.preload = 'auto';
+let proxyFor = null, proxyReady = false;
+async function prepareProxy() {
+  const src = project?.source; if (!src) return;
+  proxyReady = false; pa.removeAttribute('src'); pa.load();
+  const have = await invoke('proxy_path', { source: src }).catch(() => null);
+  if (have) return useProxy(src, have);
+  $('proxy-note')?.remove();
+  invoke('proxy_ensure', { source: src }).then(r => useProxy(src, r.path)).catch(() => { });
+}
+function useProxy(src, path) {
+  if (project?.source !== src) return;
+  proxyFor = src; pa.src = window.__TAURI__.core.convertFileSrc(path); proxyReady = true;
+}
+window.__TAURI__.event.listen('proxy-progress', e => {
+  const p = e.payload; if (p.source !== project?.source) return;
+  if (p.error) status('Could not build the faster preview copy. Editing still works. ' + p.error, 'info');
+  else if (p.done) { useProxy(p.source, p.path); if (!playing) refresh(); }
+});
+function audioClip(srcMs) { return project.clips.find(c => srcMs >= c.src_start_ms && srcMs < c.src_end_ms) || project.clips[project.clips.length - 1]; }
+function syncAudio(start) {
+  if (!proxyReady || !project) return;
+  const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
+  const want = (srcMs - (a.offset_ms || 0)) / 1000;
+  pa.muted = !!a.mute; pa.volume = Math.max(0, Math.min(1, a.volume ?? 1));
+  pa.playbackRate = Math.max(0.25, Math.min(4, clip?.speed || 1)); pa.preservesPitch = true;
+  // Above 4x the browser cannot keep up with the sound, so it is skipped.
+  if ((clip?.speed || 1) > 4) { pa.pause(); return; }
+  if (start || Math.abs(pa.currentTime - want) > 0.18) pa.currentTime = Math.max(0, want);
+  if (pa.paused) pa.play().catch(() => { });
+}
+const _setPlaying = setPlaying;
+setPlaying = v => { _setPlaying(v); if (v) syncAudio(true); else pa.pause(); };
+const _refresh = refresh;
+refresh = async function () { if (playing) syncAudio(false); return _refresh(); };
+
+// ---------- AI status ----------
+let aiState = null;
+const STATE_LABEL = { ready: ['Ready', 'ok'], needs_model: ['Needs model', 'missing'], cloud: ['Using cloud', 'cloud'], needs_cloud: ['Needs cloud provider', 'missing'], error: ['Error', 'err'] };
+async function loadAiStatus() {
+  try { aiState = await invoke('ai_status'); } catch { return; }
+  renderAiStatus();
+}
+function renderAiStatus() {
+  const s = aiState; if (!s) return;
+  $('ai-status').innerHTML = s.features.map(f => {
+    const [label, cls] = STATE_LABEL[f.state] || [f.state, ''];
+    const dl = f.needs.length ? `<button class="btn sm" data-dl="${f.needs.map(n => n.id).join(',')}">${f.state === 'error' ? 'Fix' : 'Download'} ${esc(f.needs.reduce((a, n) => a + n.size, 0) > 1e6 ? (f.needs.reduce((a, n) => a + n.size, 0) / 1e6).toFixed(0) + ' MB' : '')}</button>` : '';
+    const test = f.can_test && f.state !== 'error' ? `<button class="btn ghost sm" data-test="${f.id}" title="Run a quick check with the installed model">Test</button>` : '';
+    return `<div class="feat"><div class="feat-h"><b>${esc(f.title)}</b><span class="pill ${cls}">${esc(f.provider && f.state === 'cloud' ? 'Using ' + f.provider : label)}</span></div>
+      <small>${esc(f.detail)}</small><div class="row feat-a">${dl}${test}<small class="muted" data-res="${f.id}"></small></div></div>`;
+  }).join('');
+  $('ai-dl-all').hidden = !s.recommended_missing.length;
+  const total = s.recommended_missing.reduce((a, m) => a + m.size, 0);
+  $('ai-dl-all').querySelector('span').textContent = `Download recommended models (${(total / 1e6).toFixed(0)} MB)`;
+  document.querySelectorAll('#ai-status [data-dl]').forEach(b => (b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Downloading...';
+    try { for (const id of b.dataset.dl.split(',')) await invoke('model_download', { id }); status('Model downloaded. It is ready to use.', 'success'); } catch (e) { fail(e); }
+    loadAiStatus(); refreshModels();
+  }));
+  document.querySelectorAll('#ai-status [data-test]').forEach(b => (b.onclick = async () => {
+    const out = document.querySelector(`[data-res="${b.dataset.test}"]`); b.disabled = true; out.textContent = 'Testing...';
+    try { const r = await invoke('ai_self_test', { id: b.dataset.test }); out.textContent = (r.ok ? 'Passed: ' : 'Failed: ') + r.message; out.className = r.ok ? 'ok-text' : 'err-text'; }
+    catch (e) { out.textContent = 'Failed: ' + humanError(e); out.className = 'err-text'; }
+    b.disabled = false;
+  }));
+}
+$('ai-dl-all').onclick = async () => {
+  $('ai-dl-all').disabled = true; $('ai-dl-wrap').hidden = false; $('ai-dl-bar').style.width = '0%';
+  try { const n = await invoke('models_download_recommended'); status(`Downloaded ${n} model${n === 1 ? '' : 's'}. Captions and secret blurring are ready.`, 'success'); }
+  catch (e) { fail(e); }
+  $('ai-dl-all').disabled = false; setTimeout(() => ($('ai-dl-wrap').hidden = true), 1200); loadAiStatus(); refreshModels();
+};
+$('ai-cloud-link').onclick = () => showSettings('cloud');
+window.__TAURI__.event.listen('ai-progress', e => {
+  const p = e.payload;
+  if (p.task === 'download:all') { $('ai-dl-bar').style.width = (p.progress * 100) + '%'; $('ai-dl-text').textContent = p.message; }
+});
+
+// ---------- Disk usage (Settings) ----------
+const gb = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(0) + ' MB' : Math.max(0, Math.round(n / 1e3)) + ' KB';
+async function renderDisk() {
+  const box = $('disk-body'); if (!box) return;
+  let r; try { r = await invoke('storage_report'); } catch (e) { box.innerHTML = '<p class="err-text">' + esc(humanError(e)) + '</p>'; return; }
+  const bad = r.recordings.filter(x => x.health !== 'ok');
+  box.innerHTML = `<p>Recordings use <b>${gb(r.total_bytes)}</b> in <code>${esc(r.root)}</code>. Editing copies use ${gb(r.proxy_bytes)} (rebuilt when needed).</p>
+    <div class="row">${bad.length ? `<button class="btn" id="dk-clean">Clean up ${bad.length} empty or broken (${gb(r.reclaimable_bytes)})...</button>` : '<span class="ok-text">' + icon('i-check') + ' No empty or broken recordings.</span>'}
+    <button class="btn ghost" id="dk-proxy">Clear editing copies</button></div>
+    <div class="list">${r.recordings.map(x => `<div class="item"><span>${esc(x.name)} <small class="muted">${gb(x.bytes)}${x.health !== 'ok' ? ` &middot; <span class="err-text">${x.health}: ${esc(x.reason)}</span>` : ''}</small></span><button class="btn ghost sm" data-rm="${esc(x.path)}">Delete</button></div>`).join('') || '<p class="muted small">No recordings.</p>'}</div>`;
+  const del = async (paths, title, text, yes) => {
+    if (!(await confirmBox(title, text, yes))) return;
+    try { const d = await invoke('storage_delete', { paths }); status(`Deleted ${d.deleted} folder${d.deleted === 1 ? '' : 's'}, freed ${gb(d.bytes)}.` + (d.failed.length ? ' Some could not be deleted: ' + d.failed[0] : ''), d.failed.length ? 'error' : 'success'); } catch (e) { fail(e); }
+    renderDisk();
+  };
+  if ($('dk-clean')) $('dk-clean').onclick = () => del(bad.map(x => x.path), 'Clean up recordings?', `<p>These folders cannot be opened and will be deleted for good:</p><ul>${bad.map(x => `<li>${esc(x.name)}: ${gb(x.bytes)}, ${esc(x.reason)}</li>`).join('')}</ul><p>Working recordings are never touched.</p>`, 'Delete ' + bad.length);
+  $('dk-proxy').onclick = async () => { const n = await invoke('storage_clear_proxies').catch(() => 0); status('Freed ' + gb(n), 'success'); renderDisk(); };
+  box.querySelectorAll('[data-rm]').forEach(b => (b.onclick = () => del([b.dataset.rm], 'Delete this recording?', `<p>${esc(baseName(b.dataset.rm))} will be deleted for good.</p>`, 'Delete')));
+}
 
 // ---------- Start ----------
 enableControls(); refreshModels(); loadTemplates().catch(fail);
@@ -589,7 +773,7 @@ async function confirmCloud(task) {
     <dt>Data</dt><dd>${esc(pv.data)}</dd><dt>Size</dt><dd>about ${kb(pv.bytes)}</dd>
     <dt>Their terms</dt><dd><a href="${esc(pv.terms)}" target="_blank" rel="noreferrer">Terms</a> and <a href="${esc(pv.privacy)}" target="_blank" rel="noreferrer">privacy policy</a></dd>
     <dt>You turned this on</dt><dd>${esc(pv.consented_on || 'unknown')}</dd></dl>
-    <p class="muted small">Switch back to local any time in Settings > Cloud AI.</p>`, 'Send');
+    <p class="muted small">Switch back to local any time in Settings > Cloud &amp; API keys.</p>`, 'Send');
   return ok ? true : null;
 }
 
@@ -625,7 +809,7 @@ async function showSettings(tab = 'privacy') {
   await loadCloud();
   const st = await invoke('get_settings'), recs = await invoke('list_recordings').catch(() => []);
   const s3 = await invoke('s3_get').catch(() => ({ config: {}, secret_set: false }));
-  const tabs = ['privacy', 'cloud', 'storage'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', cloud: 'Cloud AI', storage: 'Storage' }[t]}</button>`).join('');
+  const tabs = ['privacy', 'cloud', 'storage', 'disk'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage' }[t]}</button>`).join('');
   let body = '';
   if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
     <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
@@ -637,6 +821,7 @@ async function showSettings(tab = 'privacy') {
       <div class="row">${p.info.tasks.map(t => `<label><input type="checkbox" data-p="${p.id}" data-t="${t}" ${cloudState.choice[t] === p.id ? 'checked' : ''}/> ${TASKS[t]}${p.consents[t] ? ` <small class="muted">since ${esc(p.consents[t])}</small>` : ''}</label>`).join('')}</div></div>
       <div class="row">${p.key_set ? `<code>${esc(p.key_masked)}</code><button class="btn ghost sm" data-rm="${p.id}">Remove key</button>` : `<input type="password" class="field sm" data-key="${p.id}" placeholder="API key" autocomplete="off" /><button class="btn sm" data-save="${p.id}">Save</button>`}</div></div>`).join('') +
     `<label class="stack">OpenAI compatible endpoint (for "Custom")<input id="set-base" class="field" value="${esc(cloudState.custom_base || '')}" placeholder="https://example.com/v1" /></label><div class="row"><button class="btn sm" id="set-base-save">Save endpoint</button></div>`;
+  if (tab === 'disk') body = '<div id="disk-body"><p class="muted small">Measuring...</p></div>';
   if (tab === 'storage') { const c = s3.config || {}; body = `<p>Upload exports to your own S3 or Cloudflare R2 bucket. Objects are private, encrypted at rest where supported, and shared with a signed link (24 hours by default, 7 days at most). Event logs are never uploaded.</p>
     ${['endpoint', 'region', 'bucket', 'prefix', 'access_key_id'].map(k => `<label class="stack">${k.replace(/_/g, ' ')}<input class="field" data-s3="${k}" value="${esc(c[k] || '')}" /></label>`).join('')}
     <label class="stack">Link lifetime (hours, max 168)<input class="field" id="s3-exp" type="number" min="1" max="168" value="${Math.round((c.expiry_s || 86400) / 3600)}" /></label>
@@ -644,6 +829,7 @@ async function showSettings(tab = 'privacy') {
     <div class="row"><button class="btn primary" id="s3-save">Save storage</button></div>`; }
   modal('Settings', `<div class="row">${tabs}</div>${body}`);
   document.querySelectorAll('[data-st]').forEach(b => (b.onclick = () => showSettings(b.dataset.st)));
+  if (tab === 'disk') renderDisk();
   const again = () => showSettings(tab);
   if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => { await invoke('delete_recording', { path: b.dataset.del }).catch(fail); again(); }));
@@ -713,7 +899,7 @@ $('blur-draw').onclick = async () => {
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {
   modal('Welcome to DemoLens', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
-    <ul><li>A red REC badge shows while recording. Ctrl/Cmd+Shift+P pauses.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud AI and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
+    <ul><li>A small REC pill shows while recording (it is not in the video). Cmd/Ctrl+Shift+P pauses and Cmd/Ctrl+Shift+R starts or stops.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud AI and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
     <div class="row end"><button class="btn primary" id="fr-ok">Got it</button></div>`);
   $('fr-ok').onclick = () => { localStorage.setItem('privacy-ack', '1'); $('modal').close(); };
 }
