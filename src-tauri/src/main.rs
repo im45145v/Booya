@@ -105,8 +105,8 @@ fn initial_project() -> R<Option<serde_json::Value>> {
 
 #[tauri::command]
 fn list_presets() -> serde_json::Value {
-    let builtin: Vec<String> = preset::builtin_presets().into_iter().map(|p| p.name).collect();
-    let user: Vec<String> = preset::list_presets().into_iter().filter(|n| !builtin.contains(n)).collect();
+    let builtin = preset::builtin_presets();
+    let user: Vec<preset::Preset> = preset::list_presets().into_iter().filter_map(|n| preset::load_preset(&n).ok()).collect();
     serde_json::json!({ "builtin": builtin, "user": user })
 }
 

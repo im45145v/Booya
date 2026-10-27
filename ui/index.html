@@ -1,104 +1,247 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <title>DemoLens</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header>
-  <strong>DemoLens</strong>
-  <div class="group">
-    <select id="rec-target">
+<!-- Icon sprite (outline icons, 24px grid, drawn for DemoLens). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="13" rx="3"/><circle cx="12" cy="11" r="3.2"/><path d="M8 20.5h8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/></symbol>
+    <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-wand" viewBox="0 0 24 24"><path d="m4 20 11-11M14 4v3M18.5 5.5l-2 2M20 10h-3M12 6.5 13.5 8"/><path d="M16 2.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" fill="currentColor"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-2.6 3.4M6.6 6.6A17 17 0 0 0 2.5 12S6 19 12 19a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+    <symbol id="i-captions" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12h7"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-sample" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m10 8.5 4.5 2.5-4.5 2.5z" fill="currentColor"/><path d="M8 21h8"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h4L13 5v14l-5-4.5H4z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+  </defs>
+</svg>
+
+<header class="toolbar" role="toolbar" aria-label="Main toolbar">
+  <div class="brand"><svg class="ico" aria-hidden="true"><use href="#i-logo"/></svg><span>DemoLens</span></div>
+  <div class="tb-group">
+    <button id="open-btn" class="btn ghost" title="Open a video or project (Ctrl+O)"><svg class="ico"><use href="#i-open"/></svg><span>Open</span></button>
+    <button id="save-btn" class="btn ghost needs-project" title="Save project (Ctrl+S). Shift+click or Ctrl+Shift+S to save as."><svg class="ico"><use href="#i-save"/></svg><span>Save</span></button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button id="undo-btn" class="btn icon ghost" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg class="ico"><use href="#i-undo"/></svg></button>
+    <button id="redo-btn" class="btn icon ghost" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled><svg class="ico"><use href="#i-redo"/></svg></button>
+  </div>
+  <div id="project-name" class="project-name" aria-live="polite"></div>
+  <div class="tb-group rec-group" role="group" aria-label="Recording">
+    <label class="sr-only" for="rec-target">What to record</label>
+    <select id="rec-target" class="field sm">
       <option value="screen">Full screen</option>
       <option value="window">Window</option>
       <option value="area">Area</option>
     </select>
-    <input id="rec-arg" placeholder="window id or x,y,w,h" />
-    <label><input type="checkbox" id="rec-mic" checked /> Mic</label>
-    <label><input type="checkbox" id="rec-sys" /> System audio</label>
-    <button id="rec-btn" class="primary">Record</button>
+    <label class="sr-only" for="rec-arg">Window id or area</label>
+    <input id="rec-arg" class="field sm" placeholder="x,y,w,h" hidden />
+    <button id="rec-mic" class="btn icon ghost toggle" aria-pressed="true" title="Record microphone" aria-label="Record microphone"><svg class="ico"><use href="#i-mic"/></svg></button>
+    <button id="rec-sys" class="btn icon ghost toggle" aria-pressed="false" title="Record system audio" aria-label="Record system audio"><svg class="ico"><use href="#i-speaker"/></svg></button>
+    <button id="rec-btn" class="btn rec" title="Start recording (Ctrl+R)"><svg class="ico"><use href="#i-record"/></svg><span>Record</span></button>
   </div>
-  <div class="group">
-    <button id="open-btn" title="Open a video or a .demolens.json project (Ctrl+O)">Open...</button>
-    <button id="save-btn" title="Save the project (Ctrl+S)">Save</button>
-    <button id="save-as-btn">Save as...</button>
+  <div class="tb-group">
+    <button id="theme-btn" class="btn icon ghost" title="Switch light or dark theme" aria-label="Switch theme"><svg class="ico"><use href="#i-sun"/></svg></button>
+    <button id="keys-btn" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico"><use href="#i-keyboard"/></svg></button>
+    <button id="ex-top" class="btn primary needs-project" title="Export video (Ctrl+E)"><svg class="ico"><use href="#i-export"/></svg><span>Export</span></button>
   </div>
-  <div class="group">
-    <button id="undo-btn" title="Undo (Ctrl+Z)" disabled>Undo</button>
-    <button id="redo-btn" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
-  </div>
-  <span id="project-name"></span>
 </header>
 
-<main>
-  <section id="stage">
-    <div id="preview-wrap"><img id="preview" alt="preview" /><div id="empty">Record or open a video to start.</div></div>
-    <div id="transport">
-      <button id="play">Play</button>
-      <span id="time">0.0 / 0.0 s</span>
-      <button id="split">Split</button>
-      <button id="del-clip">Delete clip</button>
-      <label>Speed <select id="speed"><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option><option>8</option></select></label>
-      <button id="add-zoom">Add zoom</button>
-      <button id="del-zoom">Delete zoom</button>
-      <label>Zoom <input id="zoom-scale" type="number" min="1" max="4" step="0.1" value="2" /></label>
-      <button id="auto-zoom">Auto zoom</button>
+<main class="workspace">
+  <section class="stage" aria-label="Preview and timeline">
+    <div class="preview-wrap" id="preview-wrap">
+      <img id="preview" alt="Preview of the current frame" hidden />
+      <div id="welcome" class="welcome">
+        <div class="welcome-card">
+          <div class="welcome-logo"><svg class="ico xl" aria-hidden="true"><use href="#i-logo"/></svg></div>
+          <h1>Turn a screen recording into a polished demo</h1>
+          <p class="lead">Auto zoom on every click, a smooth cursor, captions, filler words cut and secrets blurred. Everything runs on this computer.</p>
+          <div class="welcome-actions">
+            <button id="w-sample" class="btn primary lg"><svg class="ico"><use href="#i-sample"/></svg><span>Try the sample</span></button>
+            <button id="w-record" class="btn lg"><svg class="ico"><use href="#i-record"/></svg><span>Record screen</span></button>
+            <button id="w-open" class="btn lg"><svg class="ico"><use href="#i-open"/></svg><span>Open video</span></button>
+          </div>
+          <ol class="steps">
+            <li><b>1</b><span>Record or open a video</span></li>
+            <li><b>2</b><span>Press <em>Make it demo-ready</em></span></li>
+            <li><b>3</b><span>Export for YouTube, X, Reels or a GIF</span></li>
+          </ol>
+          <p class="hint">AI features are optional and offline. <button id="w-models" class="link">Manage models</button> &middot; <button id="w-keys" class="link">Shortcuts</button></p>
+        </div>
+      </div>
+      <div id="busy-overlay" class="busy-overlay" hidden><div class="spinner" aria-hidden="true"></div><span id="busy-text">Working...</span></div>
     </div>
-    <canvas id="timeline" height="130"></canvas>
-    <div id="status">Ready</div>
+
+    <div class="transport needs-project-area" role="group" aria-label="Playback and editing">
+      <button id="play" class="btn icon" title="Play or pause (Space)" aria-label="Play"><svg class="ico"><use href="#i-play"/></svg></button>
+      <span id="time" class="time" aria-label="Current time">0:00.0 / 0:00.0</span>
+      <span class="tb-sep"></span>
+      <button id="split" class="btn ghost" title="Split clip at the playhead (S)"><svg class="ico"><use href="#i-scissors"/></svg><span>Split</span></button>
+      <button id="add-zoom" class="btn ghost" title="Add a zoom at the playhead (Z)"><svg class="ico"><use href="#i-zoom"/></svg><span>Zoom</span></button>
+      <button id="del-sel" class="btn ghost" title="Delete the selected zoom or clip (Delete)"><svg class="ico"><use href="#i-trash"/></svg><span>Delete</span></button>
+      <span class="grow"></span>
+      <span class="muted small">Timeline</span>
+      <button id="tl-out" class="btn icon ghost" title="Zoom timeline out (-)" aria-label="Zoom timeline out"><svg class="ico"><use href="#i-minus"/></svg></button>
+      <button id="tl-fit" class="btn icon ghost" title="Fit timeline (0)" aria-label="Fit timeline"><svg class="ico"><use href="#i-fit"/></svg></button>
+      <button id="tl-in" class="btn icon ghost" title="Zoom timeline in (+)" aria-label="Zoom timeline in"><svg class="ico"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="timeline-wrap">
+      <canvas id="timeline" tabindex="0" role="slider" aria-label="Timeline. Drag to scrub, drag zoom segments to move or resize them. Ctrl and scroll to zoom." aria-valuemin="0" aria-valuenow="0"></canvas>
+      <div id="tl-empty" class="tl-empty">Your clips, zooms and words will show up here.</div>
+    </div>
   </section>
 
-  <aside id="panel">
-    <h3>Local AI <span class="badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
-    <div class="row"><button id="ai-transcribe" class="wide">Transcribe</button><button id="ai-models" title="Download or delete local models">Models...</button></div>
-    <label><input type="checkbox" id="cap-burn" /> Burn in captions</label>
-    <label>Caption size <input id="cap-size" type="range" min="0.025" max="0.08" step="0.002" /></label>
-    <div class="row"><button id="cap-export" class="wide">Export SRT / VTT...</button></div>
-    <div class="row"><button id="ai-autocut" class="wide">Auto cut</button></div>
-    <label><input type="checkbox" id="cut-fillers" checked /> Filler words (um, uh)</label>
-    <label><input type="checkbox" id="cut-silences" checked /> Pauses longer than <select id="cut-min"><option value="500">0.5 s</option><option value="700" selected>0.7 s</option><option value="1200">1.2 s</option></select></label>
-    <div class="row"><button id="ai-redact" class="wide" title="Find emails, API keys, card and phone numbers on screen and blur them">Auto blur secrets</button></div>
-    <div class="row"><button id="ai-docs" class="wide" title="Title, chapters, step by step guide and a social post">Write docs</button></div>
-    <label><input type="checkbox" id="docs-llm" checked /> Use local LLM if available</label>
-    <h3>Audio</h3>
-    <label><input type="checkbox" id="aud-denoise" /> Remove background noise</label>
-    <label><input type="checkbox" id="aud-mute" /> Mute</label>
-    <progress id="ai-progress" max="1" value="0" hidden></progress>
-    <h3>Background</h3>
-    <select id="bg-type"><option value="gradient">Gradient</option><option value="solid">Solid</option><option value="image">Image</option></select>
-    <div class="row"><input type="color" id="bg-from" value="#6366f1" /><input type="color" id="bg-to" value="#ec4899" /><input id="bg-angle" type="number" value="35" title="angle" /></div>
-    <input id="bg-image" placeholder="/path/to/wallpaper.jpg" />
-    <h3>Frame</h3>
-    <label>Padding <input id="padding" type="range" min="0" max="0.3" step="0.005" /></label>
-    <label>Corners <input id="radius" type="range" min="0" max="0.06" step="0.002" /></label>
-    <label>Shadow <input id="shadow" type="range" min="0" max="0.1" step="0.002" /></label>
-    <h3>Cursor</h3>
-    <label><input type="checkbox" id="cur-visible" /> Show cursor</label>
-    <label>Size <input id="cur-size" type="range" min="0.5" max="4" step="0.1" /></label>
-    <label>Smoothing <input id="cur-smooth" type="range" min="0" max="300" step="10" /></label>
-    <label><input type="checkbox" id="cur-ripple" /> Click ripples</label>
-    <h3>Keys</h3>
-    <label><input type="checkbox" id="keys-on" /> Keystroke overlay</label>
-    <label><input type="checkbox" id="keys-short" /> Shortcuts only</label>
-    <h3>Blur</h3>
-    <div class="row"><input id="blur-rect" placeholder="x,y,w,h (source px)" /><button id="blur-add">Add</button></div>
-    <div id="blur-list"></div>
-    <h3>Preset</h3>
-    <div class="row"><select id="preset-list"></select><button id="preset-apply">Apply</button></div>
-    <div class="row"><input id="preset-name" placeholder="Product name" /><button id="preset-save">Save</button></div>
-    <h3>Export</h3>
-    <div class="row">
-      <select id="ex-aspect"><option>16:9</option><option>9:16</option><option>1:1</option></select>
-      <select id="ex-quality"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select>
-      <select id="ex-fps"><option>24</option><option selected>30</option><option>60</option></select>
+  <aside class="inspector" aria-label="Inspector">
+    <div class="tabs" role="tablist">
+      <button role="tab" class="tab" id="tab-magic" aria-controls="pane-magic" aria-selected="true"><svg class="ico"><use href="#i-wand"/></svg>Magic</button>
+      <button role="tab" class="tab" id="tab-style" aria-controls="pane-style" aria-selected="false"><svg class="ico"><use href="#i-sun"/></svg>Style</button>
+      <button role="tab" class="tab" id="tab-edit" aria-controls="pane-edit" aria-selected="false"><svg class="ico"><use href="#i-scissors"/></svg>Edit</button>
+      <button role="tab" class="tab" id="tab-export" aria-controls="pane-export" aria-selected="false"><svg class="ico"><use href="#i-export"/></svg>Export</button>
     </div>
-    <div class="row"><button id="ex-btn" class="primary wide">Export MP4 / GIF...</button></div>
-    <progress id="ex-progress" max="1" value="0"></progress>
+
+    <div class="pane" id="pane-magic" role="tabpanel" aria-labelledby="tab-magic">
+      <div class="card hero">
+        <h2><svg class="ico"><use href="#i-wand"/></svg> Make it demo-ready</h2>
+        <p class="muted">One click: zoom, captions, cuts, blur and clean audio. Steps without a model are skipped and explained.</p>
+        <div class="checks">
+          <label><input type="checkbox" id="r-zoom" checked /> Auto zoom on clicks and typing</label>
+          <label><input type="checkbox" id="r-captions" checked /> Captions <span class="pill" id="pill-speech"></span></label>
+          <label><input type="checkbox" id="r-cut" checked /> Cut filler words and long pauses</label>
+          <label><input type="checkbox" id="r-blur" checked /> Blur emails, API keys and cards <span class="pill" id="pill-ocr"></span></label>
+          <label><input type="checkbox" id="r-denoise" checked /> Remove background noise</label>
+        </div>
+        <button id="ready-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-wand"/></svg><span>Make it demo-ready</span></button>
+        <ul id="ready-report" class="report" aria-live="polite"></ul>
+      </div>
+
+      <h3 class="section">AI tools <span class="badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+      <div class="tool-list">
+        <button id="ai-transcribe" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Transcribe</b><small>Captions and word timings</small></span></button>
+        <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Remove fillers and pauses</small></span></button>
+        <div class="sub">
+          <label><input type="checkbox" id="cut-fillers" checked /> Filler words (um, uh)</label>
+          <label><input type="checkbox" id="cut-silences" checked /> Pauses longer than
+            <select id="cut-min" class="field sm" aria-label="Minimum pause length"><option value="500">0.5 s</option><option value="700" selected>0.7 s</option><option value="1200">1.2 s</option></select></label>
+        </div>
+        <button id="ai-redact" class="tool needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span><b>Blur secrets</b><small>Emails, API keys, cards, phones</small></span></button>
+        <button id="ai-docs" class="tool needs-project"><svg class="ico"><use href="#i-doc"/></svg><span><b>Write docs</b><small>Title, chapters, guide, post</small></span></button>
+        <div class="sub"><label><input type="checkbox" id="docs-llm" checked /> Use a local LLM if one is available</label></div>
+        <button id="cap-export" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Export subtitles</b><small>SRT or VTT file</small></span></button>
+        <button id="ai-models" class="tool"><svg class="ico"><use href="#i-chip"/></svg><span><b>Models</b><small>Download or delete local models</small></span></button>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-style" role="tabpanel" aria-labelledby="tab-style" hidden>
+      <h3 class="section">Templates</h3>
+      <div id="templates" class="templates"></div>
+      <div class="row"><input id="preset-name" class="field" placeholder="Save current look as..." aria-label="Template name" /><button id="preset-save" class="btn needs-project">Save</button></div>
+
+      <h3 class="section">Background</h3>
+      <div class="seg" role="radiogroup" aria-label="Background type">
+        <button data-bg="gradient" role="radio">Gradient</button><button data-bg="solid" role="radio">Solid</button><button data-bg="image" role="radio">Image</button>
+      </div>
+      <input type="hidden" id="bg-type" value="gradient" />
+      <div class="row" id="bg-colors">
+        <label class="color"><input type="color" id="bg-from" value="#6366f1" aria-label="First colour" /></label>
+        <label class="color" id="bg-to-wrap"><input type="color" id="bg-to" value="#ec4899" aria-label="Second colour" /></label>
+        <label class="inline grow" id="bg-angle-wrap">Angle <input id="bg-angle" class="field sm" type="number" value="35" min="0" max="360" /></label>
+      </div>
+      <div class="row" id="bg-image-row" hidden><input id="bg-image" class="field" placeholder="/path/to/wallpaper.jpg" aria-label="Wallpaper path" /><button id="bg-pick" class="btn">Choose...</button></div>
+
+      <h3 class="section">Frame</h3>
+      <label class="slider">Padding <input id="padding" type="range" min="0" max="0.3" step="0.005" /></label>
+      <label class="slider">Corners <input id="radius" type="range" min="0" max="0.06" step="0.002" /></label>
+      <label class="slider">Shadow <input id="shadow" type="range" min="0" max="0.1" step="0.002" /></label>
+
+      <h3 class="section">Cursor</h3>
+      <label class="switch"><input type="checkbox" id="cur-visible" /> Show cursor</label>
+      <label class="slider">Size <input id="cur-size" type="range" min="0.5" max="4" step="0.1" /></label>
+      <label class="slider">Smoothing <input id="cur-smooth" type="range" min="0" max="300" step="10" /></label>
+      <label class="switch"><input type="checkbox" id="cur-ripple" /> Click ripples</label>
+
+      <h3 class="section">Keys and captions</h3>
+      <label class="switch"><input type="checkbox" id="keys-on" /> Keystroke overlay</label>
+      <label class="switch"><input type="checkbox" id="keys-short" /> Shortcuts only</label>
+      <label class="switch"><input type="checkbox" id="cap-burn" /> Burn in captions</label>
+      <label class="slider">Caption size <input id="cap-size" type="range" min="0.025" max="0.08" step="0.002" /></label>
+
+      <h3 class="section">Audio</h3>
+      <label class="switch"><input type="checkbox" id="aud-denoise" /> Remove background noise</label>
+      <label class="switch"><input type="checkbox" id="aud-mute" /> Mute</label>
+    </div>
+
+    <div class="pane" id="pane-edit" role="tabpanel" aria-labelledby="tab-edit" hidden>
+      <h3 class="section">Selected clip</h3>
+      <p class="muted small" id="clip-info">Click a clip on the timeline.</p>
+      <label class="inline">Speed
+        <select id="speed" class="field sm"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select></label>
+      <div class="row"><button id="split2" class="btn needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span>Split at playhead</span></button><button id="del-clip" class="btn needs-project"><svg class="ico"><use href="#i-trash"/></svg><span>Delete clip</span></button></div>
+
+      <h3 class="section">Zoom</h3>
+      <p class="muted small" id="zoom-info">Select a zoom segment on the timeline. Drag it to move it, drag its edges to resize.</p>
+      <label class="slider">Scale <input id="zoom-scale" type="range" min="1.1" max="4" step="0.1" value="2" /><output id="zoom-scale-out">2.0x</output></label>
+      <label class="switch"><input type="checkbox" id="zoom-follow" checked /> Follow the cursor</label>
+      <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-wand"/></svg><span>Regenerate auto zoom</span></button></div>
+
+      <h3 class="section">Blur boxes</h3>
+      <div class="row"><input id="blur-rect" class="field" placeholder="x,y,w,h in video pixels" aria-label="Blur box x,y,w,h" /><button id="blur-add" class="btn needs-project">Add</button></div>
+      <div id="blur-list" class="list"></div>
+    </div>
+
+    <div class="pane" id="pane-export" role="tabpanel" aria-labelledby="tab-export" hidden>
+      <h3 class="section">Made for</h3>
+      <div id="destinations" class="dest"></div>
+      <h3 class="section">Settings</h3>
+      <div class="grid2">
+        <label class="stack">Aspect<select id="ex-aspect" class="field"><option value="16:9">16:9 landscape</option><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option></select></label>
+        <label class="stack">Quality<select id="ex-quality" class="field"><option value="480">480p</option><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label>
+        <label class="stack">Frame rate<select id="ex-fps" class="field"><option>15</option><option>24</option><option selected>30</option><option>60</option></select></label>
+        <label class="stack">Format<select id="ex-format" class="field"><option value="mp4">MP4 video</option><option value="gif">GIF</option></select></label>
+      </div>
+      <button id="ex-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-export"/></svg><span>Export...</span></button>
+      <div id="ex-state" class="ex-state" hidden>
+        <div class="bar"><div id="ex-bar"></div></div>
+        <div class="row between"><span id="ex-text" class="small"></span><button id="ex-reveal" class="btn ghost sm" hidden><svg class="ico"><use href="#i-folder"/></svg><span>Show in folder</span></button></div>
+      </div>
+    </div>
   </aside>
 </main>
-<dialog id="modal">
-  <div class="modal-head"><strong id="modal-title"></strong><button id="modal-close">Close</button></div>
+
+<footer class="statusbar" role="status" aria-live="polite">
+  <svg class="ico" id="status-icon" aria-hidden="true"><use href="#i-check"/></svg>
+  <span id="status">Ready</span>
+  <div class="bar slim" id="ai-bar-wrap" hidden><div id="ai-bar"></div></div>
+</footer>
+
+<dialog id="modal" aria-labelledby="modal-title">
+  <div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="btn icon ghost" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button></div>
   <div id="modal-body"></div>
 </dialog>
 <script src="timeline.js"></script>
