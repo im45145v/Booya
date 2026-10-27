@@ -22,6 +22,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod mics;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -58,6 +59,11 @@ pub struct RecordOptions {
     /// Also record the webcam to `webcam.mkv` for a picture-in-picture overlay.
     #[serde(default)]
     pub webcam: bool,
+    /// Name of the microphone to use (as listed by `list_mics`). None picks
+    /// the built-in one, so a Bluetooth headset is not switched to its low
+    /// quality call mode by accident.
+    #[serde(default)]
+    pub mic_device: Option<String>,
 }
 
 /// Geometry of what will be captured, used to make event coordinates relative.
@@ -111,6 +117,9 @@ pub struct RecordingSession {
     pub events: PathBuf,
     region: Region,
     pub warnings: Vec<String>,
+    dir: PathBuf,
+    /// The folder did not exist before this recording (so an empty result may delete it).
+    created: bool,
 }
 
 pub struct Recording {
@@ -205,7 +214,7 @@ pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
 
 #[cfg(not(target_os = "macos"))]
 fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None };
     let plan = plan(&opts)?;
     let out = Command::new(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-v", "error", "-nostdin"])
@@ -220,14 +229,42 @@ fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
     Ok((out.stdout, plan.region.w, plan.region.h))
 }
 
-pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
-    std::fs::create_dir_all(&opts.out_dir)?;
-    #[cfg(unix)]
-    {
-        // Recordings and the event log are private to the user.
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&opts.out_dir, std::fs::Permissions::from_mode(0o700));
+/// Removes a recording folder this process created, when starting failed.
+/// A folder that already existed is never touched.
+struct FreshDir {
+    path: PathBuf,
+    created: bool,
+    keep: bool,
+}
+
+impl FreshDir {
+    fn create(path: &Path) -> Result<Self> {
+        let created = !path.exists();
+        std::fs::create_dir_all(path)?;
+        #[cfg(unix)]
+        {
+            // Recordings and the event log are private to the user.
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+        }
+        Ok(Self { path: path.to_path_buf(), created, keep: false })
     }
+}
+
+impl Drop for FreshDir {
+    fn drop(&mut self) {
+        if self.created && !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
+    // Work out the capture plan first (it needs the permissions and can
+    // fail), and only then create the folder, so a failed start leaves nothing
+    // behind.
+    let mut plan = plan(opts)?;
+    let mut fresh = FreshDir::create(&opts.out_dir)?;
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>)> {
@@ -255,7 +292,6 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         };
         Ok((child, err, feed))
     };
-    let mut plan = plan(opts)?;
     let mut started = Instant::now();
     let (mut child, mut err, mut feed) = spawn(&mut plan)?;
     if let Err(e) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
@@ -288,7 +324,8 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         // When the camera's first frame landed, relative to the screen's.
         let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
     }
-    Ok(RecordingSession { child, feed, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings })
+    fresh.keep = true;
+    Ok(RecordingSession { child, feed, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -429,12 +466,24 @@ impl RecordingSession {
         let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
         if size == 0 {
             let e = self.stderr.lock().unwrap().clone();
+            if self.created {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
             bail!("The recording is empty: {}{}", first_line(&e), permission_hint());
         }
         if killed {
             eprintln!("demolens: ffmpeg did not stop on q, it was killed");
         }
-        Ok(Recording { video: self.video.clone(), events: self.events.clone(), duration })
+        // Matroska is safe while recording but has no duration and no fast
+        // start, so the finished file is remuxed to MP4 (no re-encode).
+        let video = match crate::finalize::remux_to_mp4(&self.video) {
+            Ok(mp4) => mp4,
+            Err(e) => {
+                eprintln!("demolens: could not remux to MP4, keeping the MKV: {e:#}");
+                self.video.clone()
+            }
+        };
+        Ok(Recording { video, events: self.events.clone(), duration })
     }
 }
 
@@ -590,7 +639,7 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     }
 
     let dir = std::env::temp_dir().join(format!("demolens-doctor-{}", std::process::id()));
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None };
     let t0 = Instant::now();
     let mut test = serde_json::Map::new();
     match start(&opts) {

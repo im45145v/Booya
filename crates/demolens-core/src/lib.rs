@@ -4,6 +4,7 @@ pub mod captions;
 pub mod capture;
 pub mod events;
 pub mod export;
+pub mod finalize;
 pub mod ffmpeg;
 pub mod audio;
 pub mod text;

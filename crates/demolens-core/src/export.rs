@@ -48,27 +48,74 @@ fn atempo_chain(speed: f64) -> String {
     parts.join(",")
 }
 
-/// Audio filter graph matching the clip list (trim, speed, concat).
+/// Audio filter graph matching the clip list (trim, speed, concat), with the
+/// post filters (gain, normalising, volume, fades) and no measurement.
 pub fn audio_filter(project: &Project) -> String {
+    audio_graph(project, 1, &post_chain(project, None, true))
+}
+
+/// The graph for input `idx`, ending in `[aout]`. `post` is appended after
+/// the clips are joined (may be empty).
+pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
     let mut f = String::new();
     let n = project.clips.len();
+    // A positive offset delays the audio, so it is read from earlier in the file.
+    let off = project.audio.offset_ms / 1000.0;
     for (i, c) in project.clips.iter().enumerate() {
         // A short fade at each cut avoids clicks where the audio is joined.
         let len = c.out_len() / 1000.0;
         let fade = if n > 1 { (project.export.crossfade_ms / 1000.0).min(len / 3.0).max(0.0) } else { 0.0 };
         let fades = if fade > 0.005 { format!(",afade=t=in:d={fade:.3},afade=t=out:st={:.3}:d={fade:.3}", (len - fade).max(0.0)) } else { String::new() };
-        f.push_str(&format!(
-            "[1:a]atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS,{}{fades}[a{i}];",
-            c.src_start_ms / 1000.0,
-            c.src_end_ms / 1000.0,
-            atempo_chain(c.speed)
-        ));
+        let start = (c.src_start_ms / 1000.0 - off).max(0.0);
+        let end = (c.src_end_ms / 1000.0 - off).max(start + 0.001);
+        // A clip that starts before the (delayed) audio does gets silence first.
+        let pad = ((off - c.src_start_ms / 1000.0).max(0.0) / c.speed.max(0.01) * 1000.0).round();
+        let pad = if pad > 0.0 { format!(",adelay={pad:.0}:all=1") } else { String::new() };
+        f.push_str(&format!("[{idx}:a]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
     }
     for i in 0..n {
         f.push_str(&format!("[a{i}]"));
     }
-    f.push_str(&format!("concat=n={n}:v=0:a=1[aout]"));
+    if post.is_empty() {
+        f.push_str(&format!("concat=n={n}:v=0:a=1[aout]"));
+    } else {
+        f.push_str(&format!("concat=n={n}:v=0:a=1[acat];[acat]{post}[aout]"));
+    }
     f
+}
+
+/// Gain, normalising, volume and fades after the clips are joined. With
+/// `normalize` false the loudness stage is skipped (used for the measuring pass).
+pub fn post_chain(project: &Project, norm: Option<&crate::audio::Loudness>, normalize: bool) -> String {
+    let a = &project.audio;
+    let mut parts: Vec<String> = Vec::new();
+    if a.gain_db.abs() > 0.05 {
+        parts.push(format!("volume={:.2}dB", a.gain_db.clamp(-30.0, 40.0)));
+    }
+    if normalize && a.normalize {
+        let n = crate::audio::normalize_chain(norm);
+        if !n.is_empty() {
+            parts.push(n);
+        }
+    }
+    if (a.volume - 1.0).abs() > 0.005 {
+        parts.push(format!("volume={:.3}", a.volume.clamp(0.0, 1.5)));
+    }
+    let out_len = project.output_duration_ms() / 1000.0;
+    if a.fade_in_ms > 1.0 {
+        parts.push(format!("afade=t=in:d={:.3}", (a.fade_in_ms / 1000.0).min(out_len / 2.0)));
+    }
+    if a.fade_out_ms > 1.0 {
+        let d = (a.fade_out_ms / 1000.0).min(out_len / 2.0);
+        parts.push(format!("afade=t=out:st={:.3}:d={d:.3}", (out_len - d).max(0.0)));
+    }
+    parts.join(",")
+}
+
+/// Measure the loudness the export audio would have before normalising.
+pub fn measure_export_audio(project: &Project, audio_input: &Path) -> Option<crate::audio::Loudness> {
+    let graph = audio_graph(project, 0, &post_chain(project, None, false));
+    crate::audio::measure_graph(audio_input, &graph).ok().flatten()
 }
 
 pub struct ExportStats {
@@ -114,7 +161,6 @@ pub fn passthrough_ok(p: &Project) -> bool {
         && !p.keys.enabled
         && p.webcam.as_ref().is_none_or(|w| !w.visible)
         && !p.audio.denoise
-        && !p.audio.mute
         && (ow, oh) == (p.source_width, p.source_height)
 }
 
@@ -125,7 +171,16 @@ fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f6
     cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(&project.source));
     // The capture is H.264 already; audio may be PCM or Opus, which MP4
     // players handle badly, so audio is converted to AAC (cheap).
-    cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]);
+    // The picture is copied; the sound still goes through the audio graph
+    // (normalising, gain, volume, fades), which is cheap.
+    if project.audio.mute || !info.has_audio {
+        cmd.args(["-map", "0:v:0", "-an", "-c:v", "copy"]);
+    } else {
+        let m = if project.audio.normalize { measure_export_audio(project, &project.source) } else { None };
+        let graph = audio_graph(project, 0, &post_chain(project, m.as_ref(), true));
+        cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
+    }
+    cmd.args(["-movflags", "+faststart"]);
     cmd.arg(ffmpeg::file_url(out));
     let res = cmd.stdin(Stdio::null()).output().context("failed to start ffmpeg")?;
     if !res.status.success() {
@@ -211,18 +266,24 @@ fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progr
         crate::audio::denoise_file(&project.source, &denoised)?;
         audio_input = denoised;
     }
+    let audio_graph_text = if with_audio {
+        let m = if project.audio.normalize { measure_export_audio(project, &audio_input) } else { None };
+        audio_graph(project, 1, &post_chain(project, m.as_ref(), true))
+    } else {
+        String::new()
+    };
     match s.format {
         Format::Mp4 => {
             if with_audio {
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
-                cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
+                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
             }
             cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
         }
         Format::Webm => {
             if with_audio {
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
-                cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "128k"]);
+                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "128k"]);
             }
             cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p", "-shortest"]);
         }
@@ -334,5 +395,55 @@ mod tests {
         assert!(!audio_filter(&p).contains("afade"));
         p.cut_ranges(&[(4_000.0, 5_000.0)]);
         assert!(audio_filter(&p).contains("afade=t=in"));
+    }
+
+    #[test]
+    fn a_quiet_recording_is_normalised_on_export() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-loud-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("quiet.mp4");
+        let ok = Command::new(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-af", "volume=-25dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let mut p = Project::new(src.clone(), None, 1920, 1080, 3000.0);
+        p.style.padding = 0.0;
+        p.style.corner_radius = 0.0;
+        p.cursor.visible = false;
+        p.keys.enabled = false;
+        assert!(passthrough_ok(&p));
+        let before = crate::audio::measure_file(&src).unwrap().unwrap().input_i;
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let after = crate::audio::measure_file(&out).unwrap().unwrap().input_i;
+        assert!(before < -40.0, "{before}");
+        assert!((after - crate::audio::TARGET_LUFS).abs() < 2.5, "{after}");
+        // Normalising off leaves the level alone.
+        p.audio.normalize = false;
+        let raw = dir.join("raw.mp4");
+        export(&p, &raw, |_| {}).unwrap();
+        let unchanged = crate::audio::measure_file(&raw).unwrap().unwrap().input_i;
+        assert!((unchanged - before).abs() < 2.0, "{unchanged} vs {before}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_offset_and_fades_reach_the_graph() {
+        let mut p = Project::new("a.mkv".into(), None, 1920, 1080, 10_000.0);
+        p.audio.offset_ms = 300.0;
+        p.audio.volume = 0.5;
+        p.audio.fade_out_ms = 500.0;
+        let g = audio_filter(&p);
+        assert!(g.contains("adelay=300"), "{g}");
+        assert!(g.contains("volume=0.500") && g.contains("afade=t=out"), "{g}");
+        p.audio.offset_ms = -200.0;
+        // Earlier audio reads later in the file.
+        assert!(audio_filter(&p).contains("atrim=start=0.200"));
     }
 }

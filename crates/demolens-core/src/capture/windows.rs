@@ -30,7 +30,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     };
     if o.mic {
         // TODO(windows): enumerate dshow devices and let the user pick.
-        let dev = std::env::var("DEMOLENS_MIC").unwrap_or_else(|_| "Microphone".into());
+        let dev = o.mic_device.clone().or_else(|| std::env::var("DEMOLENS_MIC").ok()).unwrap_or_else(|| "Microphone".into());
         args.extend([s("-f"), s("dshow"), s("-i"), format!("audio={dev}")]);
     }
     if o.system_audio {

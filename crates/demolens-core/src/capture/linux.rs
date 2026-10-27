@@ -59,7 +59,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     ];
     let mut audio_inputs = 0;
     if o.mic {
-        args.extend([s("-f"), s("pulse"), s("-i"), s("default")]);
+        args.extend([s("-f"), s("pulse"), s("-i"), o.mic_device.clone().unwrap_or_else(|| s("default"))]);
         audio_inputs += 1;
     }
     if o.system_audio {

@@ -48,13 +48,16 @@ pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
 
 /// The built in microphone when there is one: a Bluetooth headset that is
 /// listed first would drop its sound quality as soon as it is used as an input.
-fn pick_mic(audio: &[AvDevice]) -> Option<&AvDevice> {
+pub(crate) fn pick_mic<'a>(audio: &'a [AvDevice], wanted: Option<&str>) -> Option<&'a AvDevice> {
+    if let Some(w) = wanted {
+        if let Some(d) = audio.iter().find(|d| d.name == w).or_else(|| audio.iter().find(|d| d.name.to_lowercase().contains(&w.to_lowercase()))) {
+            return Some(d);
+        }
+    }
     audio
         .iter()
-        .find(|d| {
-            let n = d.name.to_lowercase();
-            n.contains("macbook") || n.contains("built-in") || n.contains("microphone")
-        })
+        .find(|d| super::mics::is_builtin(&d.name))
+        .or_else(|| audio.iter().find(|d| d.name.to_lowercase().contains("microphone")))
         .or_else(|| audio.first())
 }
 
@@ -69,6 +72,12 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     let fps = o.fps.clamp(1, 60);
     let cap = macos_sck::open(&o.target, fps, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
     let (w, h) = (cap.width, cap.height);
+    // Every input is stamped with the wall clock minus the moment recording
+    // began, and the timestamps are kept (`-copyts`), so the microphone lands
+    // where it really happened relative to the first frame instead of both
+    // tracks being shifted to start at zero. The event log uses the same
+    // origin, so clicks, zoom and sound all line up.
+    let t0 = epoch_secs();
     let mut out_args = vec![s("-fps_mode"), s("cfr"), s("-r"), s(fps)];
     let region = match &o.target {
         CaptureTarget::Area { x, y, w: aw, h: ah } => {
@@ -82,8 +91,10 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         _ => Region { x: cap.origin.0, y: cap.origin.1, w, h },
     };
     let mut args = vec![
+        s("-copyts"),
         s("-thread_queue_size"), s("64"),
         s("-use_wallclock_as_timestamps"), s("1"),
+        s("-itsoffset"), format!("-{t0:.3}"),
         s("-f"), s("rawvideo"),
         s("-pixel_format"), s("bgra"),
         s("-video_size"), format!("{w}x{h}"),
@@ -92,13 +103,27 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     ];
     if o.mic {
         let (_, audio) = list_devices();
-        match pick_mic(&audio) {
-            Some(d) => args.extend([s("-thread_queue_size"), s("1024"), s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index)]),
+        match pick_mic(&audio, o.mic_device.as_deref()) {
+            Some(d) => {
+                args.extend([
+                    s("-thread_queue_size"), s("1024"),
+                    s("-use_wallclock_as_timestamps"), s("1"),
+                    s("-itsoffset"), format!("-{t0:.3}"),
+                    s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index),
+                ]);
+                // Smooths the jitter of wall clock stamps without moving the start.
+                out_args.extend([s("-af"), s("aresample=async=1:min_hard_comp=0.2")]);
+            }
             None => warnings.push("No microphone was found, so this recording has no sound.".into()),
         }
     }
     let feed: Feed = Box::new(move |stdin| Box::new(macos_sck::feed(cap, stdin, fps)));
     Ok(CapturePlan { region, args, out_args, warnings, feed: Some(feed) })
+}
+
+/// Seconds since the Unix epoch, with millisecond precision.
+fn epoch_secs() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 /// Fallback: ffmpeg's avfoundation screen input (does not work on recent macOS).

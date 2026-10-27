@@ -248,6 +248,7 @@ fn record(mut a: Args) -> Result<()> {
             None => Default::default(),
         },
         webcam: a.flag("--webcam"),
+        mic_device: a.opt(&["--mic-device"]),
     };
     let seconds: Option<f64> = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?;
     let session = capture::start(&opts)?;

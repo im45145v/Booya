@@ -20,6 +20,75 @@ pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
     Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
 }
 
+/// Target loudness for exports and the editor preview (online video).
+pub const TARGET_LUFS: f64 = -16.0;
+pub const TARGET_TP: f64 = -1.5;
+/// Below this the track is treated as silence (mic muted or not working) and
+/// is left alone instead of boosting noise by 40 dB.
+pub const SILENT_LUFS: f64 = -65.0;
+
+/// Result of a loudnorm measuring pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Loudness {
+    pub input_i: f64,
+    pub input_tp: f64,
+    pub input_lra: f64,
+    pub input_thresh: f64,
+    pub target_offset: f64,
+}
+
+/// Pull the JSON object loudnorm prints at the end of its stderr.
+pub fn parse_loudnorm(stderr: &str) -> Option<Loudness> {
+    let end = stderr.rfind('}')?;
+    let start = stderr[..end].rfind('{')?;
+    let v: serde_json::Value = serde_json::from_str(&stderr[start..=end]).ok()?;
+    let num = |k: &str| v[k].as_str().and_then(|s| s.trim().parse::<f64>().ok()).or_else(|| v[k].as_f64());
+    let m = Loudness {
+        input_i: num("input_i")?,
+        input_tp: num("input_tp")?,
+        input_lra: num("input_lra")?,
+        input_thresh: num("input_thresh")?,
+        target_offset: num("target_offset").unwrap_or(0.0),
+    };
+    // "-inf" parses as -inf: no usable measurement.
+    [m.input_i, m.input_tp, m.input_lra, m.input_thresh].iter().all(|x| x.is_finite()).then_some(m)
+}
+
+/// Measure the loudness of the audio produced by `graph` (which must end in
+/// the label `[aout]`) for the input file `input`.
+pub fn measure_graph(input: &Path, graph: &str) -> Result<Option<Loudness>> {
+    let full = format!("{graph};[aout]loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11:print_format=json[m]");
+    let out = Command::new(crate::ffmpeg::ffmpeg_bin())
+        .args(["-hide_banner", "-nostdin", "-i"])
+        .arg(crate::ffmpeg::file_url(input))
+        .args(["-vn", "-filter_complex", &full, "-map", "[m]", "-f", "null", "-"])
+        .output()
+        .context("failed to run ffmpeg")?;
+    if !out.status.success() {
+        bail!("loudness measurement failed: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""));
+    }
+    Ok(parse_loudnorm(&String::from_utf8_lossy(&out.stderr)))
+}
+
+/// Measure a whole file.
+pub fn measure_file(input: &Path) -> Result<Option<Loudness>> {
+    measure_graph(input, "[0:a]anull[aout]")
+}
+
+/// The normalising filters for a track measured as `m` (empty when the track
+/// is silent). Two pass loudnorm is exact and linear (no pumping); the limiter
+/// after it catches any peak that still pokes out.
+pub fn normalize_chain(m: Option<&Loudness>) -> String {
+    match m {
+        Some(m) if m.input_i < SILENT_LUFS => String::new(),
+        Some(m) => format!(
+            "loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11:measured_I={:.2}:measured_TP={:.2}:measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear=true,alimiter=limit=0.84:level=disabled",
+            m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset
+        ),
+        None => format!("loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11,alimiter=limit=0.84:level=disabled"),
+    }
+}
+
 /// Write mono f32 samples as a 32-bit float WAV file.
 pub fn write_wav_f32(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -105,6 +174,60 @@ pub fn detect_silences(samples: &[f32], rate: u32, threshold_db: f32, min_ms: f6
         }
     }
     out
+}
+
+#[cfg(test)]
+mod loudness_tests {
+    use super::*;
+
+    #[test]
+    fn parses_loudnorm_json() {
+        let text = "[Parsed_loudnorm_0 @ 0x1] \n{\n\t\"input_i\" : \"-42.10\",\n\t\"input_tp\" : \"-26.00\",\n\t\"input_lra\" : \"3.20\",\n\t\"input_thresh\" : \"-52.00\",\n\t\"output_i\" : \"-23.0\",\n\t\"target_offset\" : \"0.50\"\n}\n";
+        let m = parse_loudnorm(text).unwrap();
+        assert_eq!(m.input_i, -42.10);
+        assert_eq!(m.target_offset, 0.5);
+        assert!(normalize_chain(Some(&m)).contains("measured_I=-42.10"));
+        let silent = "{\"input_i\":\"-inf\",\"input_tp\":\"-inf\",\"input_lra\":\"0\",\"input_thresh\":\"-70\"}";
+        assert!(parse_loudnorm(silent).is_none());
+    }
+
+    #[test]
+    fn silent_tracks_are_not_boosted() {
+        let m = Loudness { input_i: -70.0, input_tp: -55.0, input_lra: 0.0, input_thresh: -75.0, target_offset: 0.0 };
+        assert_eq!(normalize_chain(Some(&m)), "");
+    }
+
+    #[test]
+    fn a_quiet_track_is_brought_to_the_target() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-loud-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let quiet = dir.join("quiet.wav");
+        let ok = Command::new(crate::ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:d=4", "-af", "volume=-25dB"])
+            .arg(&quiet)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let m = measure_file(&quiet).unwrap().expect("measurable");
+        assert!(m.input_i < -35.0, "{}", m.input_i);
+        let loud = dir.join("loud.wav");
+        let ok = Command::new(crate::ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&quiet)
+            .args(["-af", &normalize_chain(Some(&m))])
+            .arg(&loud)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let after = measure_file(&loud).unwrap().expect("measurable");
+        assert!((after.input_i - TARGET_LUFS).abs() < 2.0, "{}", after.input_i);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

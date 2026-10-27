@@ -141,13 +141,31 @@ impl Default for CaptionStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioSettings {
     /// Run RNNoise (nnnoiseless) on the audio track during export.
     pub denoise: bool,
     /// Mute the original audio (for example when a voiceover replaces it).
     pub mute: bool,
+    /// Bring the voice to -16 LUFS (two pass loudnorm plus a limiter). On by
+    /// default because laptop microphones record very quietly.
+    pub normalize: bool,
+    /// Extra gain in dB applied before normalising (0 = none).
+    pub gain_db: f64,
+    /// Final volume, 0.0 to 1.5.
+    pub volume: f64,
+    pub fade_in_ms: f64,
+    pub fade_out_ms: f64,
+    /// Delay the audio by this many ms (negative = earlier). Fine tuning for a
+    /// microphone that lags the picture, such as a Bluetooth headset.
+    pub offset_ms: f64,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self { denoise: false, mute: false, normalize: true, gain_db: 0.0, volume: 1.0, fade_in_ms: 0.0, fade_out_ms: 0.0, offset_ms: 0.0 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
