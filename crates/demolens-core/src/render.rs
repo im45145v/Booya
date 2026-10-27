@@ -686,7 +686,30 @@ impl Renderer {
                 self.draw_caption(&mut out, c, src_t);
             }
         }
+        self.draw_watermark(&mut out);
         out
+    }
+
+    /// The watermark text, in its corner with a soft shadow so it reads on any background.
+    fn draw_watermark(&self, out: &mut Frame) {
+        use crate::project::Corner;
+        let Some(w) = self.project.watermark.as_ref().filter(|w| !w.text.trim().is_empty()) else { return };
+        let short = self.out_w.min(self.out_h) as f32;
+        let px = (w.size.clamp(0.012, 0.08) as f32 * short).max(10.0);
+        let alpha = w.opacity.clamp(0.1, 1.0) as f32;
+        let text: String = w.text.chars().take(80).collect();
+        let tw = text::measure(&text, px);
+        let m = short * 0.035;
+        let x = match w.corner {
+            Corner::TopLeft | Corner::BottomLeft => m,
+            _ => self.out_w as f32 - tw - m,
+        };
+        let y = match w.corner {
+            Corner::TopLeft | Corner::TopRight => m,
+            _ => self.out_h as f32 - text::line_height(px) - m,
+        };
+        text::draw(out, x + 1.5, y + 1.5, px, &text, [0.0, 0.0, 0.0], alpha * 0.55);
+        text::draw(out, x, y, px, &text, [255.0, 255.0, 255.0], alpha);
     }
 }
 
@@ -798,5 +821,26 @@ mod webcam_layout_tests {
         assert!(side.layout.x >= cam_right_edge - 1.0, "screen starts at {} but the camera ends at {}", side.layout.x, cam_right_edge);
         let right = Renderer::new(project(WebcamLayout::Side, Corner::TopRight), None, 1280, 720, None);
         assert!(right.layout.x + right.layout.w <= 1280.0 - right.webcam_size() as f64);
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+    use crate::project::Watermark;
+
+    #[test]
+    fn watermark_draws_in_its_corner_only() {
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 1000.0);
+        p.style.padding = 0.0;
+        p.watermark = Some(Watermark { text: "acme.com".into(), opacity: 1.0, ..Default::default() });
+        let r = Renderer::new(p.clone(), None, 640, 360, None);
+        let src = Frame { w: 640, h: 360, data: vec![0; 640 * 360 * 4].chunks_exact_mut(4).flat_map(|_| [10u8, 10, 10, 255]).collect() };
+        let with = r.render(&src, 0.0);
+        p.watermark = None;
+        let without = Renderer::new(p, None, 640, 360, None).render(&src, 0.0);
+        let diff = |x0: usize, x1: usize, y0: usize, y1: usize| (y0..y1).any(|y| (x0..x1).any(|x| with.data[(y * 640 + x) * 4] != without.data[(y * 640 + x) * 4]));
+        assert!(diff(480, 640, 300, 360), "nothing drawn in the bottom right");
+        assert!(!diff(0, 320, 0, 180), "something drawn far from the corner");
     }
 }

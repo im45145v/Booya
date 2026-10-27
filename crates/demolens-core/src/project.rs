@@ -283,6 +283,23 @@ pub enum WebcamLayout {
     Side,
 }
 
+/// A line of text in a corner of every frame, such as a product name or URL.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Watermark {
+    pub text: String,
+    pub corner: Corner,
+    /// 0.1 to 1.
+    pub opacity: f64,
+    /// Text height as a fraction of the shorter output side.
+    pub size: f64,
+}
+
+impl Default for Watermark {
+    fn default() -> Self {
+        Self { text: String::new(), corner: Corner::BottomRight, opacity: 0.7, size: 0.028 }
+    }
+}
+
 /// Picture-in-picture webcam recorded alongside the screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Webcam {
@@ -334,6 +351,8 @@ pub struct Project {
     pub audio: AudioSettings,
     #[serde(default)]
     pub webcam: Option<Webcam>,
+    #[serde(default)]
+    pub watermark: Option<Watermark>,
 }
 
 /// Zoom settings stored in a project. Old project files only had
@@ -384,6 +403,7 @@ impl Project {
             caption_style: CaptionStyle::default(),
             audio: AudioSettings::default(),
             webcam: None,
+            watermark: None,
         }
     }
 

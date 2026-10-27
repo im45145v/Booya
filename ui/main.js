@@ -90,6 +90,7 @@ function syncPanel() {
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
   if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = w.layout || 'bubble'; $('cam-mirror').checked = !!w.mirror; }
+  const wm = project.watermark || {}; $('wm-text').value = wm.text || ''; $('wm-corner').value = wm.corner || 'bottom-right'; $('wm-opacity').value = wm.opacity || 0.7;
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
@@ -115,6 +116,7 @@ function readPanel() {
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
   if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value, mirror: $('cam-mirror').checked });
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
+  { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
   Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value });
   outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
@@ -241,6 +243,8 @@ $('speed').onchange = () => { const c = project?.clips[tl.selectedClip]; if (c) 
 $('zoom-scale').oninput = () => { const z = project?.zoom[tl.selectedZoom]; $('zoom-scale-out').textContent = (+$('zoom-scale').value).toFixed(1) + 'x'; if (z) { z.scale = +$('zoom-scale').value; tl.draw(); refresh(); } };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
+const ZOOM_STYLES = { subtle: { level: 1.4, ease: 1400 }, moderate: { level: 1.7, ease: 1000 }, intense: { level: 2.4, ease: 700 } };
+$('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-ease').value = z.ease; readPanel(); outputs(); status('Zoom style set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
   try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
 };
@@ -942,7 +946,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {

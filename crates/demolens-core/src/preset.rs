@@ -1,7 +1,7 @@
 //! Product presets: a named brand style (background, padding, corners,
 //! shadow, cursor and key overlay) that can be reapplied to any project.
 
-use crate::project::{CursorStyle, KeyOverlay, Project, Style};
+use crate::project::{CaptionStyle, CursorStyle, KeyOverlay, Project, Style, Watermark, ZoomConfigSer};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -12,17 +12,33 @@ pub struct Preset {
     pub style: Style,
     pub cursor: CursorStyle,
     pub keys: KeyOverlay,
+    /// Added in 0.3.0. Older preset files lack these and leave the project alone.
+    #[serde(default)]
+    pub watermark: Option<Watermark>,
+    #[serde(default)]
+    pub caption_style: Option<CaptionStyle>,
+    #[serde(default)]
+    pub zoom_config: Option<ZoomConfigSer>,
 }
 
 impl Preset {
     pub fn from_project(name: &str, p: &Project) -> Self {
-        Self { name: name.into(), style: p.style.clone(), cursor: p.cursor.clone(), keys: p.keys.clone() }
+        Self { name: name.into(), style: p.style.clone(), cursor: p.cursor.clone(), keys: p.keys.clone(), watermark: p.watermark.clone(), caption_style: Some(p.caption_style.clone()), zoom_config: Some(p.zoom_config.clone()) }
     }
 
     pub fn apply(&self, p: &mut Project) {
         p.style = self.style.clone();
         p.cursor = self.cursor.clone();
         p.keys = self.keys.clone();
+        if self.watermark.is_some() {
+            p.watermark = self.watermark.clone();
+        }
+        if let Some(c) = &self.caption_style {
+            p.caption_style = c.clone();
+        }
+        if let Some(z) = &self.zoom_config {
+            p.zoom_config = z.clone();
+        }
     }
 }
 
@@ -61,7 +77,7 @@ pub fn save_preset(p: &Preset) -> Result<PathBuf> {
 pub fn builtin_presets() -> Vec<Preset> {
     use crate::project::Background::{Gradient, Solid};
     let mk = |name: &str, bg, padding, corner_radius, shadow, cursor_size, ripple: [u8; 3]| {
-        let mut p = Preset { name: name.into(), style: Style::default(), cursor: CursorStyle::default(), keys: KeyOverlay::default() };
+        let mut p = Preset { name: name.into(), style: Style::default(), cursor: CursorStyle::default(), keys: KeyOverlay::default(), watermark: None, caption_style: None, zoom_config: None };
         p.style.background = bg;
         p.style.padding = padding;
         p.style.corner_radius = corner_radius;
@@ -134,5 +150,24 @@ mod tests {
         let mut p = Project::new("a.mp4".into(), None, 10, 10, 1000.0);
         load_preset("Midnight").unwrap().apply(&mut p);
         assert_eq!(p.cursor.ripple_color, [129, 140, 248]);
+    }
+}
+
+#[cfg(test)]
+mod compat_tests {
+    use super::*;
+
+    #[test]
+    fn presets_saved_before_0_3_still_load_and_leave_new_settings_alone() {
+        let old = Preset::from_project("x", &Project::new("a.mp4".into(), None, 100, 100, 1000.0));
+        let mut v = serde_json::to_value(&old).unwrap();
+        for k in ["watermark", "caption_style", "zoom_config"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        let loaded: Preset = serde_json::from_value(v).unwrap();
+        let mut p = Project::new("a.mp4".into(), None, 100, 100, 1000.0);
+        p.watermark = Some(Watermark { text: "acme.com".into(), ..Default::default() });
+        loaded.apply(&mut p);
+        assert_eq!(p.watermark.as_ref().unwrap().text, "acme.com");
     }
 }
