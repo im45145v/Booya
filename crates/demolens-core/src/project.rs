@@ -282,15 +282,30 @@ pub struct Project {
     pub webcam: Option<Webcam>,
 }
 
-/// Serializable wrapper so old project files without zoom config still load.
+/// Zoom settings stored in a project. Old project files only had
+/// `transition_ms`; every field has a default so they still load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ZoomConfigSer {
+    /// Legacy single transition length. Kept so old files round trip.
     pub transition_ms: f64,
+    pub ease_in_ms: f64,
+    pub ease_out_ms: f64,
+    /// Zoom level used when auto zoom is generated.
+    pub level: f64,
 }
 
 impl Default for ZoomConfigSer {
     fn default() -> Self {
-        Self { transition_ms: ZoomConfig::default().transition_ms }
+        let c = ZoomConfig::default();
+        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale }
+    }
+}
+
+impl ZoomConfigSer {
+    /// The generator config that matches these settings.
+    pub fn to_config(&self) -> ZoomConfig {
+        ZoomConfig::default().with_level(self.level).with_speed(self.ease_in_ms, self.ease_out_ms)
     }
 }
 

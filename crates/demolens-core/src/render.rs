@@ -5,7 +5,7 @@
 use crate::events::{CursorTrack, EventLog};
 use crate::text;
 use crate::project::{Background, BlurBox, Project};
-use crate::zoom::{camera_at, Camera};
+use crate::zoom::{camera_at, Camera, CameraTiming};
 use rayon::prelude::*;
 
 /// RGBA8 frame.
@@ -499,8 +499,7 @@ impl Renderer {
             self.track.as_ref(),
             p.source_width as f64,
             p.source_height as f64,
-            p.zoom_config.transition_ms,
-            p.cursor.smoothing_ms.max(150.0),
+            CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(350.0)),
         )
     }
 

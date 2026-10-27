@@ -108,6 +108,27 @@ pub struct MediaInfo {
     pub has_audio: bool,
 }
 
+/// Parse a duration such as `5.363`, `00:00:05.363000000` (Matroska tags).
+fn parse_duration_s(v: &str) -> Option<f64> {
+    let v = v.trim();
+    if let Ok(d) = v.parse::<f64>() {
+        return (d.is_finite() && d > 0.0).then_some(d);
+    }
+    let mut parts = v.split(':');
+    let (h, m, sec) = (parts.next()?, parts.next()?, parts.next()?);
+    let d = h.parse::<f64>().ok()? * 3600.0 + m.parse::<f64>().ok()? * 60.0 + sec.parse::<f64>().ok()?;
+    (d.is_finite() && d > 0.0).then_some(d)
+}
+
+/// A frame rate string such as `30/1` or `30000/1001`. Garbage such as
+/// `30000/1` (a broken old recording) or `0/0` falls back to None.
+fn parse_fps(r: &str) -> Option<f64> {
+    let (a, b) = r.split_once('/')?;
+    let (a, b): (f64, f64) = (a.parse().ok()?, b.parse().ok()?);
+    let f = if b > 0.0 { a / b } else { return None };
+    (f > 0.0 && f <= 240.0).then_some(f)
+}
+
 pub fn probe(path: &Path) -> Result<MediaInfo> {
     let out = Command::new(ffprobe_bin())
         .args(["-v", "error", "-show_streams", "-show_format", "-of", "json"])
@@ -123,18 +144,21 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
     let has_audio = streams.iter().any(|s| s["codec_type"] == "audio");
     let fps = video["avg_frame_rate"]
         .as_str()
-        .and_then(|r| {
-            let (a, b) = r.split_once('/')?;
-            let (a, b): (f64, f64) = (a.parse().ok()?, b.parse().ok()?);
-            (b > 0.0).then(|| a / b)
-        })
-        .filter(|f| *f > 0.0)
+        .and_then(parse_fps)
+        .or_else(|| video["r_frame_rate"].as_str().and_then(parse_fps))
         .unwrap_or(30.0);
-    let duration = v["format"]["duration"]
+    // Matroska recordings often report duration=N/A on the stream, so look at
+    // the container first, then the stream, then the stream tags.
+    let mut duration = v["format"]["duration"]
         .as_str()
-        .or(video["duration"].as_str())
-        .and_then(|d| d.parse::<f64>().ok())
+        .and_then(parse_duration_s)
+        .or_else(|| video["duration"].as_str().and_then(parse_duration_s))
+        .or_else(|| video["tags"]["DURATION"].as_str().and_then(parse_duration_s))
+        .or_else(|| v["format"]["tags"]["DURATION"].as_str().and_then(parse_duration_s))
         .unwrap_or(0.0);
+    if duration <= 0.0 {
+        duration = scan_duration(path).unwrap_or(0.0);
+    }
     Ok(MediaInfo {
         width: video["width"].as_u64().unwrap_or(0) as u32,
         height: video["height"].as_u64().unwrap_or(0) as u32,
@@ -142,6 +166,24 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
         fps,
         has_audio,
     })
+}
+
+/// Last resort: decode to nowhere and read the final timestamp. Slow for big
+/// files, so only used when the container has no duration at all.
+fn scan_duration(path: &Path) -> Option<f64> {
+    let out = Command::new(ffmpeg_bin())
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(file_url(path))
+        .args(["-map", "0:v:0", "-c", "copy", "-f", "null", "-", "-progress", "pipe:1", "-nostats"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .filter_map(|l| l.strip_prefix("out_time_us=").or_else(|| l.strip_prefix("out_time_ms=")))
+        .filter_map(|v| v.trim().parse::<f64>().ok())
+        .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
+        .map(|us| us / 1e6)
+        .filter(|d| *d > 0.0)
 }
 
 /// A path as an ffmpeg URL that can only ever mean a local file.
@@ -162,18 +204,53 @@ pub fn file_url(path: &Path) -> std::ffi::OsString {
     u
 }
 
-/// Decode a single frame at `t_ms` (used by the editor preview).
-pub fn frame_at(path: &Path, t_ms: f64, w: u32, h: u32) -> Result<Frame> {
+/// Hardware decode arguments. VideoToolbox on macOS (ffmpeg falls back to
+/// software by itself when a stream is not supported); nothing elsewhere.
+/// `DEMOLENS_HWACCEL=0` turns it off.
+pub fn hwaccel_args() -> Vec<&'static str> {
+    if cfg!(target_os = "macos") && std::env::var("DEMOLENS_HWACCEL").as_deref() != Ok("0") {
+        vec!["-hwaccel", "videotoolbox"]
+    } else {
+        Vec::new()
+    }
+}
+
+fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32) -> (Option<Frame>, String) {
     let out = Command::new(ffmpeg_bin())
-        .args(["-v", "error", "-ss", &format!("{:.3}", t_ms / 1000.0), "-i"])
+        .args(["-v", "error", "-nostdin"])
+        .args(hwaccel_args())
+        .args(["-ss", &format!("{:.3}", t_ms.max(0.0) / 1000.0), "-i"])
         .arg(file_url(path))
         .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}"), "-"])
-        .output()?;
+        .output();
+    let Ok(out) = out else { return (None, "ffmpeg did not start".into()) };
     let need = (w * h * 4) as usize;
     if out.stdout.len() < need {
-        bail!("could not decode frame at {t_ms} ms: {}", String::from_utf8_lossy(&out.stderr));
+        (None, String::from_utf8_lossy(&out.stderr).trim().to_string())
+    } else {
+        (Some(Frame { w, h, data: out.stdout[..need].to_vec() }), String::new())
     }
-    Ok(Frame { w, h, data: out.stdout[..need].to_vec() })
+}
+
+/// Decode a single frame at `t_ms` (used by the editor preview).
+///
+/// Seeking at or past the last frame decodes nothing, so a failed decode is
+/// retried a little earlier. That way the end of a video (and recordings
+/// whose duration is rounded up) shows the last frame instead of an error.
+pub fn frame_at(path: &Path, t_ms: f64, w: u32, h: u32) -> Result<Frame> {
+    let mut last_err = String::new();
+    for back in [0.0, 70.0, 200.0, 500.0, 1200.0] {
+        let t = t_ms - back;
+        if t < 0.0 && back > 0.0 {
+            break;
+        }
+        let (f, err) = frame_once(path, t, w, h);
+        if let Some(f) = f {
+            return Ok(f);
+        }
+        last_err = err;
+    }
+    bail!("could not decode frame at {t_ms:.0} ms: {last_err}")
 }
 
 /// Load an image scaled to cover (w, h), for image backgrounds.
@@ -218,7 +295,9 @@ impl FrameReader {
     /// Like `open` with a custom filter chain that must output `w`x`h`.
     pub fn open_filtered(path: &Path, start_ms: f64, fps: f64, vf: &str, w: u32, h: u32) -> Result<Self> {
         let mut child = Command::new(ffmpeg_bin())
-            .args(["-v", "error", "-nostdin", "-ss", &format!("{:.3}", start_ms.max(0.0) / 1000.0), "-i"])
+            .args(["-v", "error", "-nostdin"])
+            .args(hwaccel_args())
+            .args(["-ss", &format!("{:.3}", start_ms.max(0.0) / 1000.0), "-i"])
             .arg(file_url(path))
             .args(["-an", "-vf", &format!("fps={fps},{vf}"), "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
             .stdin(Stdio::null())
@@ -281,9 +360,17 @@ impl PreviewDecoder {
         }
         if !sequential {
             self.reader = None;
-            let f = frame_at(&self.path, t_ms, self.w, self.h)?;
-            self.last = Some((t_ms, f.clone()));
-            return Ok(f);
+            return match frame_at(&self.path, t_ms, self.w, self.h) {
+                Ok(f) => {
+                    self.last = Some((t_ms, f.clone()));
+                    Ok(f)
+                }
+                // Past the end, or a frame that will not decode: show the last good frame.
+                Err(e) => match &self.last {
+                    Some((_, f)) => Ok(f.clone()),
+                    None => Err(e),
+                },
+            };
         }
         let next = self.next_ms();
         if self.reader.is_none() || !(t_ms + step / 2.0 >= next && t_ms - next < 2000.0) {
@@ -300,10 +387,18 @@ impl PreviewDecoder {
                 }
                 Some(_) => continue,
                 None => {
+                    // End of the video: keep showing the last frame.
                     self.reader = None;
-                    let f = frame_at(&self.path, t_ms, self.w, self.h)?;
-                    self.last = Some((t_ms, f.clone()));
-                    return Ok(f);
+                    return match frame_at(&self.path, t_ms, self.w, self.h) {
+                        Ok(f) => {
+                            self.last = Some((t_ms, f.clone()));
+                            Ok(f)
+                        }
+                        Err(e) => match &self.last {
+                            Some((_, f)) => Ok(f.clone()),
+                            None => Err(e),
+                        },
+                    };
                 }
             }
         }
@@ -434,6 +529,50 @@ mod encoder_tests {
             return;
         }
         assert!(!encoder_works("definitely_not_an_encoder"));
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    #[test]
+    fn durations_parse() {
+        assert_eq!(parse_duration_s("5.363"), Some(5.363));
+        assert!((parse_duration_s("00:00:05.363000000").unwrap() - 5.363).abs() < 1e-9);
+        assert_eq!(parse_duration_s("N/A"), None);
+        assert_eq!(parse_duration_s("0.000000"), None);
+    }
+    #[test]
+    fn broken_frame_rates_are_ignored() {
+        assert_eq!(parse_fps("30/1"), Some(30.0));
+        assert!((parse_fps("30000/1001").unwrap() - 29.97).abs() < 0.01);
+        assert_eq!(parse_fps("30000/1"), None);
+        assert_eq!(parse_fps("0/0"), None);
+    }
+    #[test]
+    fn frames_past_the_end_fall_back_to_the_last_frame() {
+        if !ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-eof-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("c.mkv");
+        let ok = Command::new(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-pix_fmt", "yuv420p"])
+            .arg(&f)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let info = probe(&f).unwrap();
+        assert!((info.duration_ms - 1000.0).abs() < 100.0, "{}", info.duration_ms);
+        // Exactly at the end and well past it still give a frame.
+        assert!(frame_at(&f, info.duration_ms, 160, 90).is_ok());
+        let mut d = PreviewDecoder::new(&f, 160, 90);
+        assert!(d.frame(500.0, false).is_ok());
+        assert!(d.frame(info.duration_ms + 5000.0, false).is_ok());
+        assert!(d.frame(info.duration_ms, true).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

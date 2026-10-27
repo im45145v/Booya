@@ -24,13 +24,14 @@ pub struct ZoomSegment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZoomConfig {
-    /// Events closer than this are grouped into one zoom.
+    /// Events closer than this are grouped into one zoom (no bouncing).
     pub merge_gap_ms: f64,
-    /// How early the zoom starts before the first event of a group.
+    /// How early the zoom starts before the first event of a group. A little
+    /// longer than `ease_in_ms`, so the camera has arrived when the click lands.
     pub lead_in_ms: f64,
-    /// How long the zoom holds after the last event of a group.
+    /// How long the zoom holds at full level after the last event of a group.
     pub hold_ms: f64,
-    /// Minimum total length of a segment.
+    /// Minimum total length of a segment (ease in + hold + ease out).
     pub min_duration_ms: f64,
     pub click_scale: f64,
     pub typing_scale: f64,
@@ -38,23 +39,47 @@ pub struct ZoomConfig {
     pub typing_gap_ms: f64,
     /// Minimum keys in a burst before it triggers a zoom.
     pub typing_min_keys: usize,
-    /// Ease in/out duration used when evaluating the camera.
-    pub transition_ms: f64,
+    /// Ease in duration used when evaluating the camera.
+    pub ease_in_ms: f64,
+    /// Ease out duration used when evaluating the camera.
+    pub ease_out_ms: f64,
+    /// Segments closer than this are bridged into one, so the camera pans
+    /// instead of zooming out and back in.
+    pub bridge_gap_ms: f64,
 }
 
 impl Default for ZoomConfig {
     fn default() -> Self {
         Self {
-            merge_gap_ms: 1800.0,
-            lead_in_ms: 500.0,
-            hold_ms: 1400.0,
-            min_duration_ms: 1500.0,
-            click_scale: 2.0,
-            typing_scale: 1.8,
-            typing_gap_ms: 900.0,
+            merge_gap_ms: 3500.0,
+            lead_in_ms: 1100.0,
+            hold_ms: 1600.0,
+            min_duration_ms: 3700.0,
+            click_scale: 1.7,
+            typing_scale: 1.6,
+            typing_gap_ms: 1200.0,
             typing_min_keys: 3,
-            transition_ms: 450.0,
+            ease_in_ms: 1000.0,
+            ease_out_ms: 1000.0,
+            bridge_gap_ms: 1500.0,
         }
+    }
+}
+
+impl ZoomConfig {
+    /// Total of ease in, a hold and ease out: the shortest sensible segment.
+    pub fn with_speed(mut self, ease_in_ms: f64, ease_out_ms: f64) -> Self {
+        self.ease_in_ms = ease_in_ms.clamp(150.0, 3000.0);
+        self.ease_out_ms = ease_out_ms.clamp(150.0, 3000.0);
+        self.lead_in_ms = self.ease_in_ms + 100.0;
+        self.min_duration_ms = self.ease_in_ms + self.ease_out_ms + 1700.0;
+        self
+    }
+    pub fn with_level(mut self, level: f64) -> Self {
+        let level = level.clamp(1.1, 4.0);
+        self.click_scale = level;
+        self.typing_scale = (level - 0.1).max(1.1);
+        self
     }
 }
 
@@ -113,7 +138,7 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         let first = g[0].t;
         let last = g[g.len() - 1].t;
         let mut start = (first - cfg.lead_in_ms).max(0.0);
-        let mut end = last + cfg.hold_ms;
+        let mut end = last + cfg.hold_ms + cfg.ease_out_ms;
         if end - start < cfg.min_duration_ms {
             end = start + cfg.min_duration_ms;
         }
@@ -140,11 +165,12 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         });
     }
 
-    // Lead-in can make neighbours overlap; merge those.
+    // Lead-in can make neighbours overlap, and a zoom out followed at once by a
+    // zoom in looks like a bounce; merge both so the camera pans instead.
     let mut merged: Vec<ZoomSegment> = Vec::new();
     for s in segs {
         if let Some(p) = merged.last_mut() {
-            if s.start_ms <= p.end_ms {
+            if s.start_ms <= p.end_ms + cfg.bridge_gap_ms {
                 p.end_ms = p.end_ms.max(s.end_ms);
                 p.scale = p.scale.max(s.scale);
                 p.focus = ((p.focus.0 + s.focus.0) / 2.0, (p.focus.1 + s.focus.1) / 2.0);
@@ -193,37 +219,47 @@ pub fn clamp_center(cx: f64, cy: f64, scale: f64, w: f64, h: f64) -> (f64, f64) 
     (cx.clamp(hw, w - hw), cy.clamp(hh, h - hh))
 }
 
+/// Timing of the camera easing, in ms.
+#[derive(Debug, Clone, Copy)]
+pub struct CameraTiming {
+    pub ease_in_ms: f64,
+    pub ease_out_ms: f64,
+    pub follow_smoothing_ms: f64,
+}
+
+impl CameraTiming {
+    pub fn new(ease_in_ms: f64, ease_out_ms: f64, follow_smoothing_ms: f64) -> Self {
+        Self { ease_in_ms, ease_out_ms, follow_smoothing_ms }
+    }
+}
+
 /// Evaluate the camera at source time `t`.
 ///
-/// The zoom amount eases in over `transition_ms` at the start of a segment and
-/// eases out at the end. The target point follows the smoothed cursor (or the
-/// fixed focus) and blends toward the frame center as the zoom fades, so
-/// zooming in and out never jumps.
-pub fn camera_at(
-    t: f64,
-    segments: &[ZoomSegment],
-    track: Option<&CursorTrack>,
-    w: f64,
-    h: f64,
-    transition_ms: f64,
-    follow_smoothing_ms: f64,
-) -> Camera {
+/// The zoom amount eases in over `ease_in_ms` at the start of a segment and
+/// eases out over `ease_out_ms` at the end. The level is interpolated on a log
+/// scale so the zoom feels even, and the target point follows the smoothed
+/// cursor (or the fixed focus) and blends toward the frame center as the zoom
+/// fades, so zooming in and out never jumps.
+pub fn camera_at(t: f64, segments: &[ZoomSegment], track: Option<&CursorTrack>, w: f64, h: f64, timing: CameraTiming) -> Camera {
     let center = (w / 2.0, h / 2.0);
     let seg = segments.iter().find(|s| t >= s.start_ms && t <= s.end_ms);
     let Some(s) = seg else {
         return Camera { cx: center.0, cy: center.1, scale: 1.0 };
     };
     let len = (s.end_ms - s.start_ms).max(1.0);
-    let tr = transition_ms.min(len / 2.0).max(1.0);
-    let k_in = ease_in_out((t - s.start_ms) / tr);
-    let k_out = ease_in_out((s.end_ms - t) / tr);
+    let (mut ein, mut eout) = (timing.ease_in_ms.max(1.0), timing.ease_out_ms.max(1.0));
+    if ein + eout > len {
+        let f = len / (ein + eout);
+        ein *= f;
+        eout *= f;
+    }
+    let k_in = ease_in_out((t - s.start_ms) / ein);
+    let k_out = ease_in_out((s.end_ms - t) / eout);
     let k = k_in.min(k_out);
-    let scale = 1.0 + (s.scale - 1.0) * k;
+    let scale = s.scale.max(1.0).powf(k);
 
     let target = if s.follow_cursor {
-        track
-            .and_then(|tr| tr.smooth_at(t, follow_smoothing_ms))
-            .unwrap_or(s.focus)
+        track.and_then(|tr| tr.smooth_at(t, timing.follow_smoothing_ms)).unwrap_or(s.focus)
     } else {
         s.focus
     };
@@ -237,6 +273,7 @@ pub fn camera_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const T: CameraTiming = CameraTiming { ease_in_ms: 400.0, ease_out_ms: 400.0, follow_smoothing_ms: 0.0 };
     use crate::events::{Event, EventKind, MouseButton};
 
     fn log_with(events: Vec<Event>) -> EventLog {
@@ -267,7 +304,7 @@ mod tests {
         assert_eq!(segs.len(), 1);
         let s = &segs[0];
         assert_eq!(s.start_ms, 3000.0 - cfg.lead_in_ms);
-        assert_eq!(s.end_ms, 3000.0 + cfg.hold_ms);
+        assert_eq!(s.end_ms, 3000.0 + cfg.hold_ms + cfg.ease_out_ms);
         assert_eq!(s.scale, cfg.click_scale);
         assert_eq!(s.focus, (400.0, 300.0));
         assert_eq!(s.reason, "click");
@@ -327,8 +364,42 @@ mod tests {
     fn overlapping_after_lead_in_are_merged() {
         let cfg = ZoomConfig { merge_gap_ms: 500.0, ..Default::default() };
         // 1.9 s gap > merge gap, but hold + lead-in make them overlap.
-        let segs = generate_zoom_segments(&log_with(vec![click(1000.0, 0.0, 0.0), click(2900.0, 0.0, 0.0)]), 10_000.0, &cfg);
+        let segs = generate_zoom_segments(&log_with(vec![click(2000.0, 0.0, 0.0), click(3900.0, 0.0, 0.0)]), 20_000.0, &cfg);
         assert_eq!(segs.len(), 1);
+    }
+
+    #[test]
+    fn nearby_zooms_are_bridged_not_bounced() {
+        let cfg = ZoomConfig { merge_gap_ms: 500.0, ..Default::default() };
+        // Segment one ends at 3000+1600+1000 = 5600, segment two starts at
+        // 6500-1100 = 5400... use a gap of about 1 s: still one pan, not two zooms.
+        let segs = generate_zoom_segments(&log_with(vec![click(2000.0, 0.0, 0.0), click(7000.0, 900.0, 0.0)]), 30_000.0, &cfg);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        let far = generate_zoom_segments(&log_with(vec![click(2000.0, 0.0, 0.0), click(12_000.0, 900.0, 0.0)]), 30_000.0, &cfg);
+        assert_eq!(far.len(), 2);
+    }
+
+    #[test]
+    fn defaults_are_slow_and_gentle() {
+        let c = ZoomConfig::default();
+        assert!(c.ease_in_ms >= 900.0 && c.ease_in_ms <= 1200.0);
+        assert!(c.ease_out_ms >= 900.0 && c.ease_out_ms <= 1200.0);
+        assert!(c.click_scale >= 1.6 && c.click_scale <= 1.8);
+        assert!(c.hold_ms + c.lead_in_ms - c.ease_in_ms >= 1500.0 - 1.0);
+        let segs = generate_zoom_segments(&log_with(vec![click(5000.0, 10.0, 10.0)]), 30_000.0, &c);
+        let s = &segs[0];
+        // Full zoom is held for at least 1.5 s.
+        assert!(s.end_ms - s.start_ms - c.ease_in_ms - c.ease_out_ms >= 1500.0);
+        // Anticipation: the camera arrives before the click.
+        assert!(5000.0 - s.start_ms > c.ease_in_ms);
+    }
+
+    #[test]
+    fn with_level_and_speed_apply() {
+        let c = ZoomConfig::default().with_level(2.5).with_speed(600.0, 800.0);
+        assert_eq!(c.click_scale, 2.5);
+        assert_eq!(c.ease_in_ms, 600.0);
+        assert_eq!(c.min_duration_ms, 600.0 + 800.0 + 1700.0);
     }
 
     #[test]
@@ -355,21 +426,21 @@ mod tests {
             reason: "manual".into(),
         };
         let segs = [seg];
-        let before = camera_at(500.0, &segs, None, 1920.0, 1080.0, 400.0, 0.0);
+        let before = camera_at(500.0, &segs, None, 1920.0, 1080.0, T);
         assert_eq!(before.scale, 1.0);
-        let mid = camera_at(2000.0, &segs, None, 1920.0, 1080.0, 400.0, 0.0);
+        let mid = camera_at(2000.0, &segs, None, 1920.0, 1080.0, T);
         assert_eq!(mid.scale, 2.0);
         // Focus at the corner is clamped so the view stays inside the frame.
         let (x, y, w, h) = mid.view_rect(1920.0, 1080.0);
         assert!(x >= 0.0 && y >= 0.0 && x + w <= 1920.0 + 1e-9 && y + h <= 1080.0 + 1e-9);
-        let easing = camera_at(1200.0, &segs, None, 1920.0, 1080.0, 400.0, 0.0);
+        let easing = camera_at(1200.0, &segs, None, 1920.0, 1080.0, T);
         assert!(easing.scale > 1.0 && easing.scale < 2.0);
         // Continuity: small time steps give small scale changes.
-        let mut prev = camera_at(900.0, &segs, None, 1920.0, 1080.0, 400.0, 0.0).scale;
+        let mut prev = camera_at(900.0, &segs, None, 1920.0, 1080.0, T).scale;
         let mut t = 900.0;
         while t < 3100.0 {
             t += 16.0;
-            let s = camera_at(t, &segs, None, 1920.0, 1080.0, 400.0, 0.0).scale;
+            let s = camera_at(t, &segs, None, 1920.0, 1080.0, T).scale;
             assert!((s - prev).abs() < 0.15, "jump at {t}");
             prev = s;
         }
@@ -380,8 +451,8 @@ mod tests {
         let log = log_with(vec![mv(0.0, 600.0, 400.0), mv(2000.0, 1200.0, 600.0)]);
         let track = CursorTrack::new(&log);
         let seg = ZoomSegment { start_ms: 0.0, end_ms: 4000.0, scale: 2.0, follow_cursor: true, focus: (0.0, 0.0), reason: "click".into() };
-        let a = camera_at(800.0, &[seg.clone()], Some(&track), 1920.0, 1080.0, 400.0, 0.0);
-        let b = camera_at(1600.0, &[seg], Some(&track), 1920.0, 1080.0, 400.0, 0.0);
+        let a = camera_at(800.0, &[seg.clone()], Some(&track), 1920.0, 1080.0, T);
+        let b = camera_at(1600.0, &[seg], Some(&track), 1920.0, 1080.0, T);
         assert!(b.cx > a.cx);
     }
 

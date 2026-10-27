@@ -128,7 +128,7 @@ fn save_project(app: tauri::AppHandle, path: String, project: Project) -> R<()> 
 fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
     let Some(ev) = &project.events else { return Ok(vec![]) };
     let log = EventLog::load(ev).map_err(e)?;
-    Ok(zoom::generate_zoom_segments(&log, project.duration_ms, &zoom::ZoomConfig::default()))
+    Ok(zoom::generate_zoom_segments(&log, project.duration_ms, &project.zoom_config.to_config()))
 }
 
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
