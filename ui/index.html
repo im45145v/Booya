@@ -20,12 +20,15 @@
     <button id="rec-btn" class="primary">Record</button>
   </div>
   <div class="group">
-    <input id="open-video" placeholder="/path/to/recording.mkv" />
-    <button id="open-btn">Open video</button>
-    <input id="project-path" placeholder="/path/to/project.demolens.json" />
-    <button id="load-btn">Load</button>
-    <button id="save-btn">Save</button>
+    <button id="open-btn" title="Open a video or a .demolens.json project (Ctrl+O)">Open...</button>
+    <button id="save-btn" title="Save the project (Ctrl+S)">Save</button>
+    <button id="save-as-btn">Save as...</button>
   </div>
+  <div class="group">
+    <button id="undo-btn" title="Undo (Ctrl+Z)" disabled>Undo</button>
+    <button id="redo-btn" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+  </div>
+  <span id="project-name"></span>
 </header>
 
 <main>
@@ -42,10 +45,26 @@
       <label>Zoom <input id="zoom-scale" type="number" min="1" max="4" step="0.1" value="2" /></label>
       <button id="auto-zoom">Auto zoom</button>
     </div>
-    <canvas id="timeline" height="120"></canvas>
+    <canvas id="timeline" height="130"></canvas>
+    <div id="status">Ready</div>
   </section>
 
   <aside id="panel">
+    <h3>Local AI <span class="badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+    <div class="row"><button id="ai-transcribe" class="wide">Transcribe</button><button id="ai-models" title="Download or delete local models">Models...</button></div>
+    <label><input type="checkbox" id="cap-burn" /> Burn in captions</label>
+    <label>Caption size <input id="cap-size" type="range" min="0.025" max="0.08" step="0.002" /></label>
+    <div class="row"><button id="cap-export" class="wide">Export SRT / VTT...</button></div>
+    <div class="row"><button id="ai-autocut" class="wide">Auto cut</button></div>
+    <label><input type="checkbox" id="cut-fillers" checked /> Filler words (um, uh)</label>
+    <label><input type="checkbox" id="cut-silences" checked /> Pauses longer than <select id="cut-min"><option value="500">0.5 s</option><option value="700" selected>0.7 s</option><option value="1200">1.2 s</option></select></label>
+    <div class="row"><button id="ai-redact" class="wide" title="Find emails, API keys, card and phone numbers on screen and blur them">Auto blur secrets</button></div>
+    <div class="row"><button id="ai-docs" class="wide" title="Title, chapters, step by step guide and a social post">Write docs</button></div>
+    <label><input type="checkbox" id="docs-llm" checked /> Use local LLM if available</label>
+    <h3>Audio</h3>
+    <label><input type="checkbox" id="aud-denoise" /> Remove background noise</label>
+    <label><input type="checkbox" id="aud-mute" /> Mute</label>
+    <progress id="ai-progress" max="1" value="0" hidden></progress>
     <h3>Background</h3>
     <select id="bg-type"><option value="gradient">Gradient</option><option value="solid">Solid</option><option value="image">Image</option></select>
     <div class="row"><input type="color" id="bg-from" value="#6366f1" /><input type="color" id="bg-to" value="#ec4899" /><input id="bg-angle" type="number" value="35" title="angle" /></div>
@@ -74,11 +93,14 @@
       <select id="ex-quality"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select>
       <select id="ex-fps"><option>24</option><option selected>30</option><option>60</option></select>
     </div>
-    <div class="row"><input id="ex-path" placeholder="/path/to/out.mp4 or .gif" /><button id="ex-btn" class="primary">Export</button></div>
+    <div class="row"><button id="ex-btn" class="primary wide">Export MP4 / GIF...</button></div>
     <progress id="ex-progress" max="1" value="0"></progress>
-    <div id="status"></div>
   </aside>
 </main>
+<dialog id="modal">
+  <div class="modal-head"><strong id="modal-title"></strong><button id="modal-close">Close</button></div>
+  <div id="modal-body"></div>
+</dialog>
 <script src="timeline.js"></script>
 <script src="main.js"></script>
 </body>

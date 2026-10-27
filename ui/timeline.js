@@ -76,6 +76,14 @@ class Timeline {
       ctx.fillRect(a, 66, Math.max(2, b - a), 36);
       ctx.fillStyle = '#fff'; ctx.fillText(`${z.scale.toFixed(1)}x ${z.reason}`, a + 4, 88);
     });
+    // Transcript lane: one tick per word, filler words in orange.
+    const visible = w => [w.start_ms + 40, (w.start_ms + w.end_ms) / 2, w.end_ms - 40].some(t => this.project.clips.some(c => t >= c.src_start_ms && t < c.src_end_ms));
+    for (const cap of this.project.captions || []) for (const w of cap.words) {
+      if (!visible(w)) continue;
+      const a = this.x(this.srcToOut(w.start_ms)), b = this.x(this.srcToOut(w.end_ms));
+      ctx.fillStyle = /^(u+m+|u+h+|uhm|erm|er|ah|hmm+|mm)\W*$/i.test(w.text) ? '#f59e0b' : '#10b981';
+      ctx.fillRect(a, 110, Math.max(2, b - a - 1), 12);
+    }
     const p = this.x(this.playhead);
     ctx.fillStyle = '#fbbf24'; ctx.fillRect(p - 1, 0, 2, h);
   }

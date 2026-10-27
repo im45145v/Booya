@@ -5,17 +5,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
+use demolens_ai::{docs, llm::Llm, models, pipeline};
+use demolens_core::captions::{self, AutoCutOptions};
+use demolens_core::render::Renderer;
 use demolens_core::capture::{self, CaptureTarget, RecordOptions, RecordingSession};
 use demolens_core::preset::{self, Preset};
 use demolens_core::project::Project;
 use demolens_core::{export, new_project, zoom, EventLog, ZoomSegment};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 #[derive(Default)]
 struct AppState {
     recording: Mutex<Option<RecordingSession>>,
+    /// The renderer for the last previewed project and size. Building one
+    /// loads the event log and background image, so scrubbing reuses it.
+    renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
 }
 
 type R<T> = Result<T, String>;
@@ -47,10 +53,23 @@ fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
 
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
 #[tauri::command]
-async fn preview(project: Project, out_ms: f64, short_side: u32) -> R<String> {
+async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_side: u32) -> R<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (w, h) = project.export.aspect.size(short_side);
-        let png = export::preview_png(&project, out_ms, w, h).map_err(e)?;
+        let key = serde_json::to_string(&project).map_err(e)?;
+        let state = app.state::<AppState>();
+        let cached = state.renderer.lock().unwrap().as_ref().filter(|c| c.0 == key && c.1 == w && c.2 == h).map(|c| c.3.clone());
+        let r = match cached {
+            Some(r) => r,
+            None => {
+                let r = std::sync::Arc::new(export::make_renderer(&project, w, h).map_err(e)?);
+                *state.renderer.lock().unwrap() = Some((key, w, h, r.clone()));
+                r
+            }
+        };
+        let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
+        let src = demolens_core::ffmpeg::frame_at(&project.source, src_t, project.source_width, project.source_height).map_err(e)?;
+        let png = r.render(&src, src_t).encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
     })
     .await
@@ -72,13 +91,15 @@ async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R
 
 /// Project or video passed on the command line, e.g. `demolens-app demo.demolens.json`.
 #[tauri::command]
-fn initial_project() -> R<Option<Project>> {
+fn initial_project() -> R<Option<serde_json::Value>> {
     let Some(arg) = std::env::args().nth(1) else { return Ok(None) };
     let path = PathBuf::from(arg);
     if path.extension().is_some_and(|e| e == "json") {
-        Project::load(&path).map(Some).map_err(e)
+        let p = Project::load(&path).map_err(e)?;
+        Ok(Some(serde_json::json!({ "project": p, "path": path })))
     } else {
-        new_project(&path, None).map(Some).map_err(e)
+        let p = new_project(&path, None).map_err(e)?;
+        Ok(Some(serde_json::json!({ "project": p, "path": null })))
     }
 }
 
@@ -99,12 +120,17 @@ fn apply_preset(name: String, mut project: Project) -> R<Project> {
 }
 
 #[tauri::command]
-fn start_recording(state: State<AppState>, target: CaptureTarget, mic: bool, system_audio: bool, out_dir: String) -> R<Vec<String>> {
+fn start_recording(app: tauri::AppHandle, state: State<AppState>, target: CaptureTarget, mic: bool, system_audio: bool) -> R<Vec<String>> {
     let mut slot = state.recording.lock().unwrap();
     if slot.is_some() {
         return Err("already recording".into());
     }
-    let s = capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir: out_dir.into() }).map_err(e)?;
+    // Recordings go to Videos/DemoLens/<timestamp>, not the app's working
+    // directory (which is read only inside a macOS app bundle).
+    let base = app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("DemoLens");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let out_dir = base.join(format!("recording-{stamp}"));
+    let s = capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir }).map_err(e)?;
     let warnings = s.warnings.clone();
     *slot = Some(s);
     Ok(warnings)
@@ -117,8 +143,108 @@ fn stop_recording(state: State<AppState>) -> R<Project> {
     new_project(&rec.video, Some(&rec.events)).map_err(e)
 }
 
+// ---------- Local AI ----------
+
+#[derive(Clone, serde::Serialize)]
+struct AiProgress {
+    task: String,
+    progress: f64,
+    message: String,
+}
+
+fn progress(app: &tauri::AppHandle, task: &str, p: f64, msg: &str) {
+    let _ = app.emit("ai-progress", AiProgress { task: task.into(), progress: p, message: msg.into() });
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) -> R<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(e)?
+}
+
+#[tauri::command]
+fn models_list() -> serde_json::Value {
+    serde_json::json!({ "dir": models::models_dir(), "models": models::list() })
+}
+
+#[tauri::command]
+async fn model_download(app: tauri::AppHandle, id: String) -> R<()> {
+    blocking(move || {
+        let task = format!("download:{id}");
+        models::download(&id, |d, t| progress(&app, &task, if t > 0 { d as f64 / t as f64 } else { 0.0 }, &format!("{} / {}", models::human(d), models::human(t))))
+            .map(|_| ())
+            .map_err(e)
+    })
+    .await
+}
+
+#[tauri::command]
+fn model_delete(id: String) -> R<()> {
+    models::delete(&id).map_err(e)
+}
+
+#[derive(serde::Serialize)]
+struct AiResult<T> {
+    project: Project,
+    report: T,
+}
+
+#[tauri::command]
+async fn ai_transcribe(app: tauri::AppHandle, mut project: Project, model: Option<String>) -> R<AiResult<pipeline::TranscribeReport>> {
+    blocking(move || {
+        progress(&app, "transcribe", 0.1, "Listening (runs on this computer)...");
+        let report = pipeline::transcribe_project(&mut project, model.as_deref(), None).map_err(e)?;
+        progress(&app, "transcribe", 1.0, "Done");
+        Ok(AiResult { project, report })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_silence_ms: f64) -> R<AiResult<pipeline::CutReport>> {
+    blocking(move || {
+        let o = AutoCutOptions { cut_fillers: fillers, cut_silences: silences, min_silence_ms, ..Default::default() };
+        let report = pipeline::autocut_project(&mut project, &o, false).map_err(e)?;
+        Ok(AiResult { project, report })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ai_redact(app: tauri::AppHandle, mut project: Project) -> R<AiResult<pipeline::RedactReport>> {
+    blocking(move || {
+        let report = pipeline::redact_project(&mut project, 500.0, false, |p| progress(&app, "redact", p, "Scanning frames for sensitive text...")).map_err(e)?;
+        Ok(AiResult { project, report })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool) -> R<serde_json::Value> {
+    blocking(move || {
+        progress(&app, "docs", 0.1, "Looking for a local LLM...");
+        let llm = if use_llm { Llm::detect().map_err(e)? } else { None };
+        progress(&app, "docs", 0.3, llm.as_ref().map(|l| format!("Writing with {}...", l.label)).as_deref().unwrap_or("Writing with the rule based writer..."));
+        let log = project.events.as_ref().and_then(|p| EventLog::load(p).ok());
+        let d = docs::generate(&project, log.as_ref(), llm.as_ref()).map_err(e)?;
+        progress(&app, "docs", 1.0, "Done");
+        Ok(serde_json::json!({ "docs": d, "markdown": docs::markdown(&d), "chapters": docs::chapters_text(&d) }))
+    })
+    .await
+}
+
+#[tauri::command]
+fn export_captions(project: Project, path: String) -> R<()> {
+    let text = if path.to_lowercase().ends_with(".vtt") { captions::to_vtt(&project) } else { captions::to_srt(&project) };
+    std::fs::write(path, text).map_err(e)
+}
+
+#[tauri::command]
+fn write_text(path: String, text: String) -> R<()> {
+    std::fs::write(path, text).map_err(e)
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_recording,
@@ -132,7 +258,16 @@ fn main() {
             save_preset,
             apply_preset,
             start_recording,
-            stop_recording
+            stop_recording,
+            models_list,
+            model_download,
+            model_delete,
+            ai_transcribe,
+            ai_autocut,
+            ai_redact,
+            ai_docs,
+            export_captions,
+            write_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running DemoLens");
