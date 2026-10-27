@@ -1,5 +1,5 @@
 //! Thin wrappers around the ffmpeg / ffprobe command line tools.
-//! Set DEMOLENS_FFMPEG / DEMOLENS_FFPROBE to use a bundled copy.
+//! The binaries are found by `candidates()`; DEMOLENS_FFMPEG / DEMOLENS_FFPROBE override.
 
 use crate::render::Frame;
 use anyhow::{bail, Context, Result};
@@ -8,10 +8,95 @@ use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 
 pub fn ffmpeg_bin() -> String {
-    std::env::var("DEMOLENS_FFMPEG").unwrap_or_else(|_| "ffmpeg".into())
+    resolve("DEMOLENS_FFMPEG", "ffmpeg")
 }
 pub fn ffprobe_bin() -> String {
-    std::env::var("DEMOLENS_FFPROBE").unwrap_or_else(|_| "ffprobe".into())
+    resolve("DEMOLENS_FFPROBE", "ffprobe")
+}
+
+/// True when a working ffmpeg was found.
+pub fn ffmpeg_found() -> bool {
+    runs(Path::new(&ffmpeg_bin()))
+}
+
+fn exe_name(name: &str) -> String {
+    if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }
+}
+
+fn runs(p: &Path) -> bool {
+    let mut c = Command::new(p);
+    c.arg("-version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c.status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Every place we look, in order: the env override, the copy bundled next to
+/// the app (`demolens-ffmpeg`), PATH, then common install folders, because GUI
+/// apps on macOS do not inherit the shell PATH.
+pub fn candidates(env: &str, name: &str) -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut v = Vec::new();
+    if let Ok(p) = std::env::var(env) {
+        v.push(PathBuf::from(p));
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+        v.push(dir.join(exe_name(&format!("demolens-{name}"))));
+        v.push(dir.join(exe_name(name)));
+        // macOS bundle: Contents/MacOS/<app>, Linux AppImage/deb: usr/bin
+        v.push(dir.join("../Resources").join(exe_name(name)));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&path) {
+            v.push(d.join(exe_name(name)));
+        }
+    }
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/opt/local/bin", "/snap/bin"] {
+        v.push(Path::new(d).join(name));
+    }
+    if cfg!(windows) {
+        for d in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\ProgramData\chocolatey\bin"] {
+            v.push(Path::new(d).join(exe_name(name)));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            v.push(Path::new(&local).join(r"Microsoft\WinGet\Links").join(exe_name(name)));
+        }
+    }
+    v
+}
+
+fn resolve(env: &'static str, name: &'static str) -> String {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(p) = cache.lock().unwrap().get(name) {
+        return p.clone();
+    }
+    let found = candidates(env, name).into_iter().find(|p| p.is_file() && runs(p));
+    match found {
+        Some(p) => {
+            let s = p.to_string_lossy().into_owned();
+            cache.lock().unwrap().insert(name, s.clone());
+            s
+        }
+        // not cached, so installing ffmpeg while the app runs starts working
+        None => name.to_string(),
+    }
+}
+
+/// One line install command for this OS, shown when ffmpeg is missing.
+pub fn install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "brew install ffmpeg"
+    } else if cfg!(windows) {
+        "winget install Gyan.FFmpeg"
+    } else {
+        "sudo apt install ffmpeg   (Fedora: sudo dnf install ffmpeg)"
+    }
 }
 
 #[derive(Debug, Clone)]

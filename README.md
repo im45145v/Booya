@@ -10,12 +10,14 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 
 ## Quick start
 
-1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux) and install [ffmpeg](https://ffmpeg.org/download.html).
+1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
 2. Open DemoLens and click **Try the sample**, or **Record screen**.
 3. Click **Make it demo-ready**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and cleans the audio. Each step says what it did, and Ctrl+Z undoes all of it.
 4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
 
 Press `?` in the app for all keyboard shortcuts.
+
+DemoLens looks for ffmpeg in this order: the copy bundled with the app, your PATH, then common folders such as `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. If none works, it shows the one line install command for your OS (`brew install ffmpeg`, `winget install Gyan.FFmpeg` or `sudo apt install ffmpeg`). Licenses for the bundled ffmpeg are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the app under About.
 
 ### Opening DemoLens on macOS
 

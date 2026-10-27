@@ -27,7 +27,7 @@ function status(msg, kind = 'info') {
 const fail = e => status(humanError(e), 'error');
 function humanError(e) {
   const m = String(e?.message || e);
-  if (/ffmpeg/i.test(m) && /not found|No such file|failed to start/i.test(m)) return 'ffmpeg was not found. Install ffmpeg and make sure it is on your PATH.';
+  if (/ffmpeg|ffprobe/i.test(m) && /not found|No such file|failed to (start|run)|program not found/i.test(m)) { checkFfmpeg(true); return 'ffmpeg is missing. See the dialog for the one line fix.'; }
   if (/Wayland/i.test(m)) return 'Screen capture on Wayland is not supported yet. Log in with an X11 session to record.';
   return m.replace(/^Error:\s*/, '');
 }
@@ -473,6 +473,23 @@ function showShortcuts() {
   modal('Keyboard shortcuts', `<div class="shortcuts">${SHORTCUTS.map(([g, list]) => `<h4>${g}</h4>` + list.map(([k, d]) => `<div><span>${d}</span><span>${k.split(' / ').map(x => x.split(' ').map(y => `<kbd>${esc(y)}</kbd>`).join('')).join(' / ')}</span></div>`).join('')).join('')}</div>`);
 }
 $('keys-btn').onclick = showShortcuts;
+
+// ---------- ffmpeg check and About ----------
+async function checkFfmpeg(force) {
+  let st; try { st = await invoke('ffmpeg_status'); } catch { return; }
+  if (st.found && !force) return st;
+  if (!st.found) modal('ffmpeg is needed', `<p>DemoLens uses ffmpeg to record and export. The installer normally includes it, but no working copy was found on this computer.</p><p>Install it with this one line, then restart DemoLens:</p><pre class="code">${esc(st.hint)}</pre><p class="hint">Windows: run it in PowerShell. macOS: needs <a href="https://brew.sh" target="_blank">Homebrew</a>. Or download it from <a href="https://ffmpeg.org/download.html" target="_blank">ffmpeg.org</a>.</p>`);
+  return st;
+}
+async function showAbout() {
+  let st = {}; try { st = await invoke('ffmpeg_status'); } catch {}
+  modal('About DemoLens', `<p><b>DemoLens ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
+  <p><b>ffmpeg:</b> ${st.found ? esc(st.version) + (st.bundled ? ' (bundled)' : '') + '<br><span class="hint">' + esc(st.path) + '</span>' : 'not found'}</p>
+  <p class="hint">This app bundles FFmpeg (https://ffmpeg.org), licensed under the GNU GPL version 2 or later (the bundled builds include GPL components). FFmpeg is a trademark of Fabrice Bellard. Source code for the bundled builds is available from the builders: BtbN/FFmpeg-Builds (Linux, Windows) and ffmpeg.martin-riedl.de (macOS). See THIRD_PARTY_NOTICES.md in the repository.</p>
+  <p class="hint">Optional AI models are downloaded separately and keep their own licenses.</p>`);
+}
+$('about-btn').onclick = showAbout;
+setTimeout(() => checkFfmpeg(false), 400);
 
 window.addEventListener('keydown', e => {
   const el = document.activeElement, typing = (el.tagName === 'INPUT' && !['range', 'checkbox', 'color'].includes(el.type)) || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA';

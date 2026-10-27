@@ -258,3 +258,5 @@ kbd { font: 600 var(--fs-xs) var(--mono); padding: 2px 6px; border: 1px solid va
 
 @media (max-width: 1180px) { .btn span { display: none; } .btn:not(.icon) { padding: 0 8px; } .welcome .btn span, .card .btn span, .pane .btn span { display: inline; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+pre.code { background: var(--bg-2, rgba(127,127,127,.12)); border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 8px; padding: 10px 12px; font-family: var(--font-mono, ui-monospace, monospace); user-select: all; white-space: pre-wrap; }

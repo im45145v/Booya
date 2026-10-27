@@ -280,6 +280,33 @@ fn write_text(path: String, text: String) -> R<()> {
     std::fs::write(path, text).map_err(e)
 }
 
+/// Where ffmpeg was found (bundled, PATH or a common folder), its version,
+/// and the one line install command for this OS when it is missing.
+#[tauri::command]
+fn ffmpeg_status() -> serde_json::Value {
+    let bin = demolens_core::ffmpeg::ffmpeg_bin();
+    let found = demolens_core::ffmpeg::ffmpeg_found();
+    let version = if found {
+        std::process::Command::new(&bin)
+            .arg("-version")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.to_string()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| std::path::Path::new(&bin).starts_with(d)))
+        .unwrap_or(false);
+    serde_json::json!({
+        "found": found, "path": bin, "version": version, "bundled": bundled,
+        "hint": demolens_core::ffmpeg::install_hint(),
+        "app_version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -308,7 +335,8 @@ fn main() {
             write_text,
             make_sample,
             ai_demo_ready,
-            reveal
+            reveal,
+            ffmpeg_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running DemoLens");

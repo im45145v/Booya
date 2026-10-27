@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/demolens-ffmpeg", "binaries/demolens-ffprobe"]
+  }
+}

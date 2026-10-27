@@ -6,7 +6,7 @@ on:
   push:
     tags: ["v*"]
     branches: [main]
-    paths: [".github/workflows/release.yml", "src-tauri/tauri.conf.json"]
+    paths: [".github/workflows/release.yml", "src-tauri/tauri.conf.json", "scripts/fetch-ffmpeg.sh"]
   workflow_dispatch:
 
 permissions:
@@ -37,9 +37,33 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev cmake clang libclang-dev patchelf file
+      - name: Fetch static ffmpeg to bundle
+        shell: bash
+        run: bash scripts/fetch-ffmpeg.sh
       - name: Build installers
         working-directory: src-tauri
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx --yes @tauri-apps/cli@2 build --config tauri.bundle-ffmpeg.json
+      - name: Check bundled ffmpeg runs
+        shell: bash
+        run: |
+          b=target/release/bundle
+          case "$RUNNER_OS" in
+            macOS)
+              app=$(find $b/macos -maxdepth 1 -name '*.app' | head -1)
+              "$app/Contents/MacOS/demolens-ffmpeg" -hide_banner -version | head -1
+              "$app/Contents/MacOS/demolens-ffprobe" -hide_banner -version | head -1 ;;
+            Windows)
+              # the installer puts the sidecars next to the app exe; run the staged copies
+              ./target/release/demolens-ffmpeg.exe -hide_banner -version | head -1
+              ./target/release/demolens-ffprobe.exe -hide_banner -version | head -1
+              7z l $b/msi/*.msi | grep -i demolens-ff || true ;;
+            Linux)
+              deb=$(ls $b/deb/*.deb | head -1)
+              mkdir -p /tmp/deb && dpkg-deb -x "$deb" /tmp/deb
+              ls -la /tmp/deb/usr/bin
+              /tmp/deb/usr/bin/demolens-ffmpeg -hide_banner -version | head -1
+              /tmp/deb/usr/bin/demolens-ffprobe -hide_banner -version | head -1 ;;
+          esac
       - name: Check macOS signature
         if: runner.os == 'macOS'
         shell: bash
@@ -53,6 +77,8 @@ jobs:
           mnt=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | awk -F'\t' '{print $NF}')
           echo "Mounted $dmg at $mnt"
           codesign --verify --deep --strict --verbose=2 "$mnt"/*.app
+          codesign -dv "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg 2>&1 | grep -E 'Signature|Identifier'
+          "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg -hide_banner -version | head -1
           hdiutil detach "$mnt"
       - name: Build CLI
         run: cargo build --release -p demolens-cli
