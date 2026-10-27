@@ -6,7 +6,7 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 
 ![Demo GIF rendered by DemoLens from the built in sample](docs/media/demo.gif)
 
-![The editor](docs/media/editor.png)
+![The editor with the Local AI panel](docs/media/editor-ai.png)
 
 ## Features
 
@@ -19,6 +19,9 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: hide private data with manual blur regions that move correctly with the zoom.
 - **Product presets**: save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
+- **Editor comforts**: undo and redo (Ctrl+Z, Ctrl+Shift+Z), native Open / Save / Export dialogs, Ctrl+S and Ctrl+O. Opening a video also loads the event log next to it.
+- **Local AI** (optional, offline, see below): captions, auto cut of filler words and long pauses, auto blur of emails, API keys and card numbers, and written docs (title, chapters, step by step guide, social post).
+- **Audio cleanup**: background noise removal and mute.
 - **Export**: MP4 (H.264 + AAC) or GIF (palette optimised), 720p to 4K, in 16:9, 9:16 or 1:1.
 
 ## How it works
@@ -64,6 +67,39 @@ JSON Lines. The first line is a header, then one event per line. Times are milli
 
 Clicks and typing bursts (3 or more keys with less than 0.9 s between them; shortcuts do not count) become activity points. Points closer than 1.8 s are grouped. Each group becomes a segment that starts 0.5 s before the first event and holds 1.4 s after the last one, with a minimum length and clamping to the video. Overlapping segments are merged. At render time the camera eases in and out with a cubic curve, follows the smoothed cursor, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/demolens-core/src/zoom.rs`.
 
+## Local AI
+
+All AI features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it. Without any model installed, DemoLens works exactly as before and each AI button tells you which model it needs.
+
+Open **Models...** in the app (or run `demolens models list`) to see, download and delete models. They live in `~/.config/demolens/models` (the platform config folder on macOS and Windows). Once downloaded, everything works with no network.
+
+| Model | Size | Used for | License |
+|-------|------|----------|---------|
+| Whisper tiny.en | 78 MB | captions, filler detection (fastest) | MIT |
+| Whisper base.en | 148 MB | captions (recommended) | MIT |
+| Whisper small | 488 MB | captions in 99 languages | MIT |
+| ocrs detection + recognition | 13 MB | finding secrets on screen for auto blur | CC-BY-SA-4.0 |
+| Qwen2.5 0.5B Instruct Q4 | 491 MB | writing docs (quick) | Apache-2.0 |
+| Qwen2.5 1.5B Instruct Q4 | 1.1 GB | writing docs (better) | Apache-2.0 |
+| llama.cpp server | 22 MB | runs the Qwen models when you have no Ollama | MIT |
+
+What each feature does:
+
+- **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (with size control) or exported as SRT or VTT. Words you cut never show up.
+- **Auto cut**: removes filler words (um, uh) and pauses longer than a threshold you choose. Each cut is a normal clip edit, so undo works.
+- **Auto blur secrets**: samples frames, reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), card numbers (Luhn checked) and phone numbers.
+- **Write docs**: builds steps from the transcript, clicks, typing and zooms, then writes a title, YouTube style chapters, a Markdown guide and a short social post. With no LLM it falls back to a rule based writer.
+
+The LLM is found in this order: `DEMOLENS_LLM_URL` (any OpenAI compatible server, localhost only unless you also set `DEMOLENS_ALLOW_REMOTE_LLM=1`), Ollama on port 11434, a server on port 8080, then the bundled llama.cpp runtime with a downloaded Qwen model.
+
+Honest limits: Whisper often drops filler words or writes them as real words, so auto cut finds fewer fillers than a human would. The 0.5B model writes plain but usable text; the 1.5B model or your own Ollama model writes better.
+
+![Burned in captions and auto blur](docs/media/captions-blur.gif)
+
+![Model manager](docs/media/models.png)
+
+![Generated docs](docs/media/docs.png)
+
 ## Capture support
 
 | OS | Video | Microphone | System audio | Input log |
@@ -83,7 +119,8 @@ You need Rust 1.88 or newer (`rustup` recommended) and `ffmpeg` plus `ffprobe` o
 
 ```sh
 sudo apt install ffmpeg x11-utils pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
-  librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev
+  librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev \\
+  cmake clang libclang-dev   # cmake and clang build whisper.cpp
 cargo build --release                       # CLI: target/release/demolens
 cargo build --release -p demolens-app       # desktop app: target/release/demolens-app
 ```
@@ -94,7 +131,7 @@ Fedora: `sudo dnf install ffmpeg webkit2gtk4.1-devel gtk3-devel librsvg2-devel l
 
 ```sh
 xcode-select --install
-brew install ffmpeg
+brew install ffmpeg cmake
 cargo build --release -p demolens-app
 ```
 
@@ -106,6 +143,7 @@ Install the Visual Studio C++ Build Tools and WebView2 (preinstalled on Windows 
 
 ```powershell
 winget install Gyan.FFmpeg
+winget install Kitware.CMake LLVM.LLVM   # for whisper.cpp
 cargo build --release -p demolens-app
 ```
 
@@ -142,18 +180,33 @@ demolens sample samples          # synthetic app video + event log + project
 demolens export samples/sample.demolens.json -o demo.mp4
 ```
 
-Run the tests with `cargo test -p demolens-core`.
+Local AI from the command line:
+
+```sh
+demolens models list
+demolens models download whisper-base.en
+demolens transcribe demo.json
+demolens captions demo.json -o demo.srt          # or --burn --size 48
+demolens autocut demo.json --pause 0.7
+demolens redact demo.json
+demolens docs demo.json -o docs/                 # --no-llm for the rule based writer
+demolens audio demo.json --denoise
+demolens sample samples --speech                 # sample with espeak-ng narration and fake secrets
+```
+
+Run the tests with `cargo test -p demolens-core -p demolens-ai`.
 
 ## Roadmap
 
+Done: local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
+
+- Wayland capture through the PipeWire portal (Wayland is not supported yet; use an X11 session).
 - Webcam overlay (corner bubble, shape and size per preset).
-- Local captions with whisper.cpp, burned in or exported as SRT.
-- Auto blur for emails, API keys and other sensitive text.
-- Noise cleanup and loudness normalisation for the mic track.
-- Native capture backends: ScreenCaptureKit (macOS), Windows.Graphics.Capture plus WASAPI loopback (Windows), PipeWire portal (Wayland).
+- Local AI voiceover with Piper, to replace or fix narration.
+- Loudness normalisation for the mic track.
+- Native capture backends: ScreenCaptureKit (macOS), Windows.Graphics.Capture plus WASAPI loopback (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.
 - Motion blur on zoom transitions and cursor.
-- Undo and redo in the editor, native file dialogs.
 
 ## License
 
