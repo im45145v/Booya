@@ -49,7 +49,13 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
     } else {
         Vec::new()
     };
-    let planned = captions::plan_cuts(&words, &silences, o);
+    let mut planned = captions::plan_cuts(&words, &silences, o);
+    // A quiet stretch is not dead air when the presenter is clicking or
+    // typing in it: keep the on-screen action and only cut around it.
+    if let Some(log) = p.events.as_ref().and_then(|e| demolens_core::events::EventLog::load(e).ok()) {
+        let activity: Vec<f64> = log.clicks().map(|c| c.0).chain(log.keys().map(|k| k.0)).collect();
+        planned = protect_activity(&planned, &activity, 400.0, 900.0, 300.0);
+    }
     let cuts = planned
         .iter()
         .map(|&(s, e)| {
@@ -63,6 +69,46 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
         p.validate()?;
     }
     Ok(CutReport { cuts, before_ms: before, after_ms: p.output_duration_ms(), had_transcript: !words.is_empty() })
+}
+
+/// Remove `[t - before, t + after]` around every activity time from the cut
+/// ranges, dropping leftover pieces shorter than `min_len` ms.
+pub fn protect_activity(cuts: &[(f64, f64)], activity: &[f64], before: f64, after: f64, min_len: f64) -> Vec<(f64, f64)> {
+    let mut keep: Vec<(f64, f64)> = activity.iter().map(|&t| (t - before, t + after)).collect();
+    keep.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = Vec::new();
+    for &(s, e) in cuts {
+        let mut start = s;
+        for &(ks, ke) in &keep {
+            if ke <= start || ks >= e {
+                continue;
+            }
+            if ks - start >= min_len {
+                out.push((start, ks));
+            }
+            start = start.max(ke);
+        }
+        if e - start >= min_len {
+            out.push((start, e));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::protect_activity;
+    #[test]
+    fn cuts_skip_clicks_and_typing() {
+        // A 10 s silence with typing at 4 s keeps 3.6..4.9 s.
+        let r = protect_activity(&[(0.0, 10_000.0)], &[4_000.0], 400.0, 900.0, 300.0);
+        assert_eq!(r, vec![(0.0, 3_600.0), (4_900.0, 10_000.0)]);
+        // Leftovers shorter than the minimum are not cut.
+        let r = protect_activity(&[(1_000.0, 1_500.0)], &[1_300.0], 400.0, 900.0, 300.0);
+        assert!(r.is_empty());
+        // No activity, no change.
+        assert_eq!(protect_activity(&[(1.0, 2.0)], &[], 400.0, 900.0, 0.5), vec![(1.0, 2.0)]);
+    }
 }
 
 #[derive(Debug, Serialize)]

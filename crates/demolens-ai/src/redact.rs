@@ -25,7 +25,7 @@ fn res() -> &'static [(Sensitive, Regex)] {
             (Sensitive::Email, Regex::new(r"(?i)[a-z0-9._%+\-]+\s?@\s?[a-z0-9\-]+(\.[a-z0-9\-]+)*\.[a-z]{2,}").unwrap()),
             (
                 Sensitive::ApiKey,
-                Regex::new(r"\b((sk|pk|rk)[-_ ](live|test|proj)[-_ ]?[A-Za-z0-9][^\s]{11,}|(sk|pk|rk)[-_][A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{30,}|[A-Fa-f0-9]{32,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})").unwrap(),
+                Regex::new(r"\b((?i:sk|pk|rk)[-_ ](?i:live|test|proj)[-_ ]?[A-Za-z0-9][^\s]{11,}|(sk|pk|rk)[-_][A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{30,}|[A-Fa-f0-9]{32,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})").unwrap(),
             ),
             (Sensitive::Card, Regex::new(r"\b(?:\d[ -]?){12,18}\d\b").unwrap()),
             (Sensitive::Phone, Regex::new(r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?\d{3,4}[\s.-]?\d{3,4}[\s.-]?\d{0,4}").unwrap()),
@@ -198,6 +198,8 @@ mod tests {
     fn detects_common_secrets() {
         assert_eq!(kinds("Contact jane.doe@acme.com today"), vec![Sensitive::Email]);
         assert_eq!(kinds("key sk_live_51HxQ2aBcDeFgHiJkLmN"), vec![Sensitive::ApiKey]);
+        // OCR often reads underscores as spaces and changes case.
+        assert_eq!(kinds("SK Live 51Hg8ZtLm3?9VbOe7RKP2"), vec![Sensitive::ApiKey]);
         assert_eq!(kinds("AKIAIOSFODNN7EXAMPLE"), vec![Sensitive::ApiKey]);
         // OCR often reads "_" as a space.
         assert_eq!(kinds("APl key sk live 51HxQ2aBcDeFgHijkLmN"), vec![Sensitive::ApiKey]);
