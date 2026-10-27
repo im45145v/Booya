@@ -55,11 +55,12 @@ If you record demos of developer tools, your screen is full of tokens, emails an
 - **Recording**: full screen, a single window or an area, with microphone and system audio where the OS allows it (see the capture table below).
 - **Event log**: while recording, cursor moves and clicks are written to a timestamped `*.events.jsonl` file next to the video. Key capture is off by default; when you turn it on, only shortcut names and the timing of typing are kept, never the characters.
 - **Recording indicator**: an always on top REC badge with a timer and a Pause button (Ctrl/Cmd+Shift+P). Paused parts are cut.
-- **Webcam overlay**: record the webcam alongside the screen and show it as a circle or rounded square in any corner.
-- **Auto zoom**: zoom segments are generated from clicks and typing bursts. The zoom eases in and out smoothly and follows the cursor. Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
+- **Webcam overlay**: record the webcam alongside the screen and show it as a circle or rounded square in any corner, or in a column beside the screen. Optional mirror. It shows in the editor preview, not only in the export.
+- **Auto zoom**: zoom segments are generated from clicks and typing bursts. The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Subtle, moderate and intense zoom styles are one click. Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
 - **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
 - **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
-- **Styling**: gradient, solid or image background, padding, rounded corners and a soft shadow.
+- **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, intro and outro title cards and timed text callouts.
+- **Interactive demo**: `demolens interactive demo.json` (or Magic tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot.
 - **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.

@@ -14,19 +14,20 @@ DemoLens is a **free, open source (MIT), local-first** recorder and editor for p
 | **Platforms** | macOS, Windows, Linux | macOS only | macOS, Windows | macOS, Windows, web | macOS, Windows, web | Chrome, desktop | macOS, Windows | Chrome, desktop | macOS, Windows |
 | **Open source** | Yes | No | Yes (commercial licence for work use) | No | No | No | No | No | No |
 | **Works offline** | Yes, everything | Mostly | Studio mode | No | No | No | Partly | No | Mostly |
-| **Auto zoom on clicks** | Yes (speed, level, anticipation, merge) | Yes (the benchmark) | Yes | Yes (100 to 350%, 4 styles) | No | Pan and zoom per step | No | No | Yes |
+| **Auto zoom on clicks** | Yes (speed, level, steadiness dead zone, anticipation, merge; subtle, moderate and intense styles) | Yes (the benchmark) | Yes | Yes (100 to 350%, 4 styles) | No | Pan and zoom per step | No | No | Yes |
 | **Cursor smoothing and click effects** | Yes | Yes | Yes | Yes | Click emphasis | n/a | No | n/a | Yes |
 | **Backgrounds, padding, shadow, rounded corners** | Yes, templates | Yes | Yes | Yes | Frames | n/a | Limited | n/a | Yes |
 | **Captions** | Local Whisper, free | Local Whisper or cloud | Pro | Yes (106 languages) | Yes | No | Yes | No | Credits |
 | **Edit by transcript, cut fillers and pauses** | Cut fillers and pauses (local); transcript editing planned | Yes (v4) | Planned | Yes | Business + AI only | No | Yes (core feature) | No | Credits |
 | **Auto blur of secrets** | Yes, local OCR (emails, keys, cards, Aadhaar, PAN, UPI, passwords) | Manual masks | No | No | Manual blur | Manual blur | No | Manual | Manual |
 | **Noise reduction and loudness** | Local RNNoise and -16 LUFS | Local | Planned | Yes | Yes | n/a | Yes | n/a | Credits |
-| **Webcam bubble and layouts** | Webcam overlay (corner, circle, size); more layouts planned | Yes, with cutout and split screen | Yes | Yes (many) | Yes | n/a | Yes | n/a | Yes |
+| **Webcam bubble and layouts** | Webcam bubble (corner, circle, size, mirror) or side by side column; no cutout or face tracking yet | Yes, with cutout and split screen | Yes | Yes (many) | Yes | n/a | Yes | n/a | Yes |
 | **iPhone or iPad recording** | Not yet | Yes (USB) | No | Mobile | Mobile app | Figma, media | No | Mobile | Mobile |
 | **Instant share link** | Your own S3 or R2 bucket, signed link; no DemoLens server | Yes (30 min cap) | Yes, or self-host | Yes | Yes | Yes | Yes | Yes | No |
-| **Interactive click-through demo** | In progress (HTML export from the event log) | No | No | No | No | Yes (core) | No | Yes (core) | No |
+| **Interactive click-through demo** | Yes: one self-contained HTML file from the event log, blur boxes applied, no network calls, shareable by signed link | No | No | No | No | Yes (core) | No | Yes (core) | No |
 | **Export** | MP4, WebM, GIF, SRT, VTT | MP4 to 4K 60, GIF | MP4, WebM, MOV, GIF | MP4 to 4K 60 | MP4 | MP4, GIF (paid) | MP4 | MP4, GIF (paid) | MP4 to 4K 60 |
-| **Watermark** | Never | No (export needs a plan) | No | No | Free plan | Free plan | Free plan | Free plan | Free plan |
+| **Intro and outro cards, callouts** | Yes: title cards, timed text callouts | Yes | Basic | Yes | Basic | Yes | Yes | Yes | Yes |
+| **Watermark** | Optional text, off by default; never forced | No (export needs a plan) | No | No | Free plan | Free plan | Free plan | Free plan | Free plan |
 | **Team features and analytics** | No | Sharing | Pro | Yes | Yes | Yes | Yes | Yes | No |
 
 Where the others are clearly ahead today: hosted sharing with viewer analytics and comments (Loom, Tella, Cap Pro), device mockups and iPhone capture (Screen Studio), camera cutout and face tracking (Screen Studio 4, Tella), full transcript-based video editing (Descript, Tella, Screen Studio 4), and branching demos with CRM hooks (Arcade, Supademo). DemoLens has no team workspace and no hosted viewer.
@@ -42,17 +43,22 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 7. **Honest diagnostics.** `demolens doctor` and `demolens verify` tell you what is wrong with permissions, audio level and sync instead of leaving you guessing.
 8. **Audio that is audible.** Two-pass loudness to -16 LUFS on export and in the editor, a mic level meter before you record, and a quiet-mic warning.
 
-## What to build next (v0.3.0 priorities)
+## Where 0.3.0 stands against that list
 
-Ordered by value for a local-first product demo tool, and by whether it can be finished and verified without a Mac:
-
-1. Interactive HTML demo export built from the event log (Arcade and Supademo's core feature, free here, one self-contained file).
-2. Auto chapters and titles from the transcript, local.
-3. Webcam layouts (corner, side by side, full) with an animated switch.
-4. Instant shareable export (one click to a signed link or a self-contained HTML file).
-5. Multi-clip projects and templates.
-6. Screen Studio grade zoom polish (loupe, tilt) and transcript editing.
-7. Later: iPhone capture over USB, notarised builds, hosted viewer (optional, self-hostable).
+| Idea | Status |
+|---|---|
+| Interactive HTML demo from the event log | Done: `demolens interactive` and Magic tab, Export tab share |
+| Auto chapters and titles, local | Done earlier through the docs pipeline (rule based, optional local LLM); no separate chapter UI yet |
+| Webcam layouts | Bubble and side by side, mirror, shows in the preview; a layout that changes over time is not done |
+| Instant share | Signed link to your own S3 or R2 for videos and interactive demos; no hosted viewer |
+| Zoom polish | Dead zone camera that holds still and follows only at the edge, anticipates the action, steadiness slider, three zoom styles; no loupe or tilt |
+| Intro and outro, callouts, watermark, background photos | Done |
+| macOS key track | Written (Input Monitoring poller), not yet run on a real Mac |
+| Multi-clip projects | Not done |
+| Script cleanup and voice retakes | Not done (needs a local TTS model) |
+| iPhone capture over USB | Not done |
+| Transcript editing | Not done (filler and pause cutting exists) |
+| Notarised builds, hosted viewer | Not done |
 
 ## Sources
 - Screen Studio: https://screen.studio/ and its v4 release coverage (October 2026)
