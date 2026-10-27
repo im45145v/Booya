@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "demolens-ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "demolens-core",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "demolens-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "demolens-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "demolens-ai",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "demolens-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ab_glyph",
  "anyhow",

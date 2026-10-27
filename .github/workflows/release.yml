@@ -40,6 +40,20 @@ jobs:
       - name: Build installers
         working-directory: src-tauri
         run: npx --yes @tauri-apps/cli@2 build
+      - name: Check macOS signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          echo "App: $app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -E 'Signature|Identifier|Format|flags|TeamIdentifier'
+          spctl -a -vvv -t exec "$app" || echo "spctl rejects ad-hoc signed apps without notarisation, as expected"
+          dmg=$(find target/release/bundle/dmg -name '*.dmg' | head -1)
+          mnt=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | awk -F'\t' '{print $NF}')
+          echo "Mounted $dmg at $mnt"
+          codesign --verify --deep --strict --verbose=2 "$mnt"/*.app
+          hdiutil detach "$mnt"
       - name: Build CLI
         run: cargo build --release -p demolens-cli
       - name: Collect files

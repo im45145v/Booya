@@ -17,6 +17,20 @@ You record your screen, DemoLens logs your cursor, clicks and key presses next t
 
 Press `?` in the app for all keyboard shortcuts.
 
+### Opening DemoLens on macOS
+
+The macOS app is signed ad hoc, not with a paid Apple Developer ID, so Gatekeeper blocks it the first time. Use any one of these:
+
+- Right click (or Control click) DemoLens in Applications, choose **Open**, then **Open** again.
+- Or try to open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**.
+- Or, if macOS says the app "is damaged and can't be opened", run this in Terminal and open it again:
+
+  ```sh
+  xattr -cr /Applications/DemoLens.app
+  ```
+
+  This removes the download quarantine flag that your browser added. The app is not actually damaged.
+
 ## Why DemoLens
 
 | | DemoLens | Screen Studio | Cap | Loom / Tella |
