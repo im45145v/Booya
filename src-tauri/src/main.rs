@@ -73,7 +73,8 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             }
         };
         let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
-        let src = demolens_core::ffmpeg::frame_at(&project.source, src_t, project.source_width, project.source_height).map_err(e)?;
+        let (dw, dh) = r.decode_size();
+        let src = demolens_core::ffmpeg::frame_at(&project.source, src_t, dw, dh).map_err(e)?;
         let png = r.render(&src, src_t).encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
     })

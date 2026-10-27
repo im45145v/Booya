@@ -225,3 +225,118 @@ impl Drop for FrameReader {
         let _ = self.child.wait();
     }
 }
+
+/// Which H.264 encoder to use. Hardware encoders (VideoToolbox on macOS,
+/// NVENC on NVIDIA) move the work off the CPU, which matters most for
+/// battery life on laptops. Software x264 is the fallback everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoder {
+    VideoToolbox,
+    Nvenc,
+    X264,
+}
+
+impl Encoder {
+    pub fn name(self) -> &'static str {
+        match self {
+            Encoder::VideoToolbox => "h264_videotoolbox",
+            Encoder::Nvenc => "h264_nvenc",
+            Encoder::X264 => "libx264",
+        }
+    }
+    pub fn is_hardware(self) -> bool {
+        self != Encoder::X264
+    }
+
+    /// Encoder arguments for a finished export (quality first).
+    pub fn export_args(self, w: u32, h: u32, fps: f64) -> Vec<String> {
+        let v: Vec<&str> = match self {
+            // Bitrate sized to the frame: about 12 Mbit/s at 1080p30.
+            Encoder::VideoToolbox => vec!["-c:v", "h264_videotoolbox", "-profile:v", "high", "-allow_sw", "1"],
+            Encoder::Nvenc => vec!["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "19", "-b:v", "0"],
+            // veryfast at CRF 18 measured about half the CPU of medium with no
+            // visible loss for screen content (see docs/EFFICIENCY.md).
+            Encoder::X264 => vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"],
+        };
+        let mut a: Vec<String> = v.into_iter().map(String::from).collect();
+        if self == Encoder::VideoToolbox {
+            let bits = (w as f64 * h as f64 * fps * 0.19).max(2e6) as u64;
+            a.extend(["-b:v".into(), bits.to_string()]);
+        }
+        a
+    }
+
+    /// Encoder arguments while recording (speed first, near lossless).
+    pub fn capture_args(self) -> Vec<String> {
+        let v: Vec<&str> = match self {
+            Encoder::VideoToolbox => vec!["-c:v", "h264_videotoolbox", "-realtime", "1", "-allow_sw", "1", "-b:v", "40M"],
+            Encoder::Nvenc => vec!["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "constqp", "-qp", "18"],
+            Encoder::X264 => vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16"],
+        };
+        v.into_iter().map(String::from).collect()
+    }
+}
+
+/// Parse DEMOLENS_ENCODER: "software"/"x264", "videotoolbox", "nvenc" or auto.
+pub fn encoder_override(v: Option<&str>) -> Option<Encoder> {
+    match v?.trim().to_ascii_lowercase().as_str() {
+        "software" | "x264" | "libx264" | "cpu" => Some(Encoder::X264),
+        "videotoolbox" | "h264_videotoolbox" => Some(Encoder::VideoToolbox),
+        "nvenc" | "h264_nvenc" => Some(Encoder::Nvenc),
+        _ => None,
+    }
+}
+
+/// True when this ffmpeg can actually open `name` on this machine (being
+/// compiled in is not enough: NVENC needs a GPU and driver).
+pub fn encoder_works(name: &str) -> bool {
+    let mut c = Command::new(ffmpeg_bin());
+    c.args(["-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:r=30:d=0.2", "-pix_fmt", "yuv420p", "-c:v", name, "-f", "null", "-"]);
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c.status().map(|s| s.success()).unwrap_or(false)
+}
+
+/// The best working H.264 encoder, probed once per process.
+pub fn best_encoder() -> Encoder {
+    static BEST: std::sync::OnceLock<Encoder> = std::sync::OnceLock::new();
+    if let Some(e) = encoder_override(std::env::var("DEMOLENS_ENCODER").ok().as_deref()) {
+        return e;
+    }
+    *BEST.get_or_init(|| {
+        let order: &[Encoder] = if cfg!(target_os = "macos") { &[Encoder::VideoToolbox] } else { &[Encoder::Nvenc] };
+        order.iter().copied().find(|e| encoder_works(e.name())).unwrap_or(Encoder::X264)
+    })
+}
+
+#[cfg(test)]
+mod encoder_tests {
+    use super::*;
+    #[test]
+    fn override_parsing() {
+        assert_eq!(encoder_override(Some("software")), Some(Encoder::X264));
+        assert_eq!(encoder_override(Some(" VideoToolbox ")), Some(Encoder::VideoToolbox));
+        assert_eq!(encoder_override(Some("auto")), None);
+        assert_eq!(encoder_override(None), None);
+    }
+    #[test]
+    fn export_args_are_sane() {
+        let a = Encoder::X264.export_args(1920, 1080, 30.0);
+        assert!(a.windows(2).any(|w| w[0] == "-preset" && w[1] == "veryfast"));
+        let v = Encoder::VideoToolbox.export_args(1920, 1080, 30.0);
+        let i = v.iter().position(|s| s == "-b:v").unwrap();
+        let bits: u64 = v[i + 1].parse().unwrap();
+        assert!((10_000_000..14_000_000).contains(&bits));
+    }
+    #[test]
+    fn missing_encoder_is_rejected() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        assert!(!encoder_works("definitely_not_an_encoder"));
+    }
+}

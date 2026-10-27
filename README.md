@@ -69,6 +69,8 @@ If you record demos of developer tools, your screen is full of tokens, emails an
 
 ## How it works
 
+DemoLens uses the Mac media engine for encoding where it can and avoids work it does not need. See [docs/EFFICIENCY.md](docs/EFFICIENCY.md) for what it does and the measured numbers.
+
 ```
  record                       edit                                   export
  ┌──────────────┐   video     ┌────────────────────────────────┐     ┌──────────────┐

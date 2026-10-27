@@ -27,7 +27,7 @@ pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Render
 pub fn preview_png(project: &Project, out_ms: f64, out_w: u32, out_h: u32) -> Result<Vec<u8>> {
     let r = make_renderer(project, out_w, out_h)?;
     let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
-    let (sw, sh) = (project.source_width, project.source_height);
+    let (sw, sh) = r.decode_size();
     let src = ffmpeg::frame_at(&project.source, src_t, sw, sh)?;
     r.render(&src, src_t).encode_png()
 }
@@ -76,6 +76,20 @@ pub struct ExportStats {
 
 /// Export the project. `progress` is called with values in 0..=1.
 pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> Result<ExportStats> {
+    let enc = crate::ffmpeg::best_encoder();
+    match export_with(project, out, enc, &mut progress) {
+        // A hardware encoder can still fail mid-run (busy, unsupported size).
+        // Redo it in software rather than failing the export.
+        Err(e) if enc.is_hardware() && project.export.format == Format::Mp4 => {
+            eprintln!("{} failed ({e:#}); retrying with libx264", enc.name());
+            progress(0.0);
+            export_with(project, out, crate::ffmpeg::Encoder::X264, &mut progress)
+        }
+        r => r,
+    }
+}
+
+fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     project.validate()?;
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
@@ -96,7 +110,8 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
     let max_speed = project.clips.iter().map(|c| c.speed).fold(1.0, f64::max);
     let dec_fps = (info.fps.max(fps)).min(fps * max_speed).max(fps);
     let first_src = project.clips[0].src_start_ms;
-    let mut reader = FrameReader::open(&project.source, first_src, dec_fps, project.source_width, project.source_height)?;
+    let (dw, dh) = renderer.decode_size();
+    let mut reader = FrameReader::open(&project.source, first_src, dec_fps, dw, dh)?;
     let mut current: Option<Frame> = reader.next()?;
 
     let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
@@ -116,7 +131,7 @@ pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> R
                 cmd.arg("-i").arg(&audio_input);
                 cmd.args(["-filter_complex", &audio_filter(project), "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
             }
-            cmd.args(["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
+            cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
         }
         Format::Gif => {
             cmd.args(["-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a", "-loop", "0"]);

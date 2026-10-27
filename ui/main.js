@@ -146,7 +146,7 @@ async function refresh() {
   $('time').textContent = `${fmt(tl.playhead)} / ${fmt(tl.outDur())}`;
   if (pending) { again = true; return; }
   pending = true;
-  try { $('preview').src = await invoke('preview', { project, outMs: tl.playhead, shortSide: 540 }); }
+  try { $('preview').src = await invoke('preview', { project, outMs: tl.playhead, shortSide: playing ? 360 : 540 }); }
   catch (e) { fail(e); }
   pending = false;
   if (again) { again = false; refresh(); }
@@ -167,6 +167,9 @@ async function playLoop() {
     pending = false; await refresh();
   }
 }
+// Stop playback when the window is hidden so it does not keep rendering frames
+// nobody sees.
+document.addEventListener('visibilitychange', () => { if (document.hidden && playing) setPlaying(false); });
 const seek = t => { tl.playhead = Math.max(0, Math.min(tl.outDur(), t)); tl.follow(); tl.draw(); refresh(); };
 
 // ---------- Editing ----------

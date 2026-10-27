@@ -175,7 +175,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         let _ = std::fs::remove_file(&video);
         let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
         cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&plan.args);
-        cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac"]);
+        cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-c:a", "aac"]);
         // Matroska is written as it goes, so even a killed recording keeps
         // what it has; flush packets so the file grows from the first second.
         cmd.args(["-flush_packets", "1"]);

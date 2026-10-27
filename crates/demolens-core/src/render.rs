@@ -59,6 +59,8 @@ impl Frame {
             let mut enc = png::Encoder::new(&mut out, self.w, self.h);
             enc.set_color(png::ColorType::Rgba);
             enc.set_depth(png::BitDepth::Eight);
+            // Previews are thrown away after display, so favour speed over size.
+            enc.set_compression(png::Compression::Fast);
             let mut wr = enc.write_header()?;
             wr.write_image_data(&self.data)?;
         }
@@ -289,6 +291,24 @@ fn lerp3(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
 }
 
 impl Renderer {
+    /// The smallest source decode size that still gives at least one source
+    /// pixel per output pixel at the deepest zoom. Decoding a Retina recording
+    /// at full size for a 1080p export wastes most of the decode and sampling
+    /// work, so the decoder scales it down first (with a better filter than
+    /// the bilinear sampler would give when minifying).
+    pub fn decode_size(&self) -> (u32, u32) {
+        let p = &self.project;
+        let (sw, sh) = (p.source_width.max(2), p.source_height.max(2));
+        let max_zoom = p.zoom.iter().map(|z| z.scale).fold(1.0, f64::max);
+        let need_w = (self.layout.w * max_zoom).ceil();
+        if need_w >= sw as f64 {
+            return (sw, sh);
+        }
+        let k = need_w / sw as f64;
+        let even = |v: f64| ((v.ceil() as u32 + 1) & !1).max(2);
+        (even(sw as f64 * k).min(sw), even(sh as f64 * k).min(sh))
+    }
+
     /// `bg_image` is an RGBA image already scaled to the output size; only
     /// used with `Background::Image`.
     pub fn new(project: Project, log: Option<&EventLog>, out_w: u32, out_h: u32, bg_image: Option<Frame>) -> Self {
@@ -311,7 +331,38 @@ impl Renderer {
             h,
             radius: (project.style.corner_radius * short).min(w.min(h) / 2.0),
         };
+        let mut background = background;
+        Self::bake_shadow(&mut background, &project, layout, out_w, out_h);
         Self { project, out_w, out_h, track, clicks, labels, background, layout }
+    }
+
+    /// The drop shadow never changes between frames, so it is painted into the
+    /// background once instead of being recomputed for every pixel of every frame.
+    fn bake_shadow(bg: &mut Frame, project: &Project, l: Layout, out_w: u32, out_h: u32) {
+        let short = out_w.min(out_h) as f64;
+        let shadow_px = project.style.shadow * short;
+        if shadow_px <= 0.0 {
+            return;
+        }
+        let shadow_off = shadow_px * 0.35;
+        let shadow_op = project.style.shadow_opacity as f32;
+        let (cx, cy, hw, hh) = (l.x + l.w / 2.0, l.y + l.h / 2.0, l.w / 2.0, l.h / 2.0);
+        let w = out_w as usize;
+        bg.data.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+            let fy = y as f64 + 0.5;
+            for x in 0..w {
+                let fx = x as f64 + 0.5;
+                let d = sd_round_rect(fx, fy, cx, cy, hw, hh, l.radius);
+                if d > -1.0 {
+                    let ds = sd_round_rect(fx, fy - shadow_off, cx, cy, hw, hh, l.radius);
+                    let k = (1.0 - (ds / shadow_px).clamp(0.0, 1.0)) as f32;
+                    let a = shadow_op * k * k;
+                    for c in row[x * 4..x * 4 + 3].iter_mut() {
+                        *c = (*c as f32 * (1.0 - a)) as u8;
+                    }
+                }
+            }
+        });
     }
 
     fn paint_background(bg: &Background, w: u32, h: u32, image: Option<Frame>) -> Frame {
@@ -408,8 +459,20 @@ impl Renderer {
             src
         } else {
             let mut c = src.clone();
+            // Blur boxes are in source pixels; the decoded frame may be smaller.
+            let k = src.w as f64 / p.source_width as f64;
             for b in blurs {
-                blur_region(&mut c, b);
+                if (k - 1.0).abs() < 1e-9 {
+                    blur_region(&mut c, b);
+                } else {
+                    let mut sb = b.clone();
+                    sb.x *= k;
+                    sb.y *= k;
+                    sb.w *= k;
+                    sb.h *= k;
+                    sb.radius = ((b.radius as f64 * k).round() as u32).max(1);
+                    blur_region(&mut c, &sb);
+                }
             }
             owned = c;
             &owned
@@ -421,30 +484,24 @@ impl Renderer {
         let sy_scale = src.h as f64 / p.source_height as f64;
         let l = self.layout;
         let short = self.out_w.min(self.out_h) as f64;
-        let shadow_px = p.style.shadow * short;
-        let shadow_off = shadow_px * 0.35;
-        let shadow_op = p.style.shadow_opacity as f32;
         let (cx, cy, hw, hh) = (l.x + l.w / 2.0, l.y + l.h / 2.0, l.w / 2.0, l.h / 2.0);
 
-        // 2. Background, shadow and the zoomed recording in one parallel pass.
+        // 2. Zoomed recording over the pre-baked background and shadow. Only the
+        // rows and columns the card can touch are visited.
         let mut out = self.background.clone();
         let w = self.out_w as usize;
-        out.data.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-            let fy = y as f64 + 0.5;
-            for x in 0..w {
+        let y0 = (l.y - 1.0).floor().max(0.0) as usize;
+        let y1 = ((l.y + l.h + 1.0).ceil() as usize).min(self.out_h as usize);
+        let x0 = (l.x - 1.0).floor().max(0.0) as usize;
+        let x1 = ((l.x + l.w + 1.0).ceil() as usize).min(w);
+        out.data[y0 * w * 4..y1 * w * 4].par_chunks_mut(w * 4).enumerate().for_each(|(i, row)| {
+            let fy = (y0 + i) as f64 + 0.5;
+            for x in x0..x1 {
                 let fx = x as f64 + 0.5;
                 let d = sd_round_rect(fx, fy, cx, cy, hw, hh, l.radius);
-                let px = &mut row[x * 4..x * 4 + 4];
-                if shadow_px > 0.0 && d > -1.0 {
-                    let ds = sd_round_rect(fx, fy - shadow_off, cx, cy, hw, hh, l.radius);
-                    let k = (1.0 - (ds / shadow_px).clamp(0.0, 1.0)) as f32;
-                    let a = shadow_op * k * k;
-                    for c in px.iter_mut().take(3) {
-                        *c = (*c as f32 * (1.0 - a)) as u8;
-                    }
-                }
                 let cov = (0.5 - d).clamp(0.0, 1.0) as f32;
                 if cov > 0.0 {
+                    let px = &mut row[x * 4..x * 4 + 4];
                     let u = (fx - l.x) / l.w;
                     let v = (fy - l.y) / l.h;
                     let s = src.sample((vx + u * vw) * sx_scale, (vy + v * vh) * sy_scale);
@@ -572,5 +629,54 @@ mod tests {
         assert_eq!(&out.data[0..3], &[10, 20, 30]);
         let mid = ((90 * 320 + 160) * 4) as usize;
         assert_eq!(&out.data[mid..mid + 3], &[200, 0, 0]);
+    }
+
+    #[test]
+    fn decode_size_shrinks_retina_sources_only_when_safe() {
+        let mut p = Project::new("x".into(), None, 2880, 1800, 1000.0);
+        let r = Renderer::new(p.clone(), None, 1920, 1080, None);
+        let (w, h) = r.decode_size();
+        assert!(w < 2880 && w as f64 >= r.layout.w && w % 2 == 0 && h % 2 == 0);
+        // A deep zoom needs every source pixel.
+        p.zoom.push(crate::zoom::ZoomSegment { start_ms: 0.0, end_ms: 500.0, scale: 2.5, follow_cursor: false, focus: (10.0, 10.0), reason: Default::default() });
+        let r = Renderer::new(p, None, 1920, 1080, None);
+        assert_eq!(r.decode_size(), (2880, 1800));
+    }
+
+    #[test]
+    fn baked_shadow_darkens_only_outside_the_card() {
+        let mut p = Project::new("x".into(), None, 64, 36, 1000.0);
+        p.style.background = Background::Solid { color: [200, 200, 200] };
+        p.style.shadow = 0.05;
+        p.style.shadow_opacity = 0.5;
+        let r = Renderer::new(p, None, 320, 180, None);
+        let mut src = Frame::new(64, 36);
+        src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[0, 0, 255, 255]));
+        let a = r.render(&src, 0.0);
+        let b = r.render(&src, 500.0);
+        assert_eq!(a.data, b.data, "frames are deterministic");
+        let below = ((((r.layout.y + r.layout.h) as usize + 2) * 320 + 160) * 4) as usize;
+        assert!(a.data[below] < 200, "shadow under the card");
+        assert_eq!(&a.data[0..3], &[200, 200, 200]);
+    }
+
+    #[test]
+    fn blur_follows_a_downscaled_source() {
+        let mut p = Project::new("x".into(), None, 200, 100, 1000.0);
+        p.style.shadow = 0.0;
+        p.style.padding = 0.0;
+        p.blur.push(BlurBox { x: 0.0, y: 0.0, w: 100.0, h: 100.0, start_ms: 0.0, end_ms: 1000.0, radius: 20, ..serde_json::from_str::<BlurBox>(r#"{"x":0,"y":0,"w":1,"h":1,"start_ms":0,"end_ms":1}"#).unwrap() });
+        let r = Renderer::new(p, None, 200, 100, None);
+        // Half-size source with a sharp stripe pattern in the blurred half.
+        let mut src = Frame::new(100, 50);
+        for (i, c) in src.data.chunks_mut(4).enumerate() {
+            let v = if (i % 100) % 2 == 0 { 255 } else { 0 };
+            c.copy_from_slice(&[v, v, v, 255]);
+        }
+        let out = r.render(&src, 10.0);
+        let px = |x: usize, y: usize| out.data[(y * 200 + x) * 4] as i32;
+        // Left half (blurred) is smooth, right half keeps contrast.
+        assert!((px(40, 50) - px(42, 50)).abs() < 40);
+        assert!((0..8).map(|x| px(150 + x, 50)).max().unwrap() - (0..8).map(|x| px(150 + x, 50)).min().unwrap() > 60);
     }
 }

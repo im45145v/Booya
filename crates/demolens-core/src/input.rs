@@ -214,6 +214,7 @@ mod mac {
             let scale = backing_scale();
             let mut last = (f64::NAN, f64::NAN);
             let mut down = [false; 3];
+            let mut last_change = Instant::now();
             loop {
                 if !shared.lock().unwrap().active {
                     break;
@@ -235,12 +236,16 @@ mod mac {
                     down[i] = is;
                 }
                 if !evs.is_empty() {
+                    last_change = now;
                     let mut s = shared.lock().unwrap();
                     for k in evs {
                         s.events.push((now, k));
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(16));
+                // 60 Hz while the mouse is in use, 20 Hz once it has been still
+                // for half a second (a click still lasts longer than 50 ms).
+                let idle = now.duration_since(last_change) > std::time::Duration::from_millis(500);
+                std::thread::sleep(std::time::Duration::from_millis(if idle { 50 } else { 16 }));
             }
         });
     }
