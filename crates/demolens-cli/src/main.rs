@@ -10,6 +10,8 @@ use demolens_core::{export, ffmpeg, new_project, zoom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod ai;
+
 const HELP: &str = "DemoLens: local screen recorder for product demos
 
 USAGE:
@@ -25,12 +27,22 @@ USAGE:
   demolens speed <project.json> CLIP_INDEX SPEED
   demolens blur <project.json> X,Y,W,H [START_MS END_MS]
   demolens preset save <project.json> NAME | apply <project.json> NAME | list
-  demolens sample <dir>      generate a synthetic recording + event log
+  demolens sample <dir> [--speech]   synthetic recording + event log
+                  (--speech adds espeak-ng narration and on-screen secrets)
+
+LOCAL AI (offline, models download once on first use):
+  demolens models [list | download ID | delete ID]
+  demolens transcribe <project.json> [--model whisper-base.en] [--lang en]
+  demolens captions <project.json> [--burn on|off] [--size PX] [-o subs.srt|subs.vtt]
+  demolens autocut <project.json> [--fillers] [--silences] [--min-silence MS] [--dry-run]
+  demolens redact <project.json> [--every MS] [--dry-run]
+  demolens docs <project.json> [-o DIR] [--no-llm]
+  demolens audio <project.json> [--denoise on|off] [--mute on|off]
 ";
 
-struct Args(Vec<String>);
+pub(crate) struct Args(pub(crate) Vec<String>);
 impl Args {
-    fn flag(&mut self, name: &str) -> bool {
+    pub(crate) fn flag(&mut self, name: &str) -> bool {
         if let Some(i) = self.0.iter().position(|a| a == name) {
             self.0.remove(i);
             true
@@ -38,12 +50,12 @@ impl Args {
             false
         }
     }
-    fn opt(&mut self, names: &[&str]) -> Option<String> {
+    pub(crate) fn opt(&mut self, names: &[&str]) -> Option<String> {
         let i = self.0.iter().position(|a| names.contains(&a.as_str()))?;
         self.0.remove(i);
         (i < self.0.len()).then(|| self.0.remove(i))
     }
-    fn pos(&mut self, what: &str) -> Result<String> {
+    pub(crate) fn pos(&mut self, what: &str) -> Result<String> {
         if self.0.is_empty() {
             bail!("missing {what}\n\n{HELP}");
         }
@@ -177,7 +189,17 @@ fn run() -> Result<()> {
             }
             o => bail!("unknown preset command {o}"),
         },
-        "sample" => sample(&PathBuf::from(a.pos("dir")?)),
+        "sample" => {
+            let speech = a.flag("--speech");
+            sample(&PathBuf::from(a.pos("dir")?), speech)
+        }
+        "models" => ai::models_cmd(a),
+        "transcribe" => ai::transcribe_cmd(a),
+        "captions" => ai::captions_cmd(a),
+        "autocut" => ai::autocut_cmd(a),
+        "redact" => ai::redact_cmd(a),
+        "docs" => ai::docs_cmd(a),
+        "audio" => ai::audio_cmd(a),
         "" | "-h" | "--help" | "help" => {
             print!("{HELP}");
             Ok(())
@@ -225,8 +247,9 @@ fn record(mut a: Args) -> Result<()> {
 
 /// Build a fake "app" recording with ffmpeg and a matching synthetic event
 /// log, so the whole pipeline can be exercised without a display.
-fn sample(dir: &Path) -> Result<()> {
+fn sample(dir: &Path, speech: bool) -> Result<()> {
     std::fs::create_dir_all(dir)?;
+    let dir = &dir.canonicalize()?;
     let video = dir.join("sample.mp4");
     let (w, h, secs) = (1920u32, 1080u32, 12.0f64);
     // A light "window" with a sidebar, a toolbar, a text field and buttons.
@@ -249,9 +272,29 @@ fn sample(dir: &Path) -> Result<()> {
         "drawbox=x=1500:y=980:w=360:h=60:color=0x111827:t=fill:enable='gte(t,9.2)'",
     ]
     .join(",");
-    let status = Command::new(ffmpeg::ffmpeg_bin())
-        .args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("color=c=0xffffff:s={w}x{h}:r=30:d={secs}")])
-        .args(["-f", "lavfi", "-i", &format!("sine=frequency=440:sample_rate=48000:duration={secs}")])
+    let mut vf = vf;
+    let audio_in = if speech {
+        if let Some(font) = sample_font() {
+            // Fake secrets on screen so auto redaction has something to find.
+            let f = font.to_string_lossy().replace('\\', "/").replace(':', "\\:");
+            for (y, text) in [(352, "Billing contact  jane.doe@acme.com"), (412, "API key  sk_live_51HxQ2aBcDeFgHiJkLmN"), (452, "Card  4242 4242 4242 4242")] {
+                vf.push_str(&format!(",drawtext=fontfile='{f}':text='{text}':x=470:y={y}:fontsize=26:fontcolor=0x111827"));
+            }
+        } else {
+            eprintln!("warning: no font found for on-screen text");
+        }
+        narration(dir, secs)?
+    } else {
+        format!("sine=frequency=440:sample_rate=48000:duration={secs}")
+    };
+    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    cmd.args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("color=c=0xffffff:s={w}x{h}:r=30:d={secs}")]);
+    if speech {
+        cmd.arg("-i").arg(&audio_in);
+    } else {
+        cmd.args(["-f", "lavfi", "-i", &audio_in]);
+    }
+    let status = cmd
         .args(["-vf", &vf, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
         .arg(&video)
         .status()?;
@@ -298,4 +341,55 @@ fn sample(dir: &Path) -> Result<()> {
     p.save(&proj)?;
     println!("video   {}\nevents  {}\nproject {} ({} zoom segments)", video.display(), events.display(), proj.display(), p.zoom.len());
     Ok(())
+}
+
+fn sample_font() -> Option<PathBuf> {
+    [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .find(|p| p.exists())
+}
+
+/// Narration with filler words and a long pause, spoken by espeak-ng, mixed
+/// over a little background hiss so denoise has something to remove.
+fn narration(dir: &Path, secs: f64) -> Result<String> {
+    let lines = [
+        (0.3, "Let's open the invoices page."),
+        (2.4, "Um, now we search for, uh, March."),
+        (7.0, "Press control S to save it."),
+        (9.3, "And there it is. Saved."),
+    ];
+    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    cmd.args(["-v", "error", "-y"]);
+    let mut filter = String::new();
+    for (i, (at, text)) in lines.iter().enumerate() {
+        let wav = dir.join(format!("line{i}.wav"));
+        let ok = Command::new("espeak-ng").args(["-s", "150", "-w"]).arg(&wav).arg(text).status().map(|s| s.success()).unwrap_or(false);
+        if !ok {
+            bail!("--speech needs espeak-ng installed");
+        }
+        cmd.arg("-i").arg(&wav);
+        let ms = (at * 1000.0) as u64;
+        filter.push_str(&format!("[{i}:a]aresample=48000,adelay={ms}|{ms}[a{i}];"));
+    }
+    let n = lines.len();
+    cmd.args(["-f", "lavfi", "-i", &format!("anoisesrc=color=pink:amplitude=0.02:sample_rate=48000:duration={secs}")]);
+    for i in 0..n {
+        filter.push_str(&format!("[a{i}]"));
+    }
+    filter.push_str(&format!("[{n}:a]amix=inputs={}:duration=longest:normalize=0,atrim=0:{secs}[out]", n + 1));
+    let out = dir.join("narration.wav");
+    let st = cmd.args(["-filter_complex", &filter, "-map", "[out]", "-ac", "1"]).arg(&out).status()?;
+    if !st.success() {
+        bail!("ffmpeg failed to mix the narration");
+    }
+    for i in 0..n {
+        let _ = std::fs::remove_file(dir.join(format!("line{i}.wav")));
+    }
+    Ok(out.to_string_lossy().into_owned())
 }

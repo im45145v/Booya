@@ -18,3 +18,4 @@ input-hooks = ["demolens-core/input-hooks"]
 demolens-core = { path = "../demolens-core" }
 anyhow.workspace = true
 serde_json.workspace = true
+demolens-ai = { path = "../demolens-ai" }
