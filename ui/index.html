@@ -83,6 +83,7 @@
   <section class="stage" aria-label="Preview and timeline">
     <div class="preview-wrap" id="preview-wrap">
       <img id="preview" alt="Preview of the current frame" hidden />
+      <div id="shape-layer" class="shape-layer" hidden><svg id="shape-svg" aria-hidden="true"></svg></div>
       <div id="welcome" class="welcome">
         <div class="welcome-card">
           <img class="welcome-logo" src="logo.svg" alt="DemoLens logo" width="112" height="112">
@@ -272,6 +273,17 @@
       <div class="row"><select id="co-pos" class="field" aria-label="Callout position"><option value="0.85">Bottom</option><option value="0.5">Middle</option><option value="0.15">Top</option></select><select id="co-len" class="field" aria-label="Callout length"><option value="2000">2 s</option><option value="3000" selected>3 s</option><option value="5000">5 s</option></select><button id="co-add" class="btn needs-project">Add</button></div>
       <div id="co-list" class="list"></div>
 
+      <h3 class="section">Shapes</h3>
+      <p class="muted small" id="sh-hint">Pick a tool, then drag on the preview. It is added at the playhead.</p>
+      <div class="row" id="sh-tools" role="group" aria-label="Shape tools">
+        <button class="btn needs-project" data-tool="arrow" aria-pressed="false" title="Arrow">&#8599; Arrow</button>
+        <button class="btn needs-project" data-tool="box" aria-pressed="false" title="Box outline">&#9645; Box</button>
+        <button class="btn needs-project" data-tool="ellipse" aria-pressed="false" title="Ellipse outline">&#9711; Ellipse</button>
+        <button class="btn needs-project" data-tool="highlight" aria-pressed="false" title="Highlighter">&#9644; Highlight</button>
+      </div>
+      <div class="row"><div id="sh-colors" class="swatches" role="group" aria-label="Shape colour"></div><select id="sh-len" class="field" aria-label="Shape length"><option value="2000">2 s</option><option value="3000" selected>3 s</option><option value="5000">5 s</option><option value="8000">8 s</option></select></div>
+      <div id="sh-list" class="list"></div>
+
       <h3 class="section">Blur boxes</h3>
       <div class="row"><button id="blur-draw" class="btn needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span>Draw blur boxes...</span></button></div>
       <div class="row"><input id="blur-rect" class="field" placeholder="or type x,y,w,h in video pixels" aria-label="Blur box x,y,w,h" /><button id="blur-add" class="btn needs-project">Add</button></div>
@@ -312,5 +324,6 @@
 <script src="timeline.js"></script>
 <script src="main.js"></script>
 <script src="picker.js"></script>
+  <script src="annotate.js"></script>
 </body>
 </html>

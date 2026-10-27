@@ -312,6 +312,59 @@ pub struct Callout {
     pub y: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShapeKind {
+    /// A line from (x1, y1) with the head at (x2, y2).
+    Arrow,
+    /// An outlined rounded box.
+    Box,
+    /// An outlined ellipse.
+    Ellipse,
+    /// A translucent filled box, like a highlighter.
+    Highlight,
+}
+
+/// A drawn mark over the video for a stretch of time: arrow, box, ellipse or highlight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shape {
+    pub kind: ShapeKind,
+    /// Source time range.
+    pub start_ms: f64,
+    pub end_ms: f64,
+    /// Corners as fractions of the output (0 to 1). For an arrow, (x1, y1) is the tail and (x2, y2) the head.
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    /// Colour as `#rrggbb`.
+    #[serde(default = "default_shape_color")]
+    pub color: String,
+    /// Line width as a fraction of the shorter output side.
+    #[serde(default = "default_shape_width")]
+    pub width: f64,
+}
+
+fn default_shape_color() -> String {
+    "#fbbf24".into()
+}
+fn default_shape_width() -> f64 {
+    0.006
+}
+
+impl Shape {
+    /// The colour as RGB, falling back to amber for anything unreadable.
+    pub fn rgb(&self) -> [f32; 3] {
+        let h = self.color.trim_start_matches('#');
+        if h.len() == 6 {
+            if let Ok(v) = u32::from_str_radix(h, 16) {
+                return [((v >> 16) & 255) as f32, ((v >> 8) & 255) as f32, (v & 255) as f32];
+            }
+        }
+        [251.0, 191.0, 36.0]
+    }
+}
+
 /// A title card shown before or after the recording.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Card {
@@ -391,6 +444,8 @@ pub struct Project {
     #[serde(default)]
     pub callouts: Vec<Callout>,
     #[serde(default)]
+    pub shapes: Vec<Shape>,
+    #[serde(default)]
     pub intro: Option<Card>,
     #[serde(default)]
     pub outro: Option<Card>,
@@ -449,6 +504,7 @@ impl Project {
             webcam: None,
             watermark: None,
             callouts: Vec::new(),
+            shapes: Vec::new(),
             intro: None,
             outro: None,
         }

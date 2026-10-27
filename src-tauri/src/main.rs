@@ -141,6 +141,14 @@ fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
     Ok(zoom::generate_zoom_segments(&log, project.duration_ms, &project.zoom_config.to_config()))
 }
 
+/// What the keystroke overlay shows and when, for the timeline's key lane.
+#[tauri::command]
+fn key_track(project: Project) -> R<Vec<demolens_core::render::KeyLabel>> {
+    let Some(ev) = &project.events else { return Ok(vec![]) };
+    let log = EventLog::load(ev).map_err(e)?;
+    Ok(demolens_core::render::build_key_labels(&log, project.keys.hold_ms, project.keys.shortcuts_only))
+}
+
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
 #[tauri::command]
 async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_side: u32, playing: Option<bool>) -> R<String> {
@@ -1415,7 +1423,7 @@ fn main() {
             initial_project,
             load_project,
             save_project,
-            regenerate_zoom,
+            regenerate_zoom, key_track,
             preview,
             export_interactive,
             background_import,

@@ -1,5 +1,6 @@
 // Timeline: a ruler, a clip lane (output time), a zoom lane (source time
-// mapped to where it lands in the output) and a speech lane. Drag anywhere on
+// mapped to where it lands in the output), notes (callouts and shapes), blur
+// boxes, the keystrokes that show on screen, and a speech lane. Drag anywhere on
 // the ruler or clips to scrub; drag a zoom segment to move it or its edges to
 // resize it; Ctrl/Cmd + wheel zooms the timeline, wheel pans it.
 const FILLER = /^(u+m+|u+h+|uhm|erm|er|ah|hmm+|mm)\W*$/i;
@@ -11,8 +12,9 @@ class Timeline {
     this.project = null; this.playhead = 0; this.selectedZoom = -1; this.selectedClip = 0; this.drag = null;
     this.view = [0, 1]; // visible output range in ms; [0, dur] when fitted
     this.fitted = true;
-    this.H = 150; this.gutter = 64;
-    this.L = { ruler: [0, 22], clips: [28, 64], zoom: [72, 104], words: [112, 132] };
+    this.H = 222; this.gutter = 64;
+    this.L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96], marks: [102, 128], blur: [134, 156], keys: [162, 182], words: [188, 210] };
+    this.selItem = null; this.keyTrack = [];
     canvas.addEventListener('pointerdown', e => this.down(e));
     canvas.addEventListener('pointermove', e => this.hover(e));
     window.addEventListener('pointermove', e => this.move(e));
@@ -76,11 +78,39 @@ class Timeline {
     }
     return null;
   }
+  // Timed items in the notes and blur lanes (source time), each in one of two rows when they overlap.
+  items(lane) {
+    const p = this.project, out = [];
+    if (lane === 'marks') {
+      (p.callouts || []).forEach(o => out.push({ o, arr: p.callouts, label: o.text, color: '--tl-note' }));
+      (p.shapes || []).forEach(o => out.push({ o, arr: p.shapes, label: SHAPE_LABEL[o.kind] || o.kind, hex: o.color }));
+    } else if (lane === 'blur') (p.blur || []).forEach(o => out.push({ o, arr: p.blur, label: 'Blur', color: '--tl-blur' }));
+    out.sort((a, b) => a.o.start_ms - b.o.start_ms);
+    const ends = [-1, -1]; let overlap = false;
+    out.forEach(it => { let r = ends.findIndex(e => e <= it.o.start_ms + 1); if (r < 0) { r = 1; overlap = true; } ends[r] = it.o.end_ms; it.row = r; });
+    out.forEach(it => (it.rows = overlap ? 2 : 1));
+    return out;
+  }
+  itemBox(lane, it) {
+    const [a, b] = this.L[lane], h = (b - a) / it.rows;
+    return [this.x(this.srcToOut(it.o.start_ms)), this.x(this.srcToOut(it.o.end_ms)), a + it.row * h, a + (it.row + 1) * h - (it.rows > 1 ? 1 : 0)];
+  }
+  itemAt(lane, x, y) {
+    for (const it of this.items(lane).reverse()) {
+      const [a, b, ya, yb] = this.itemBox(lane, it);
+      if (y < ya - 1 || y > yb + 1) continue;
+      if (Math.abs(x - a) < 6) return { it, edge: 'start' };
+      if (Math.abs(x - b) < 6) return { it, edge: 'end' };
+      if (x > a && x < b) return { it, edge: 'move' };
+    }
+    return null;
+  }
   hover(e) {
     if (!this.project || this.drag) return;
     const [x, y] = this.pos(e), lane = this.lane(y);
     let cur = 'text';
     if (lane === 'zoom') { const h = this.zoomAt(x); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'copy'; }
+    if (lane === 'marks' || lane === 'blur') { const h = this.itemAt(lane, x, y); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'default'; }
     this.c.style.cursor = cur;
   }
   down(e) {
@@ -91,13 +121,23 @@ class Timeline {
       const h = this.zoomAt(x);
       if (h) {
         const z = this.project.zoom[h.i];
-        this.selectedZoom = h.i;
+        this.selectedZoom = h.i; this.selItem = null;
         this.drag = { kind: 'zoom', ...h, grab: this.outToSrc(this.ms(x)) - z.start_ms, len: z.end_ms - z.start_ms, moved: false };
         if (h.edge === 'move') this.c.style.cursor = 'grabbing';
         this.onSelect(); this.draw(); return;
       }
       this.selectedZoom = -1; this.onSelect();
     }
+    if (lane === 'marks' || lane === 'blur') {
+      const h = this.itemAt(lane, x, y);
+      if (h) {
+        this.selItem = h.it.o; this.selectedZoom = -1;
+        this.drag = { kind: 'item', it: h.it, edge: h.edge, grab: this.outToSrc(this.ms(x)) - h.it.o.start_ms, len: h.it.o.end_ms - h.it.o.start_ms, moved: false };
+        if (h.edge === 'move') this.c.style.cursor = 'grabbing';
+        this.onSelect(); this.draw(); return;
+      }
+      this.selItem = null; this.onSelect();
+    } else if (lane) { this.selItem = null; }
     if (x < this.gutter) return;
     this.drag = { kind: 'scrub' };
     this.scrubTo(x);
@@ -111,6 +151,14 @@ class Timeline {
     if (!this.drag) return;
     const [x] = this.pos(e);
     if (this.drag.kind === 'scrub') return this.scrubTo(x);
+    if (this.drag.kind === 'item') {
+      const o = this.drag.it.o, src = this.outToSrc(this.ms(x)), dur = this.project.duration_ms;
+      this.drag.moved = true;
+      if (this.drag.edge === 'start') o.start_ms = Math.max(0, Math.min(src, o.end_ms - 200));
+      else if (this.drag.edge === 'end') o.end_ms = Math.min(dur, Math.max(src, o.start_ms + 200));
+      else { const s = Math.max(0, Math.min(dur - this.drag.len, src - this.drag.grab)); o.start_ms = s; o.end_ms = s + this.drag.len; }
+      return this.draw();
+    }
     const z = this.project.zoom[this.drag.i], src = this.outToSrc(this.ms(x));
     this.drag.moved = true;
     // Zooms may not overlap: clamp against the neighbours on either side.
@@ -128,6 +176,7 @@ class Timeline {
   up() {
     if (!this.drag) return;
     const d = this.drag; this.drag = null;
+    if (d.kind === 'item') { this.c.style.cursor = 'grab'; if (d.moved) this.onChange(); else { this.playhead = this.srcToOut(d.it.o.start_ms); this.onSeek(this.playhead); } this.draw(); return; }
     if (d.kind === 'zoom') {
       this.c.style.cursor = 'grab';
       if (d.moved) { this.project.zoom.sort((a, b) => a.start_ms - b.start_ms); this.onChange(); }
@@ -168,7 +217,7 @@ class Timeline {
 
     // Lane labels
     ctx.fillStyle = C('--faint'); ctx.font = font(10); ctx.textBaseline = 'middle';
-    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['words', 'SPEECH']]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
+    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH']]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(x0 - 2, 0, x1 - x0 + 10, H); ctx.clip();
 
     // Ruler with nice tick spacing
@@ -197,6 +246,26 @@ class Timeline {
       if (sel) { ctx.fillStyle = '#fff'; ctx.fillRect(a + 2, za + 9, 2, zb - za - 18); ctx.fillRect(b - 4, za + 9, 2, zb - za - 18); }
       if (b - a > 50) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`${z.scale.toFixed(1)}x ${z.reason}`, a + 8, (za + zb) / 2); }
     });
+    // Lane backgrounds so empty lanes still read as lanes
+    ctx.globalAlpha = .35; ctx.fillStyle = C('--line');
+    for (const k of ['marks', 'blur', 'keys']) { const [a, b] = this.L[k]; rr(ctx, x0, a, x1 - x0, b - a, 5); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    // Notes (callouts and shapes) and blur boxes
+    for (const lane of ['marks', 'blur']) for (const it of this.items(lane)) {
+      const [a, b, ya, yb] = this.itemBox(lane, it), sel = it.o === this.selItem;
+      ctx.fillStyle = it.hex || C(it.color); ctx.globalAlpha = sel ? 1 : .8;
+      rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.fill(); ctx.globalAlpha = 1;
+      if (sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.stroke(); ctx.lineWidth = 1; }
+      if (b - a > 36 && yb - ya > 12) { ctx.fillStyle = it.hex ? '#111' : '#fff'; ctx.font = font(10); ctx.fillText(it.label.slice(0, Math.floor((b - a) / 6)), a + 6, (ya + yb) / 2); }
+    }
+    // Keystrokes (what the overlay shows)
+    { const [ka, kb] = this.L.keys; ctx.font = font(10);
+      for (const k of this.keyTrack || []) {
+        const a = this.x(this.srcToOut(k.start_ms)), b = this.x(this.srcToOut(k.end_ms));
+        if (b < x0 || a > x1) continue;
+        ctx.fillStyle = C('--tl-key'); rr(ctx, a, ka + 2, Math.max(3, b - a - 1), kb - ka - 4, 4); ctx.fill();
+        if (b - a > ctx.measureText(k.text).width + 8) { ctx.fillStyle = '#fff'; ctx.fillText(k.text, a + 4, (ka + kb) / 2); }
+      } }
     // Speech: one bar per visible word, filler words highlighted
     const [wa, wb] = this.L.words;
     const visible = w => [w.start_ms + 40, (w.start_ms + w.end_ms) / 2, w.end_ms - 40].some(t => this.project.clips.some(c => t >= c.src_start_ms && t < c.src_end_ms));
@@ -220,6 +289,7 @@ class Timeline {
     }
   }
 }
+const SHAPE_LABEL = { arrow: 'Arrow', box: 'Box', ellipse: 'Ellipse', highlight: 'Highlight' };
 function rr(ctx, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
 function fmt(ms, tenths = true) {
   const s = Math.max(0, ms) / 1000, m = Math.floor(s / 60), r = s - m * 60;

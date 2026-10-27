@@ -47,6 +47,9 @@
   --tl-filler: #f59e0b;
   --tl-playhead: var(--brand-amber);
   --tl-label: #ececf1;
+  --tl-note: #2563eb;
+  --tl-blur: #64748b;
+  --tl-key: #0f766e;
 }
 [data-theme="light"] {
   --bg: var(--brand-paper);
@@ -74,6 +77,9 @@
   --tl-filler: #d97706;
   --tl-playhead: #d97706;
   --tl-label: #17171c;
+  --tl-note: #3b82f6;
+  --tl-blur: #94a3b8;
+  --tl-key: #14b8a6;
 }
 
 * { box-sizing: border-box; }
@@ -164,7 +170,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 1px solid v
 #play { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: #fff; }
 #play:hover:not(:disabled) { background: var(--accent-hover); }
 .timeline-wrap { position: relative; }
-#timeline { display: block; width: 100%; height: 150px; background: var(--tl-bg); border: 1px solid var(--line); border-radius: var(--r-md); cursor: text; touch-action: none; }
+#timeline { display: block; width: 100%; height: 222px; background: var(--tl-bg); border: 1px solid var(--line); border-radius: var(--r-md); cursor: text; touch-action: none; }
 .tl-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: var(--fs-sm); pointer-events: none; }
 
 /* Inspector */
@@ -350,3 +356,16 @@ dialog.wide { width: min(980px, 94vw); }
 .pk-nums { margin-top: var(--sp-3); align-items: center; }
 .pk-nums label.inline .field { width: 84px; }
 .pk-icon.disp { background: var(--accent); } .pk-icon .ico { width: 14px; height: 14px; }
+
+/* Shapes on the preview and in the Edit tab */
+.shape-layer { position: absolute; cursor: crosshair; touch-action: none; outline: 2px dashed var(--accent); outline-offset: -2px; }
+.shape-layer svg { width: 100%; height: 100%; display: block; pointer-events: none; }
+#sh-tools .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.swatches { display: flex; gap: 6px; align-items: center; flex: 1; }
+.swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); padding: 0; cursor: pointer; }
+.swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface); }
+.sh-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sh-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1px solid var(--line); }
+.list .item.sel { outline: 1px solid var(--accent); }
+.list .item { cursor: default; }
+#sh-tools { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }

@@ -112,6 +112,23 @@ fn sd_round_rect(px: f64, py: f64, cx: f64, cy: f64, hw: f64, hh: f64, r: f64) -
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+/// Distance from a point to the segment a-b.
+fn sd_segment(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let l2 = (dx * dx + dy * dy).max(1e-9);
+    let t = (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0);
+    ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
+}
+
+/// Signed distance to a triangle. Negative inside.
+fn sd_triangle(px: f64, py: f64, a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+    let d = sd_segment(px, py, a.0, a.1, b.0, b.1).min(sd_segment(px, py, b.0, b.1, c.0, c.1)).min(sd_segment(px, py, c.0, c.1, a.0, a.1));
+    let cross = |p: (f64, f64), q: (f64, f64)| (q.0 - p.0) * (py - p.1) - (q.1 - p.1) * (px - p.0);
+    let (s1, s2, s3) = (cross(a, b), cross(b, c), cross(c, a));
+    let inside = (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0);
+    if inside { -d } else { d }
+}
+
 /// In-place box blur of a region (three passes approximates a Gaussian).
 pub fn blur_region(f: &mut Frame, b: &BlurBox) {
     let x0 = b.x.max(0.0) as usize;
@@ -175,7 +192,7 @@ pub fn blur_region(f: &mut Frame, b: &BlurBox) {
 pub const TYPING: &str = "Typing...";
 
 /// One label shown by the keystroke overlay.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct KeyLabel {
     pub start_ms: f64,
     pub end_ms: f64,
@@ -693,9 +710,82 @@ impl Renderer {
                 self.draw_caption(&mut out, c, src_t);
             }
         }
+        self.draw_shapes(&mut out, src_t);
         self.draw_callouts(&mut out, src_t);
         self.draw_watermark(&mut out);
         out
+    }
+
+    /// Arrows, boxes, ellipses and highlights, anti-aliased, fading in and out.
+    fn draw_shapes(&self, out: &mut Frame, src_t: f64) {
+        use crate::project::ShapeKind;
+        let (w, h) = (self.out_w as f64, self.out_h as f64);
+        let short = w.min(h);
+        for s in &self.project.shapes {
+            if src_t < s.start_ms || src_t > s.end_ms {
+                continue;
+            }
+            let k = (((src_t - s.start_ms) / 200.0).min((s.end_ms - src_t) / 200.0)).clamp(0.0, 1.0);
+            let k = (k * k * (3.0 - 2.0 * k)) as f32;
+            let rgb = s.rgb();
+            let lw = (s.width.clamp(0.001, 0.05) * short).max(2.0);
+            let (x1, y1, x2, y2) = (s.x1.clamp(0.0, 1.0) * w, s.y1.clamp(0.0, 1.0) * h, s.x2.clamp(0.0, 1.0) * w, s.y2.clamp(0.0, 1.0) * h);
+            let (bx0, bx1, by0, by1) = (x1.min(x2), x1.max(x2), y1.min(y2), y1.max(y2));
+            let pad = lw * 2.0 + 2.0;
+            let region = |f: &mut Frame, x0: f64, y0: f64, x1: f64, y1: f64, sd: &dyn Fn(f64, f64) -> f64, fill: bool, alpha: f32| {
+                for py in ((y0 - pad).floor().max(0.0) as i64)..=((y1 + pad).ceil().min(h - 1.0) as i64) {
+                    for px in ((x0 - pad).floor().max(0.0) as i64)..=((x1 + pad).ceil().min(w - 1.0) as i64) {
+                        let d = sd(px as f64 + 0.5, py as f64 + 0.5);
+                        let d = if fill { d } else { d.abs() - lw / 2.0 };
+                        let cov = (0.5 - d).clamp(0.0, 1.0) as f32;
+                        f.blend(px, py, rgb, alpha * cov);
+                    }
+                }
+            };
+            match s.kind {
+                ShapeKind::Highlight | ShapeKind::Box => {
+                    let (cx, cy, hw, hh) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0));
+                    let r = (short * 0.012).min(hw).min(hh);
+                    let sd = move |px: f64, py: f64| sd_round_rect(px, py, cx, cy, hw, hh, r);
+                    if s.kind == ShapeKind::Highlight {
+                        region(out, bx0, by0, bx1, by1, &sd, true, 0.38 * k);
+                    } else {
+                        region(out, bx0, by0, bx1, by1, &sd, false, k);
+                    }
+                }
+                ShapeKind::Ellipse => {
+                    let (cx, cy, rx, ry) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0));
+                    // First order distance to an ellipse: good enough for strokes.
+                    let sd = move |px: f64, py: f64| {
+                        let (nx, ny) = ((px - cx) / rx, (py - cy) / ry);
+                        let len = (nx * nx + ny * ny).sqrt();
+                        let grad = ((nx / rx).powi(2) + (ny / ry).powi(2)).sqrt() / len.max(1e-6);
+                        (len - 1.0) / grad.max(1e-6)
+                    };
+                    region(out, bx0, by0, bx1, by1, &sd, false, k);
+                }
+                ShapeKind::Arrow => {
+                    let (dx, dy) = (x2 - x1, y2 - y1);
+                    let len = (dx * dx + dy * dy).sqrt();
+                    if len < 4.0 {
+                        continue;
+                    }
+                    let (ux, uy) = (dx / len, dy / len);
+                    let head = (lw * 4.5).min(len * 0.6);
+                    let (sx, sy) = (x2 - ux * head * 0.8, y2 - uy * head * 0.8);
+                    let (nx, ny) = (-uy, ux);
+                    let (ax, ay) = (x2 - ux * head + nx * head * 0.5, y2 - uy * head + ny * head * 0.5);
+                    let (cx2, cy2) = (x2 - ux * head - nx * head * 0.5, y2 - uy * head - ny * head * 0.5);
+                    // Filled head (triangle) and a shaft that ends inside it.
+                    let sd = move |px: f64, py: f64| {
+                        let shaft = sd_segment(px, py, x1, y1, sx, sy) - lw / 2.0;
+                        let tri = sd_triangle(px, py, (x2, y2), (ax, ay), (cx2, cy2));
+                        shaft.min(tri)
+                    };
+                    region(out, bx0, by0, bx1, by1, &sd, true, k);
+                }
+            }
+        }
     }
 
     /// Notes that fade in and out over the video, in a rounded pill.
@@ -956,5 +1046,61 @@ mod callout_tests {
         let after = r.render(&src, 4500.0);
         assert_eq!(before.data, after.data);
         assert_ne!(before.data, during.data);
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+    use crate::project::{Shape, ShapeKind};
+
+    fn shape(kind: ShapeKind) -> Shape {
+        Shape { kind, start_ms: 1000.0, end_ms: 4000.0, x1: 0.2, y1: 0.2, x2: 0.7, y2: 0.6, color: "#ff0000".into(), width: 0.008 }
+    }
+
+    fn frames(kind: ShapeKind) -> (Frame, Frame, Frame) {
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 10_000.0);
+        p.style.padding = 0.0;
+        p.shapes.push(shape(kind));
+        let r = Renderer::new(p, None, 640, 360, None);
+        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
+        (r.render(&src, 500.0), r.render(&src, 2500.0), r.render(&src, 4500.0))
+    }
+
+    #[test]
+    fn every_shape_shows_only_inside_its_time_range() {
+        for k in [ShapeKind::Arrow, ShapeKind::Box, ShapeKind::Ellipse, ShapeKind::Highlight] {
+            let (before, during, after) = frames(k);
+            assert_eq!(before.data, after.data, "{k:?}");
+            assert_ne!(before.data, during.data, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn a_box_outlines_and_a_highlight_fills() {
+        let px = |f: &Frame, x: usize, y: usize| f.data[(y * 640 + x) * 4];
+        let (_, boxed, _) = frames(ShapeKind::Box);
+        let (_, hi, _) = frames(ShapeKind::Highlight);
+        // Centre of the shape: empty for the outline, tinted for the highlight.
+        assert_eq!(px(&boxed, 288, 144), 10);
+        assert!(px(&hi, 288, 144) > 60);
+        // On the left edge of the box (x = 0.2 * 640 = 128).
+        assert!(px(&boxed, 128, 144) > 100);
+    }
+
+    #[test]
+    fn an_arrow_has_a_head_at_the_target() {
+        let (_, a, _) = frames(ShapeKind::Arrow);
+        let px = |x: usize, y: usize| a.data[(y * 640 + x) * 4];
+        // Just inside the tip (0.7 * 640 = 448, 0.6 * 360 = 216).
+        assert!(px(442, 213) > 100 || px(440, 212) > 100);
+        assert_eq!(px(600, 40), 10);
+    }
+
+    #[test]
+    fn an_unreadable_colour_falls_back_to_amber() {
+        let mut s = shape(ShapeKind::Box);
+        s.color = "nope".into();
+        assert_eq!(s.rgb(), [251.0, 191.0, 36.0]);
     }
 }

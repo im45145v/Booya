@@ -246,6 +246,10 @@ function split() {
   c.src_end_ms = at; tl.selectedClip = i + 1; tl.draw(); syncSelection(); refresh(); status('Split clip ' + (i + 1));
 }
 function deleteSelected() {
+  if (tl.selItem) {
+    for (const k of ['callouts', 'shapes', 'blur']) { const i = (project[k] || []).indexOf(tl.selItem); if (i >= 0) { project[k].splice(i, 1); break; } }
+    tl.selItem = null; status('Removed from the timeline'); tl.draw(); syncSelection(); refresh(); return;
+  }
   if (tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; status('Zoom deleted'); }
   else if (project.clips.length > 1) { project.clips.splice(tl.selectedClip, 1); tl.selectedClip = Math.max(0, tl.selectedClip - 1); tl.playhead = Math.min(tl.playhead, tl.outDur()); status('Clip deleted'); }
   else return status('A project needs at least one clip.');
