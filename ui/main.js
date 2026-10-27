@@ -64,7 +64,7 @@ const tl = new Timeline($('timeline'), {
 function setProject(p, path = null) {
   project = p; projectPath = path; tl.selectedZoom = -1; tl.selectedClip = 0; tl.playhead = 0; tl.setProject(p);
   history = [JSON.stringify(p)]; hIdx = 0; saved = path ? history[0] : null; updUndo();
-  $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
+  markDone(1); $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
   document.body.classList.add('has-project');
   enableControls(); syncPanel(); syncSelection(); refresh(); prepareProxy();
@@ -398,6 +398,16 @@ function markDestination() {
   const e = project.export, first = DESTS.find(d => d.aspect === e.aspect && d.quality === e.quality && d.fps === e.fps && d.format === e.format);
   document.querySelectorAll('#destinations button').forEach(x => x.setAttribute('aria-pressed', !!first && x.dataset.d === first.id));
 }
+// First-run checklist on the welcome card. Remembered on this computer only.
+function markDone(n) { try { localStorage.setItem('dl.step' + n, '1'); } catch (_) {} renderSteps(); }
+function renderSteps() {
+  document.querySelectorAll('.steps li').forEach((li, i) => {
+    let d = false; try { d = localStorage.getItem('dl.step' + (i + 1)) === '1'; } catch (_) {}
+    li.classList.toggle('done', d); const b = li.querySelector('b'); if (b) b.textContent = d ? '\u2713' : String(i + 1);
+  });
+}
+renderSteps();
+
 async function doExport() {
   if (!project || busy) return;
   selectTab('export'); readPanel();
@@ -413,7 +423,7 @@ async function doExport() {
     const r = await invoke('export_video', { project, out });
     lastExport = out; $('ex-bar').style.width = '100%';
     $('ex-text').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${baseName(out)}`; $('ex-reveal').hidden = false; $('ex-upload').hidden = !storageReady;
-    status('Exported ' + r, 'success');
+    markDone(3); status('Exported ' + r, 'success');
   } catch (e) { $('ex-text').textContent = 'Export failed'; fail(e); }
   busy = false; enableControls();
 }
@@ -431,7 +441,7 @@ async function aiTask(label, fn) {
   if (playing) setPlaying(false);
   busy = true; readPanel(); checkpoint(); enableControls();
   $('ai-bar-wrap').hidden = false; $('ai-bar-wrap').classList.add('indet'); status(label + '...', 'busy');
-  try { await fn(); } catch (e) {
+  try { await fn(); markDone(2); } catch (e) {
     fail(e);
     if (/model|install|download/i.test(String(e))) showModels(humanError(e));
   }
