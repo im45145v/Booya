@@ -110,37 +110,34 @@ pub fn blur_region(f: &mut Frame, b: &BlurBox) {
     }
     let r = (b.radius.max(1) as usize / 2).max(1);
     let mut tmp = buf.clone();
+    // Running-sum box blur, three passes, O(1) per pixel regardless of radius.
+    let pass = |src: &[[f32; 3]], dst: &mut [[f32; 3]], len: usize, lines: usize, idx: &dyn Fn(usize, usize) -> usize| {
+        for l in 0..lines {
+            let mut s = [0f32; 3];
+            let mut n = 0f32;
+            for i in 0..=r.min(len - 1) {
+                let p = src[idx(l, i)];
+                s = [s[0] + p[0], s[1] + p[1], s[2] + p[2]];
+                n += 1.0;
+            }
+            for i in 0..len {
+                dst[idx(l, i)] = [s[0] / n, s[1] / n, s[2] / n];
+                if i + r + 1 < len {
+                    let p = src[idx(l, i + r + 1)];
+                    s = [s[0] + p[0], s[1] + p[1], s[2] + p[2]];
+                    n += 1.0;
+                }
+                if i >= r {
+                    let p = src[idx(l, i - r)];
+                    s = [s[0] - p[0], s[1] - p[1], s[2] - p[2]];
+                    n -= 1.0;
+                }
+            }
+        }
+    };
     for _ in 0..3 {
-        // horizontal
-        for y in 0..rh {
-            for x in 0..rw {
-                let (a, z) = (x.saturating_sub(r), (x + r).min(rw - 1));
-                let mut s = [0f32; 3];
-                for xx in a..=z {
-                    let p = buf[y * rw + xx];
-                    s[0] += p[0];
-                    s[1] += p[1];
-                    s[2] += p[2];
-                }
-                let n = (z - a + 1) as f32;
-                tmp[y * rw + x] = [s[0] / n, s[1] / n, s[2] / n];
-            }
-        }
-        // vertical
-        for y in 0..rh {
-            for x in 0..rw {
-                let (a, z) = (y.saturating_sub(r), (y + r).min(rh - 1));
-                let mut s = [0f32; 3];
-                for yy in a..=z {
-                    let p = tmp[yy * rw + x];
-                    s[0] += p[0];
-                    s[1] += p[1];
-                    s[2] += p[2];
-                }
-                let n = (z - a + 1) as f32;
-                buf[y * rw + x] = [s[0] / n, s[1] / n, s[2] / n];
-            }
-        }
+        pass(&buf, &mut tmp, rw, rh, &|l, i| l * rw + i);
+        pass(&tmp, &mut buf, rh, rw, &|l, i| i * rw + l);
     }
     for y in 0..rh {
         for x in 0..rw {

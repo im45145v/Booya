@@ -77,6 +77,9 @@ pub struct ExportStats {
 /// Export the project. `progress` is called with values in 0..=1.
 pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> Result<ExportStats> {
     project.validate()?;
+    if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
     let s = &project.export;
     let (ow, oh) = s.aspect.size(s.quality);
     let fps = s.fps.clamp(1, 60) as f64;
