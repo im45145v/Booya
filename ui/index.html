@@ -194,7 +194,13 @@
         <label class="color" id="bg-to-wrap"><input type="color" id="bg-to" value="#ec4899" aria-label="Second colour" /></label>
         <label class="inline grow" id="bg-angle-wrap">Angle <input id="bg-angle" class="field sm" type="number" value="35" min="0" max="360" /></label>
       </div>
-      <div class="row" id="bg-image-row" hidden><input id="bg-image" class="field" placeholder="/path/to/wallpaper.jpg" aria-label="Wallpaper path" /><button id="bg-pick" class="btn">Choose...</button></div>
+      <div id="bg-image-row" hidden>
+        <div class="row"><input id="bg-image" class="field" placeholder="No photo chosen" aria-label="Background photo" readonly /><button id="bg-pick" class="btn">Choose photo...</button></div>
+        <p class="muted small">png, jpg, heic, webp. A copy is saved next to the recording.</p>
+        <div class="seg" role="radiogroup" aria-label="Photo fit" id="bg-fit-seg"><button data-fit="fill" role="radio" title="Cover the frame and crop the edges">Fill</button><button data-fit="fit" role="radio" title="Show the whole photo">Fit</button><button data-fit="blur" role="radio" title="Whole photo over a blurred copy">Blur</button></div>
+        <label class="slider">Dim <input id="bg-dim" type="range" min="0" max="0.8" step="0.05" /></label>
+        <div class="recents" id="bg-recents" aria-label="Recent photos"></div>
+      </div>
 
       <h3 class="section">Frame</h3>
       <label class="slider">Padding <input id="padding" type="range" min="0" max="0.3" step="0.005" /></label>

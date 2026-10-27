@@ -14,9 +14,28 @@ pub enum Background {
     Image { path: PathBuf },
 }
 
+/// How a background photo fills the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BgFit {
+    /// Cover the frame, cropping the edges.
+    #[default]
+    Fill,
+    /// Show the whole photo, with black bars where it does not match.
+    Fit,
+    /// Show the whole photo over a blurred copy of itself.
+    Blur,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     pub background: Background,
+    /// How a background photo fills the frame.
+    #[serde(default)]
+    pub bg_fit: BgFit,
+    /// Darken the background photo, 0 (none) to 0.8.
+    #[serde(default)]
+    pub bg_dim: f64,
     /// Padding as a fraction of the shorter output side (0.0 to 0.4).
     pub padding: f64,
     /// Corner radius as a fraction of the shorter output side.
@@ -31,6 +50,8 @@ impl Default for Style {
     fn default() -> Self {
         Self {
             background: Background::Gradient { from: [99, 102, 241], to: [236, 72, 153], angle_deg: 35.0 },
+            bg_fit: BgFit::Fill,
+            bg_dim: 0.0,
             padding: 0.07,
             corner_radius: 0.018,
             shadow: 0.035,

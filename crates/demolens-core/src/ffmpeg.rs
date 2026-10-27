@@ -261,12 +261,28 @@ pub fn frame_at_filtered(path: &Path, t_ms: f64, w: u32, h: u32, vf: Option<&str
 
 /// Load an image scaled to cover (w, h), for image backgrounds.
 pub fn load_image_cover(path: &Path, w: u32, h: u32) -> Result<Frame> {
+    load_image_fit(path, w, h, crate::project::BgFit::Fill)
+}
+
+/// Video filter graph that turns a photo into a `w` x `h` background.
+pub fn fit_filter(w: u32, h: u32, fit: crate::project::BgFit) -> String {
+    use crate::project::BgFit;
+    let cover = format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}");
+    match fit {
+        BgFit::Fill => cover,
+        BgFit::Fit => format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"),
+        BgFit::Blur => format!("split[a][b];[a]{cover},gblur=sigma=40[bg];[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"),
+    }
+}
+
+/// Load an image as a (w, h) background with the chosen fit.
+pub fn load_image_fit(path: &Path, w: u32, h: u32, fit: crate::project::BgFit) -> Result<Frame> {
     let out = Command::new(ffmpeg_bin())
         .args(["-v", "error", "-i"])
         .arg(file_url(path))
         .args([
             "-vf",
-            &format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"),
+            &fit_filter(w, h, fit),
             "-frames:v",
             "1",
             "-f",

@@ -303,3 +303,8 @@ pre.code { background: var(--bg-2, rgba(127,127,127,.12)); border: 1px solid var
 .ai-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); flex-wrap: wrap; }
 .bar-wrap { display: grid; gap: var(--sp-1); margin-top: var(--sp-2); }
 .err-text { color: var(--danger); font-size: var(--fs-sm); }
+
+/* Background photo */
+.recents { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.recent { width: 64px; height: 36px; border-radius: 6px; border: 1px solid var(--border, #2a2f3d); background: #222 center / cover; cursor: pointer; padding: 0; }
+.recent:hover, .recent:focus-visible { outline: 2px solid var(--accent, #7c83ff); outline-offset: 1px; }

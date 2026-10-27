@@ -16,7 +16,18 @@ pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Render
         _ => None,
     };
     let bg = match &project.style.background {
-        Background::Image { path } => ffmpeg::load_image_cover(path, out_w, out_h).ok(),
+        Background::Image { path } => ffmpeg::load_image_fit(path, out_w, out_h, project.style.bg_fit).ok().map(|mut f| {
+            // Darken the photo so the recording stands out.
+            let k = 1.0 - project.style.bg_dim.clamp(0.0, 0.8);
+            if k < 1.0 {
+                for px in f.data.chunks_exact_mut(4) {
+                    for c in &mut px[..3] {
+                        *c = (*c as f64 * k) as u8;
+                    }
+                }
+            }
+            f
+        }),
         _ => None,
     };
     Ok(Renderer::new(project.clone(), log.as_ref(), out_w, out_h, bg))

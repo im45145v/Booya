@@ -930,6 +930,86 @@ async fn export_interactive(app: tauri::AppHandle, project: Project, out: String
     .await
 }
 
+
+// ---------- Background photos ----------
+
+fn recents_path(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("recent-backgrounds.json")
+}
+
+fn load_recents(app: &tauri::AppHandle) -> Vec<String> {
+    std::fs::read_to_string(recents_path(app))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| PathBuf::from(p).is_file())
+        .collect()
+}
+
+/// Copy a chosen photo (png, jpg, heic, webp, bmp, gif) into the recording's
+/// folder as a JPEG or PNG at most 3840 px wide, so the project keeps working
+/// if the original moves or is deleted. Returns the copy's path.
+#[tauri::command]
+async fn background_import(app: tauri::AppHandle, path: String, project_source: String) -> R<String> {
+    blocking(move || {
+        let src = PathBuf::from(&path);
+        let ext = src.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !["png", "jpg", "jpeg", "webp", "heic", "heif", "bmp", "gif"].contains(&ext.as_str()) {
+            return Err("Pick a png, jpg, heic, webp, bmp or gif photo".into());
+        }
+        let meta = std::fs::metadata(&src).map_err(|_| "Could not read that file".to_string())?;
+        if meta.len() > 80_000_000 {
+            return Err("That photo is over 80 MB. Pick a smaller one.".into());
+        }
+        let dir = PathBuf::from(&project_source).parent().map(|p| p.to_path_buf()).filter(|p| p.is_dir()).ok_or("Open a recording first")?;
+        let stem: String = src.file_stem().and_then(|x| x.to_str()).unwrap_or("photo").chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(40).collect();
+        let out_ext = if ext == "png" { "png" } else { "jpg" };
+        let dest = dir.join(format!("background-{stem}.{out_ext}"));
+        let run = |bin: &str, args: Vec<std::ffi::OsString>| std::process::Command::new(bin).args(args).output().map(|o| o.status.success() && dest.is_file()).unwrap_or(false);
+        let mut ok = run(
+            &demolens_core::ffmpeg::ffmpeg_bin(),
+            vec!["-v".into(), "error".into(), "-y".into(), "-i".into(), src.clone().into_os_string(), "-vf".into(), "scale='min(3840,iw)':-2".into(), "-frames:v".into(), "1".into(), "-q:v".into(), "2".into(), dest.clone().into_os_string()],
+        );
+        // Not every ffmpeg build reads HEIC. macOS can convert it itself.
+        if !ok && cfg!(target_os = "macos") {
+            ok = run("/usr/bin/sips", vec!["-s".into(), "format".into(), "jpeg".into(), "-Z".into(), "3840".into(), src.clone().into_os_string(), "--out".into(), dest.clone().into_os_string()]);
+        }
+        if !ok {
+            return Err(if ext == "heic" || ext == "heif" {
+                "This computer could not read that HEIC photo. Export it as JPEG from Photos and pick that.".into()
+            } else {
+                "Could not read that image. It may be damaged.".into()
+            });
+        }
+        let mut rec = load_recents(&app);
+        let d = dest.to_string_lossy().to_string();
+        rec.retain(|r| r != &d);
+        rec.insert(0, d.clone());
+        rec.truncate(12);
+        let _ = std::fs::create_dir_all(recents_path(&app).parent().unwrap_or(&PathBuf::from(".")));
+        let _ = std::fs::write(recents_path(&app), serde_json::to_string(&rec).unwrap_or_default());
+        Ok(d)
+    })
+    .await
+}
+
+#[tauri::command]
+fn background_recents(app: tauri::AppHandle) -> Vec<String> {
+    load_recents(&app)
+}
+
+/// Small preview of a photo as a data URL, for the recents strip.
+#[tauri::command]
+async fn background_thumb(path: String) -> R<String> {
+    blocking(move || {
+        let f = demolens_core::ffmpeg::load_image_fit(&PathBuf::from(path), 160, 90, demolens_core::project::BgFit::Fill).map_err(e)?;
+        let png = f.encode_png().map_err(e)?;
+        Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+    })
+    .await
+}
+
 /// Build the sample recording in the app's data folder and open it.
 #[tauri::command]
 async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
@@ -1319,6 +1399,9 @@ fn main() {
             regenerate_zoom,
             preview,
             export_interactive,
+            background_import,
+            background_recents,
+            background_thumb,
             export_video,
             list_presets,
             save_preset,

@@ -82,6 +82,7 @@ function syncPanel() {
   if (b.type === 'gradient') { $('bg-from').value = hex(b.from); $('bg-to').value = hex(b.to); $('bg-angle').value = b.angle_deg; }
   if (b.type === 'solid') $('bg-from').value = hex(b.color);
   if (b.type === 'image') $('bg-image').value = b.path;
+  setFit(project.style.bg_fit || 'fill'); $('bg-dim').value = project.style.bg_dim || 0;
   $('padding').value = s.padding; $('radius').value = s.corner_radius; $('shadow').value = s.shadow;
   const c = project.cursor;
   $('cur-visible').checked = c.visible; $('cur-size').value = c.size; $('cur-smooth').value = c.smoothing_ms; $('cur-ripple').checked = c.click_ripples;
@@ -105,6 +106,7 @@ function outputs() {
 }
 function readPanel() {
   const t = $('bg-type').value, s = project.style;
+  s.bg_fit = $('bg-fit-seg').dataset.fit || 'fill'; s.bg_dim = +$('bg-dim').value;
   s.background = t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
     : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : { type: t, path: $('bg-image').value };
   s.padding = +$('padding').value; s.corner_radius = +$('radius').value; s.shadow = +$('shadow').value;
@@ -121,15 +123,37 @@ document.querySelectorAll('#pane-style input, #pane-export select').forEach(el =
 
 function setBgType(t) {
   $('bg-type').value = t;
-  document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === t));
+  document.querySelectorAll('.seg button[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === t));
   $('bg-to-wrap').hidden = $('bg-angle-wrap').hidden = t !== 'gradient';
   $('bg-colors').hidden = t === 'image'; $('bg-image-row').hidden = t !== 'image';
 }
-document.querySelectorAll('.seg button').forEach(b => (b.onclick = () => { setBgType(b.dataset.bg); if (project) { readPanel(); refresh(); } }));
+document.querySelectorAll('.seg button[data-bg]').forEach(b => (b.onclick = () => { setBgType(b.dataset.bg); if (project) { readPanel(); refresh(); } }));
+function setFit(f) { $('bg-fit-seg').dataset.fit = f; document.querySelectorAll('#bg-fit-seg button').forEach(b => b.setAttribute('aria-checked', b.dataset.fit === f)); }
+document.querySelectorAll('#bg-fit-seg button').forEach(b => (b.onclick = () => { setFit(b.dataset.fit); if (project) { readPanel(); refresh(); } }));
+async function useBackground(path) {
+  try {
+    const copy = await invoke('background_import', { path, projectSource: project.source });
+    $('bg-image').value = copy; readPanel(); refresh(); loadRecents();
+    status('Background photo added', 'success');
+  } catch (err) { fail(err); }
+}
 $('bg-pick').onclick = async () => {
-  const p = await dialog.open({ multiple: false, filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
-  if (p) { $('bg-image').value = p; readPanel(); refresh(); }
+  if (!project) return;
+  const p = await dialog.open({ multiple: false, filters: [{ name: 'Photo', extensions: ['png', 'jpg', 'jpeg', 'webp', 'heic', 'heif', 'bmp', 'gif'] }] });
+  if (p) useBackground(p);
 };
+async function loadRecents() {
+  const box = $('bg-recents'); if (!box) return;
+  const list = await invoke('background_recents').catch(() => []);
+  box.innerHTML = '';
+  for (const p of list) {
+    const b = document.createElement('button'); b.className = 'recent'; b.title = baseName(p); b.setAttribute('aria-label', 'Use ' + baseName(p));
+    b.onclick = () => { $('bg-image').value = p; setBgType('image'); readPanel(); refresh(); };
+    box.appendChild(b);
+    invoke('background_thumb', { path: p }).then(u => { b.style.backgroundImage = `url(${u})`; }).catch(() => { b.remove(); });
+  }
+}
+loadRecents();
 
 function renderBlurList() {
   $('blur-list').innerHTML = project.blur.length ? '' : '<p class="muted small">No blur boxes yet. Blur secrets in the Magic tab finds them for you.</p>';
