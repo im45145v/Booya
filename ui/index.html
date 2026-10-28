@@ -268,6 +268,8 @@
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
       <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="3" step="0.1" /><output id="zc-level-out">1.7x</output></label>
       <label class="slider" title="High keeps the view still while the cursor roams and follows only when it nears the edge. Low follows every move.">Steadiness <input id="zc-steady" type="range" min="0" max="1" step="0.05" /><output id="zc-steady-out">65%</output></label>
+      <label class="slider" title="How long each zoom stays in after your last click or key press.">Zoom hold <input id="zc-hold" type="range" min="400" max="6000" step="100" /><output id="zc-hold-out">1.6 s</output></label>
+      <label class="slider" title="Clicks closer together than this share one zoom. Raise it to get fewer, longer zooms. Lower it for a zoom per click.">Group clicks within <input id="zc-merge" type="range" min="500" max="8000" step="100" /><output id="zc-merge-out">3.5 s</output></label>
       <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-auto"/></svg><span>Apply to auto zoom</span></button></div>
 
       <h3 class="section">Audio</h3>
@@ -285,7 +287,7 @@
       <h3 class="section">Selected clip</h3>
       <p class="muted small" id="clip-info">Click a clip on the timeline.</p>
       <label class="inline">Speed
-        <select id="speed" class="field sm"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select></label>
+        <select id="speed" class="field sm"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select></label>
       <div class="row"><button id="split2" class="btn needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span>Split at playhead</span></button><button id="del-clip" class="btn needs-project"><svg class="ico"><use href="#i-trash"/></svg><span>Delete clip</span></button></div>
 
       <h3 class="section">Zoom</h3>

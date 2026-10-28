@@ -99,14 +99,14 @@ function syncPanel() {
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
-  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8;
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 1600; $('zc-merge').value = zc.merge_gap_ms ?? 3500;
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
 }
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
-  s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%');
+  s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%'); s('zc-hold', (+$('zc-hold').value / 1000).toFixed(1) + ' s'); s('zc-merge', (+$('zc-merge').value / 1000).toFixed(1) + ' s');
   s('card-len', (+$('card-len').value).toFixed(1) + ' s'); s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
   s('aud-fadein', (+$('aud-fadein').value / 1000).toFixed(1) + ' s'); s('aud-fadeout', (+$('aud-fadeout').value / 1000).toFixed(1) + ' s'); s('aud-offset', (+$('aud-offset').value) + ' ms');
 }
@@ -126,7 +126,7 @@ function readPanel() {
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
     project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
   { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
-  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value });
+  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value, hold_ms: +$('zc-hold').value, merge_gap_ms: +$('zc-merge').value });
   outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
@@ -191,10 +191,15 @@ function renderCallouts() {
   const box = $('co-list'); box.innerHTML = project.callouts && project.callouts.length ? '' : '<p class="muted small">No callouts yet.</p>';
   (project.callouts || []).forEach((c, i) => {
     const d = document.createElement('div'); d.className = 'item';
-    const label = document.createElement('span'); label.textContent = `${c.text} \u00b7 ${(c.start_ms / 1000).toFixed(1)}s`;
+    // The text is editable in place: change it and press Enter or click away.
+    const label = document.createElement('input'); label.className = 'field sm grow'; label.value = c.text; label.maxLength = 80; label.setAttribute('aria-label', `Callout ${i + 1} text`); label.title = 'Edit the note. Enter or click away to save.';
+    label.onchange = () => { c.text = label.value.trim() || c.text; label.value = c.text; refresh(); scheduleCheckpoint(); };
+    label.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') label.blur(); };
+    const when = document.createElement('button'); when.className = 'btn ghost sm'; when.textContent = (c.start_ms / 1000).toFixed(1) + 's'; when.title = 'Jump to this callout';
+    when.onclick = () => { tl.playhead = tl.srcToOut(c.start_ms + 1); tl.draw(); refresh(); };
     const x = document.createElement('button'); x.className = 'btn icon ghost sm'; x.innerHTML = icon('i-x'); x.setAttribute('aria-label', 'Remove callout ' + (i + 1));
     x.onclick = () => { project.callouts.splice(i, 1); renderCallouts(); refresh(); };
-    d.append(label, x); box.appendChild(d);
+    d.append(label, when, x); box.appendChild(d);
   });
 }
 $('co-add').onclick = () => {

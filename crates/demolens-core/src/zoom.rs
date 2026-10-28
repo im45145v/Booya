@@ -75,6 +75,14 @@ impl ZoomConfig {
         self.min_duration_ms = self.ease_in_ms + self.ease_out_ms + 1700.0;
         self
     }
+    /// How long a zoom holds after the last event, and how close events must be
+    /// to share one zoom. Keeps the minimum segment length consistent.
+    pub fn with_timing(mut self, hold_ms: f64, merge_gap_ms: f64) -> Self {
+        self.hold_ms = hold_ms.clamp(400.0, 8000.0);
+        self.merge_gap_ms = merge_gap_ms.clamp(500.0, 10000.0);
+        self.min_duration_ms = self.ease_in_ms + self.ease_out_ms + self.hold_ms + 100.0;
+        self
+    }
     pub fn with_level(mut self, level: f64) -> Self {
         let level = level.clamp(1.1, 4.0);
         self.click_scale = level;
@@ -453,6 +461,19 @@ mod tests {
         assert!(s.end_ms - s.start_ms - c.ease_in_ms - c.ease_out_ms >= 1500.0);
         // Anticipation: the camera arrives before the click.
         assert!(5000.0 - s.start_ms > c.ease_in_ms);
+    }
+
+    #[test]
+    fn timing_settings_change_the_generated_zooms() {
+        let log = log_with(vec![click(1000.0, 500.0, 500.0), click(6000.0, 900.0, 500.0)]);
+        let tight = ZoomConfig::default().with_timing(800.0, 1000.0);
+        let loose = ZoomConfig::default().with_timing(800.0, 9000.0);
+        let a = generate_zoom_segments(&log, 12000.0, &tight);
+        let b = generate_zoom_segments(&log, 12000.0, &loose);
+        assert!(b.len() <= a.len(), "{} {}", a.len(), b.len());
+        let c = ZoomConfig::default().with_timing(100.0, 100.0);
+        assert_eq!(c.hold_ms, 400.0);
+        assert_eq!(c.merge_gap_ms, 500.0);
     }
 
     #[test]
