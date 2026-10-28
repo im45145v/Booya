@@ -510,3 +510,31 @@ body.resizing #preview, body.resizing .timeline-wrap { pointer-events: none; }
 .rec-warn { display: flex; align-items: center; gap: var(--sp-3); padding: 6px var(--sp-3); background: color-mix(in srgb, var(--danger) 16%, var(--surface)); border-top: 1px solid var(--danger); color: var(--text); font-size: var(--fs-sm); }
 .rec-warn[hidden] { display: none; }
 .rec-warn #rec-warn-text { flex: 1; line-height: 1.35; }
+pre.diag { white-space: pre-wrap; word-break: break-all; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--panel-2, rgba(127,127,127,.12)); border-radius: 8px; padding: 10px 12px; max-height: 46vh; overflow: auto; user-select: text; }
+
+/* ---------- Permissions screen ---------- */
+#perm-overlay { position: fixed; inset: 0; z-index: 1000; background: var(--bg); display: grid; place-items: center; overflow: auto; }
+.perm-card { width: min(560px, 92vw); padding: 40px 0 28px; text-align: center; }
+.perm-logo { width: 64px; height: 64px; border-radius: 15px; box-shadow: 0 6px 22px rgba(0,0,0,.35); }
+.perm-card h1 { margin: 20px 0 6px; font-size: 24px; font-weight: 650; letter-spacing: -.01em; }
+.perm-lede { margin: 0 0 30px; color: var(--muted); }
+.perm-rows { text-align: left; display: grid; gap: 22px; }
+.perm-row { display: grid; grid-template-columns: 1fr 220px; gap: 24px; align-items: start; }
+.perm-title { font-weight: 560; }
+.perm-tag { margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: .02em; text-transform: uppercase; }
+.perm-row[data-state="granted"] .perm-tag { opacity: .6; }
+.perm-detail { margin-top: 3px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+.perm-btn, .perm-ok, .perm-na { box-sizing: border-box; height: 38px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; font: 500 var(--fs-md) var(--font); }
+.perm-btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--accent-hover); cursor: pointer; }
+.perm-btn:hover { border-color: var(--accent); }
+.perm-ok { border: 1px solid rgba(80, 200, 130, .35); background: rgba(80, 200, 130, .1); color: #5fd391; }
+[data-theme="light"] .perm-ok { color: #177a43; background: rgba(30, 150, 80, .08); border-color: rgba(30, 150, 80, .35); }
+.perm-ok .ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.perm-na { color: var(--muted); font-size: var(--fs-sm); justify-content: flex-end; }
+.perm-fine { margin: 18px 0 0; color: var(--muted); font-size: var(--fs-sm); text-align: left; }
+.perm-foot { margin-top: 28px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.perm-private { color: var(--muted); font-size: var(--fs-sm); }
+.perm-go { height: 34px; padding: 0 22px; }
+.perm-go:disabled { opacity: .4; cursor: default; }
+#perm-body .perm-rows { margin-top: 14px; }
+@media (max-width: 520px) { .perm-row { grid-template-columns: 1fr; gap: 10px; } }

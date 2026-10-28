@@ -143,6 +143,11 @@ pub fn has_permission() -> bool {
     cg::has_access()
 }
 
+/// Shows the system's Screen Recording prompt (first time only).
+pub fn request_permission() -> bool {
+    cg::request_access()
+}
+
 /// One captured display, for `demolens doctor` and the display picker.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DisplayInfo {

@@ -22,6 +22,8 @@ pub mod sample;
 pub mod shortcuts;
 pub mod storage;
 pub mod bundle;
+pub mod permissions;
+pub mod playback;
 pub mod proc;
 pub mod touch;
 pub mod splice;

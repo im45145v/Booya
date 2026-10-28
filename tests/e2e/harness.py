@@ -191,6 +191,12 @@ class Studio:
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(a["source"]), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", str(out)], check=True)
         return str(out)
 
+    def cmd_audio_native_load(self, a):
+        return {"available": False, "reason": "no output device in the test browser"}
+
+    def cmd_audio_diag_log(self, a):
+        return None
+
     def cmd_audio_bytes(self, a):
         return {"__bytes": self.base + "/asset?path=" + urllib.parse.quote(a["path"], safe="")}
 

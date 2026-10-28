@@ -961,6 +961,9 @@ loadMics().then(() => { if (localStorage.getItem('mic-ok')) meterStart(); });
 // the sound is played by a normal audio element on the proxy, in step with the
 // timeline. The proxy's loudness is already evened out.
 const pa = new Audio(); pa.preload = 'auto';
+// The native player (playback.rs): the sound comes out of the app itself,
+// not out of the web view. `on` is true once it is loaded for this recording.
+const nat = { on: false, device: '', reason: '', clip: -1, checkedAt: 0, playing: false, loadedFor: null, last: null };
 let proxyFor = null, audioBlob = null, audioState = 'none', audioText = '', audioIsWav = false, audioWatch = 0;
 // The video proxy only speeds up the picture. The sound has its own small
 // file (built in seconds, loudness already evened out) that is played from a
@@ -977,6 +980,8 @@ const volPref = () => ({ muted: localStorage.getItem('preview-muted') === '1', v
 function applyVolume() {
   const v = volPref(), exp = Math.min(1, Math.max(0, project?.audio?.volume ?? 1));
   pa.muted = v.muted; pa.volume = Math.max(0, Math.min(1, v.volume * exp));
+  // The native player gets the same level; the audio element is silent while it is in use.
+  if (nat.on) { pa.muted = true; invoke('audio_set_volume', { volume: v.volume * exp, muted: v.muted }).catch(() => { }); }
   $('vol').value = v.muted ? 0 : v.volume;
   const b = $('vol-btn'); b.setAttribute('aria-pressed', String(v.muted || v.volume === 0)); b.setAttribute('aria-label', v.muted ? 'Unmute preview sound' : 'Mute preview sound');
 }
@@ -1046,12 +1051,17 @@ async function prepareAudio() {
   pa.pause(); pa.removeAttribute('src'); pa.load(); audioIsWav = false; clearTimeout(audioWatch);
   if (audioBlob) { URL.revokeObjectURL(audioBlob); audioBlob = null; }
   tl.peaks = null; setAudioState('building', 'Preparing sound...');
+  nat.on = false; nat.playing = false; nat.loadedFor = null; nat.reason = '';
+  // First choice: play from the app itself. If that cannot start (no output
+  // device, Linux), the audio element below takes over.
+  if (await nativeLoad(src)) return;
   let r;
   try { r = await invoke('audio_preview', { source: src }); }
   catch (e) { if (project?.source !== src) return; setAudioState('error', 'Sound unavailable'); return status('Could not prepare the sound for the preview: ' + humanError(e), 'error'); }
   if (project?.source !== src) return;
   if (!r.has_audio) { setAudioState('none', 'No sound in this recording'); return; }
   tl.peaks = { data: r.peaks, bucket: r.bucket_ms };
+  diagLog('using the web view audio element (' + (nat.reason || 'native playback not available') + ')');
   try {
     try { audioBlob = URL.createObjectURL(new Blob([await invoke('audio_bytes', { path: r.path })], { type: 'audio/mp4' })); await loadAudio(audioBlob); }
     catch (first) {
@@ -1080,8 +1090,108 @@ window.__TAURI__.event.listen('proxy-progress', e => {
   else if (p.done) { proxyFor = p.source; if (!playing) refresh(); }
 });
 function audioClip(srcMs) { return project.clips.find(c => srcMs >= c.src_start_ms && srcMs < c.src_end_ms) || project.clips[project.clips.length - 1]; }
+// ---------- Audio diagnostics (Settings > Audio diagnostics) ----------
+const diagLines = [];
+function diagLog(t) {
+  diagLines.push(new Date().toLocaleTimeString() + '  ' + t); if (diagLines.length > 80) diagLines.shift();
+  invoke('audio_diag_log', { text: t }).catch(() => { });
+}
+pa.addEventListener('error', () => diagLog('audio element error: code ' + (pa.error?.code ?? '?') + ' ' + (pa.error?.message || '')));
+const READY = ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'], NETWORK = ['NETWORK_EMPTY', 'NETWORK_IDLE', 'NETWORK_LOADING', 'NETWORK_NO_SOURCE'];
+async function audioDiagnostics() {
+  const L = [];
+  L.push('Playing through: ' + (nat.on ? `the app itself (native), device '${nat.device}'` : 'the web view audio element' + (nat.reason ? ` (native playback: ${nat.reason})` : '')));
+  L.push('Sound state in the editor: ' + audioState + ' (' + audioText + ')');
+  L.push('Audio element src: ' + (pa.currentSrc || pa.src || '(none)'));
+  L.push(`readyState: ${pa.readyState} ${READY[pa.readyState] || ''}`);
+  L.push(`networkState: ${pa.networkState} ${NETWORK[pa.networkState] || ''}`);
+  L.push('error code: ' + (pa.error ? `${pa.error.code} ${pa.error.message || ''}` : 'none'));
+  let ctx = 'not available';
+  try { const C = window.AudioContext || window.webkitAudioContext; const c = new C(); ctx = c.state + ' at ' + c.sampleRate + ' Hz'; c.close(); } catch (e) { ctx = 'failed: ' + (e.message || e); }
+  L.push('AudioContext state: ' + ctx);
+  L.push(`element volume: ${pa.volume.toFixed(2)}, muted: ${pa.muted}, paused: ${pa.paused}, time: ${pa.currentTime.toFixed(2)} s, length: ${isFinite(pa.duration) ? pa.duration.toFixed(2) + ' s' : 'unknown'}`);
+  L.push(`can play AAC (mp4): "${pa.canPlayType('audio/mp4; codecs="mp4a.40.2"')}", WAV: "${pa.canPlayType('audio/wav')}"`);
+  const v = volPref();
+  L.push(`editor volume: ${v.volume}, muted: ${v.muted}, project volume: ${project?.audio?.volume ?? 1}`);
+  try {
+    const st = await invoke('audio_state');
+    L.push(`native player: ${st.playing ? 'playing' : 'stopped'}, voice at ${st.voice_s.toFixed(2)} s, music at ${st.music_s.toFixed(2)} s, speed ${st.rate}x, volume ${st.volume}${st.muted ? ' (muted)' : ''}, output peak ${st.peak.toFixed(3)}, voice track ${st.has_voice ? 'loaded' : 'none'}, music ${st.has_music ? 'loaded' : 'none'}${st.error ? ', device error: ' + st.error : ''}`);
+  } catch (e) { L.push('native player: ' + humanError(e)); }
+  L.push('', 'Recent events:', ...diagLines.slice(-12));
+  return L.join('\n');
+}
+async function renderAudioDiag() {
+  const box = $('ad-body'); if (!box) return;
+  const text = await audioDiagnostics();
+  box.textContent = text;
+  diagLog('diagnostics readout:\n' + text.split('\n').slice(0, 12).join('\n'));
+}
+function wireAudioDiag() {
+  $('ad-refresh').onclick = renderAudioDiag;
+  $('ad-copy').onclick = () => navigator.clipboard?.writeText($('ad-body').textContent).then(() => status('Copied.', 'success'), () => status('Could not copy.', 'error'));
+  $('ad-test').onclick = async () => {
+    if (!nat.on) return status('Native playback is not in use for this recording, so there is nothing to test here. Press Play in the editor instead.', 'info');
+    await invoke('audio_play', { voiceS: 0, musicS: 0, rate: 1 }).catch(fail);
+    status('Playing 2 seconds of the recording from the start...', 'info');
+    setTimeout(async () => { const st = await invoke('audio_pause').catch(() => null); status(st && st.peak > 0.001 ? `The app played sound (output peak ${st.peak.toFixed(2)}).` : 'The app sent silence to the output. Check the system volume and the output device.', st && st.peak > 0.001 ? 'success' : 'error'); renderAudioDiag(); }, 2000);
+  };
+  renderAudioDiag();
+}
+
+// ---------- Native sound ----------
+const outTotalMs = () => tl.outDur() + (project?.intro?.duration_ms || 0) + (project?.outro?.duration_ms || 0);
+// Seconds into the finished video, which the music follows (the title card plays first).
+const musicSec = () => ((tl.playhead + (project?.intro?.duration_ms || 0)) / 1000);
+async function nativeLoad(src) {
+  let r;
+  try { r = await invoke('audio_native_load', { source: src, music: project?.music || null, totalS: outTotalMs() / 1000 }); }
+  catch (e) { nat.reason = humanError(e); diagLog('native playback failed to load: ' + nat.reason); return false; }
+  if (project?.source !== src) return true;
+  if (!r || !r.available) { nat.reason = r?.reason || 'not available'; diagLog('native playback not available: ' + nat.reason); return false; }
+  nat.on = true; nat.device = r.device; nat.loadedFor = src; nat.clip = -1;
+  pa.pause(); pa.muted = true;
+  if (!r.has_audio && !r.has_music) { nat.on = false; setAudioState('none', 'No sound in this recording'); return true; }
+  tl.peaks = r.has_audio ? { data: r.peaks, bucket: r.bucket_ms } : null;
+  applyVolume();
+  setAudioState('ready', r.faint ? 'Sound: very quiet recording' : 'Sound on');
+  diagLog(`native playback ready on '${r.device}' (${r.rate} Hz, ${r.channels} ch)`);
+  if (playing) syncAudio(true);
+  return true;
+}
+// A change to the music (file, volume, ducking) reloads just that track.
+let musicTimer = 0;
+function nativeMusicChanged() {
+  if (!nat.on || !project) return;
+  clearTimeout(musicTimer);
+  musicTimer = setTimeout(() => invoke('audio_native_music', { music: project.music || null, totalS: outTotalMs() / 1000 }).catch(err => diagLog('music reload failed: ' + humanError(err))), 400);
+}
+function syncNative(start) {
+  const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
+  const idx = project.clips.indexOf(clip), speed = Math.max(0.25, Math.min(4, clip?.speed || 1));
+  const want = (srcMs - (a.offset_ms || 0)) / 1000;
+  if (clip?.mute) { invoke('audio_set_volume', { volume: 0, muted: true }).catch(() => { }); } else if (nat.mutedClip) applyVolume();
+  nat.mutedClip = !!clip?.mute;
+  const sound = (clip?.speed || 1) <= 4;
+  if (!sound) { if (nat.playing) { nat.playing = false; invoke('audio_pause').catch(() => { }); } return; }
+  const now = performance.now();
+  if (start || !nat.playing || idx !== nat.clip) {
+    nat.clip = idx; nat.playing = true; nat.checkedAt = now;
+    nat.starting = invoke('audio_play', { voiceS: Math.max(0, want), musicS: musicSec(), rate: speed }).catch(err => { nat.playing = false; diagLog('audio_play failed: ' + humanError(err)); });
+    return;
+  }
+  if (now - nat.checkedAt < 250) return;
+  nat.checkedAt = now;
+  invoke('audio_state').then(st => {
+    nat.last = st;
+    if (!playing || !nat.playing) return;
+    if (st.rate !== speed) invoke('audio_set_rate', { rate: speed }).catch(() => { });
+    if (AvSync.nativeCorrection(want, st.voice_s) || AvSync.nativeCorrection(musicSec(), st.music_s)) invoke('audio_seek', { voiceS: Math.max(0, want), musicS: musicSec() }).catch(() => { });
+    if (st.error) diagLog('output device error: ' + st.error);
+  }).catch(() => { });
+}
 function syncAudio(start) {
   if (audioState !== 'ready' || !project) return;
+  if (nat.on) return syncNative(start);
   const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
   const want = (srcMs - (a.offset_ms || 0)) / 1000;
   applyVolume();
@@ -1099,6 +1209,7 @@ function syncAudio(start) {
 }
 // Resolves once the sound is playing (or there is none, or it takes too long).
 function audioStarted() {
+  if (nat.on) return Promise.race([nat.starting || Promise.resolve(), new Promise(r => setTimeout(r, 700))]);
   if (audioState !== 'ready' || !project || (audioClip(tl.outToSrc(tl.playhead))?.speed || 1) > 4) return Promise.resolve();
   return new Promise(res => {
     const done = () => { pa.removeEventListener('playing', done); clearTimeout(t); res(); };
@@ -1107,7 +1218,7 @@ function audioStarted() {
   });
 }
 const _setPlaying = setPlaying;
-setPlaying = v => { _setPlaying(v); if (v) syncAudio(true); else pa.pause(); };
+setPlaying = v => { _setPlaying(v); if (v) syncAudio(true); else { pa.pause(); if (nat.on) { nat.playing = false; invoke('audio_pause').catch(() => { }); } } };
 const _refresh = refresh;
 refresh = async function () { if (playing) syncAudio(false); return _refresh(); };
 
@@ -1247,7 +1358,7 @@ async function showSettings(tab = 'privacy') {
   await loadCloud();
   const st = await invoke('get_settings'), recs = await invoke('list_recordings').catch(() => []);
   const s3 = await invoke('s3_get').catch(() => ({ config: {}, secret_set: false }));
-  const tabs = ['privacy', 'appearance', 'shortcuts', 'cloud', 'storage', 'disk', 'about'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', appearance: 'Appearance', shortcuts: 'Shortcuts', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage', about: 'About and updates' }[t]}</button>`).join('');
+  const tabs = ['privacy', 'permissions', 'appearance', 'shortcuts', 'cloud', 'storage', 'disk', 'audio', 'about'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', appearance: 'Appearance', shortcuts: 'Shortcuts', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', permissions: 'Permissions', audio: 'Audio diagnostics', disk: 'Disk usage', about: 'About and updates' }[t]}</button>`).join('');
   let body = '';
   if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
     <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
@@ -1268,6 +1379,8 @@ async function showSettings(tab = 'privacy') {
       <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>`;
   }
   if (tab === 'shortcuts') body = '<div id="sc-body"><p class="muted small">Loading...</p></div>';
+  if (tab === 'audio') body = `<p class="muted small">What the editor's sound is doing right now. Copy this into a bug report. It is also written to a log file.</p><pre id="ad-body" class="diag">Reading...</pre><div class="row"><button class="btn sm" id="ad-refresh">Refresh</button><button class="btn sm ghost" id="ad-copy">Copy</button><button class="btn sm ghost" id="ad-test">Play 2 seconds</button></div>`;
+  if (tab === 'permissions') body = '<div id="perm-body"></div>';
   if (tab === 'about') body = '<div id="about-body"><p class="muted small">Loading...</p></div>';
   if (tab === 'disk') body = '<div id="disk-body"><p class="muted small">Measuring...</p></div>';
   if (tab === 'storage') { const c = s3.config || {}; body = `<p>Upload exports to your own S3 or Cloudflare R2 bucket. Objects are private, encrypted at rest where supported, and shared with a signed link (24 hours by default, 7 days at most). Event logs are never uploaded.</p>
@@ -1279,6 +1392,8 @@ async function showSettings(tab = 'privacy') {
   document.querySelectorAll('[data-st]').forEach(b => (b.onclick = () => showSettings(b.dataset.st)));
   if (tab === 'disk') renderDisk();
   if (tab === 'about') renderAboutTab();
+  if (tab === 'audio') wireAudioDiag();
+  if (tab === 'permissions') Permissions.mount($('perm-body'), { embedded: true });
   if (tab === 'shortcuts') renderShortcutsPage();
   if ($('set-glass')) $('set-glass').onchange = async () => { glassPref = $('set-glass').checked; await invoke('set_glass_ui', { enabled: glassPref }).catch(fail); await applyGlassUi(); status(glassPref ? 'Glass look on.' : 'Glass look off.', 'success'); };
   if ($('set-tray')) $('set-tray').onchange = () => invoke('set_menu_bar', { enabled: $('set-tray').checked }).then(() => status('Saved.', 'success'), fail);
@@ -1386,10 +1501,13 @@ $('blur-draw').onclick = async () => {
 ['card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
-if (!localStorage.getItem('privacy-ack')) {
-  modal('Welcome to DemoLens', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
+// The permissions screen comes first (a Mac's first launch, or a permission that went off), then the privacy note.
+function firstRunNote() {
+  if (localStorage.getItem('privacy-ack')) return;
+  modal('Before you start', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
     <ul><li>A small pill shows while recording (it is not in the video). Its buttons pause, drop a marker, stop or discard; the keys are in Settings > Shortcuts.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud providers and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
     <div class="row end"><button class="btn primary" id="fr-ok">Got it</button></div>`);
   $('fr-ok').onclick = () => { localStorage.setItem('privacy-ack', '1'); $('modal').close(); };
 }
+Permissions.maybeShow().catch(() => { }).then(firstRunNote);
 loadCloud();

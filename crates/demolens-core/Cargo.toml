@@ -29,10 +29,13 @@ rdev = { version = "0.5", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2.21", features = ["xlib", "xinput"], optional = true }
 
-[target.'cfg(windows)'.dependencies]
-# The microphone (and system audio loopback) are read in process through
-# WASAPI, with no device names passed to another program.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# The microphone and system audio loopback (Windows) are read in process
+# through WASAPI, and the editor's sound is played to the output device on
+# Windows and macOS, with no device names passed to another program.
 cpal = "0.18"
+
+[target.'cfg(windows)'.dependencies]
 # Window listing, screen size, DPI awareness and touch input go through the
 # Win32 API directly, so nothing needs a PowerShell process.
 windows-sys = { version = "0.52", features = [

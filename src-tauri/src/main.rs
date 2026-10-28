@@ -1565,11 +1565,249 @@ async fn audio_bytes(app: tauri::AppHandle, path: String) -> R<tauri::ipc::Respo
     .await
 }
 
+// ---------- Native editor sound ----------
+//
+// The editor's sound is played from here, not from a web view's audio element
+// (which can load a file and play nothing in the macOS app). The page sends
+// the playhead; `playback::Mixer` plays the recording's voice and the music.
+
+#[cfg(any(windows, target_os = "macos"))]
+static NATIVE_AUDIO: Mutex<Option<demolens_core::playback::Player>> = Mutex::new(None);
+
+/// Append a line to the audio diagnostics log (kept small).
+fn audio_log(app: &tauri::AppHandle, line: &str) {
+    use std::io::Write;
+    let p = cache_dir(app).join("audio-diagnostics.log");
+    if let Ok(m) = std::fs::metadata(&p) {
+        if m.len() > 200_000 {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+    let _ = std::fs::create_dir_all(cache_dir(app));
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "[{secs}] {line}");
+    }
+    eprintln!("audio: {line}");
+}
+
+/// The page's readout of the sound in the web view (Help > Audio diagnostics)
+/// goes to the log too, so a report can include it.
+#[tauri::command]
+fn audio_diag_log(app: tauri::AppHandle, text: String) -> R<String> {
+    audio_log(&app, &text.replace('\n', " | "));
+    Ok(cache_dir(&app).join("audio-diagnostics.log").to_string_lossy().to_string())
+}
+
+/// Opens the sound output and loads the recording's sound (and the music)
+/// into it. Returns what the page needs, or `available: false` with the
+/// reason, in which case the page keeps using its audio element.
+#[tauri::command]
+async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<serde_json::Value>, total_s: f64) -> R<serde_json::Value> {
+    let src = PathBuf::from(source);
+    blocking(move || {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            use demolens_core::playback::{decode, MusicCfg};
+            let mut guard = NATIVE_AUDIO.lock().unwrap_or_else(|p| p.into_inner());
+            if guard.is_none() {
+                match demolens_core::playback::Player::open() {
+                    Ok(pl) => *guard = Some(pl),
+                    Err(err) => {
+                        audio_log(&app, &format!("native output unavailable: {err:#}"));
+                        return Ok(serde_json::json!({ "available": false, "reason": format!("{err:#}") }));
+                    }
+                }
+            }
+            let pl = guard.as_ref().unwrap();
+            let r = demolens_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
+            let voice = match r.path.as_ref().filter(|_| r.has_audio) {
+                Some(p) => Some(decode(p, 1, 48_000, 3.0 * 3600.0).map_err(e)?),
+                None => None,
+            };
+            let music_pcm = match music.and_then(|v| serde_json::from_value::<demolens_core::project::Music>(v).ok()) {
+                Some(m) if m.path.exists() && !m.path.as_os_str().is_empty() => match decode(&m.path, 2, 48_000, 1200.0) {
+                    Ok(p) => Some((p, MusicCfg::from_project(&m, total_s))),
+                    Err(err) => {
+                        audio_log(&app, &format!("music could not be read: {err:#}"));
+                        None
+                    }
+                },
+                _ => None,
+            };
+            let voice_s = voice.as_ref().map(|v| v.seconds()).unwrap_or(0.0);
+            let has_music = music_pcm.is_some();
+            {
+                let mut m = pl.mixer.lock().unwrap_or_else(|p| p.into_inner());
+                m.pause();
+                m.set_voice(voice);
+                m.set_music(music_pcm);
+            }
+            audio_log(&app, &format!("native audio ready: device '{}' {} Hz x{}, voice {:.1}s, music {}", pl.device, pl.rate, pl.channels, voice_s, has_music));
+            Ok(serde_json::json!({ "available": true, "device": pl.device, "rate": pl.rate, "channels": pl.channels, "voice_s": voice_s, "has_music": has_music, "peaks": r.peaks, "bucket_ms": r.bucket_ms, "faint": r.faint, "has_audio": r.has_audio }))
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (&app, &src, &music, total_s);
+            Ok(serde_json::json!({ "available": false, "reason": "native playback is used on Windows and macOS" }))
+        }
+    })
+    .await
+}
+
+/// Reload only the music track (its file or settings changed).
+#[tauri::command]
+async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Value>, total_s: f64) -> R<()> {
+    blocking(move || {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            use demolens_core::playback::{decode, MusicCfg};
+            let pcm = match music.and_then(|v| serde_json::from_value::<demolens_core::project::Music>(v).ok()) {
+                Some(m) if m.path.exists() && !m.path.as_os_str().is_empty() => {
+                    let p = decode(&m.path, 2, 48_000, 1200.0).map_err(e)?;
+                    Some((p, MusicCfg::from_project(&m, total_s)))
+                }
+                _ => None,
+            };
+            audio_log(&app, &format!("music {}", if pcm.is_some() { "loaded" } else { "removed" }));
+            with_mixer(|m| m.set_music(pcm))
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (&app, &music, total_s);
+            Ok(())
+        }
+    })
+    .await
+}
+
+/// Runs `f` on the mixer if the native player is open.
+#[cfg(any(windows, target_os = "macos"))]
+fn with_mixer<T>(f: impl FnOnce(&mut demolens_core::playback::Mixer) -> T) -> R<T> {
+    let guard = NATIVE_AUDIO.lock().unwrap_or_else(|p| p.into_inner());
+    let pl = guard.as_ref().ok_or("native playback is not open")?;
+    let mut m = pl.mixer.lock().unwrap_or_else(|p| p.into_inner());
+    Ok(f(&mut m))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn state_json(s: demolens_core::playback::State) -> serde_json::Value {
+    serde_json::json!({ "playing": s.playing, "voice_s": s.voice_s, "music_s": s.music_s, "rate": s.rate, "volume": s.volume, "muted": s.muted, "peak": s.peak, "has_voice": s.has_voice, "has_music": s.has_music })
+}
+
+/// Start playing from `voice_s` of the recording and `music_s` of the video, at `rate`.
+#[tauri::command]
+fn audio_play(voice_s: f64, music_s: f64, rate: f64) -> R<serde_json::Value> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        with_mixer(|m| {
+            m.seek(voice_s, music_s);
+            m.set_rate(rate);
+            m.play();
+            state_json(m.state())
+        })
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (voice_s, music_s, rate);
+        Err("native playback is not available here".into())
+    }
+}
+
+#[tauri::command]
+fn audio_pause() -> R<serde_json::Value> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        with_mixer(|m| {
+            m.pause();
+            state_json(m.state())
+        })
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Err("native playback is not available here".into())
+    }
+}
+
+#[tauri::command]
+fn audio_seek(voice_s: f64, music_s: f64) -> R<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        with_mixer(|m| m.seek(voice_s, music_s))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (voice_s, music_s);
+        Err("native playback is not available here".into())
+    }
+}
+
+#[tauri::command]
+fn audio_set_rate(rate: f64) -> R<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        with_mixer(|m| m.set_rate(rate))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = rate;
+        Err("native playback is not available here".into())
+    }
+}
+
+#[tauri::command]
+fn audio_set_volume(volume: f32, muted: bool) -> R<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        with_mixer(|m| m.set_volume(volume, muted))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (volume, muted);
+        Err("native playback is not available here".into())
+    }
+}
+
+/// Where the native sound is, for drift correction and the diagnostics readout.
+#[tauri::command]
+fn audio_state() -> R<serde_json::Value> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let guard = NATIVE_AUDIO.lock().unwrap_or_else(|p| p.into_inner());
+        let pl = guard.as_ref().ok_or("native playback is not open")?;
+        let mut v = state_json(pl.mixer.lock().unwrap_or_else(|p| p.into_inner()).state());
+        v["device"] = pl.device.clone().into();
+        v["error"] = pl.last_error().into();
+        Ok(v)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Err("native playback is not available here".into())
+    }
+}
+
 // ---------- Microphone ----------
 
 #[tauri::command]
 async fn mic_list() -> R<Vec<String>> {
     blocking(|| Ok(demolens_core::capture::mics::list_mics())).await
+}
+
+/// The permissions screen: what DemoLens needs on this system and where each stands.
+#[tauri::command]
+fn permissions_list() -> serde_json::Value {
+    let items = demolens_core::permissions::list();
+    serde_json::json!({
+        "platform": if cfg!(target_os = "macos") { "macos" } else if cfg!(windows) { "windows" } else { "linux" },
+        "needs_attention": demolens_core::permissions::needs_attention(&items),
+        "items": items,
+    })
+}
+
+/// Ask for one permission (the system prompt), or open its exact settings page.
+#[tauri::command]
+async fn permissions_request(id: String) -> R<()> {
+    blocking(move || demolens_core::permissions::request(&id).map(|_| ()).map_err(e)).await
 }
 
 /// Whether macOS lets DemoLens read the keyboard state (Input Monitoring).
@@ -2198,7 +2436,7 @@ fn main() {
             proxy_path,
             audio_preview,
             audio_bytes,
-            audio_preview_wav,
+            audio_preview_wav, permissions_list, permissions_request, audio_native_load, audio_native_music, audio_play, audio_pause, audio_seek, audio_set_rate, audio_set_volume, audio_state, audio_diag_log,
             mic_list,
             mic_meter_start,
             mic_meter_stop,

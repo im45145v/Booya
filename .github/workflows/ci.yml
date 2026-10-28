@@ -244,6 +244,8 @@ jobs:
         run: cargo run -q -p demolens-core --example e2e_fixture -- "$RUNNER_TEMP/fx" speech
       - name: The editor can be heard
         run: python3 tests/e2e/test_audio.py "$RUNNER_TEMP/fx"
+      - name: Permissions screen
+        run: python3 tests/e2e/test_permissions.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Window sizes and splitters
         run: python3 tests/e2e/test_layout.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layout lane and controls
