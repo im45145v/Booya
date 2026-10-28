@@ -152,6 +152,9 @@ jobs:
           Start-Sleep -Seconds 1
           if (Get-Process -Name ffmpeg -ErrorAction SilentlyContinue) { throw "ffmpeg is still running after the microphone check" }
           "### Windows microphone pipeline`n`n$($r.backend): $($r.message)$($r.peak_db)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          # The failure above was expected; do not let its exit code become the step's.
+          $global:LASTEXITCODE = 0
+          exit 0
       - name: Speed numbers (macOS, VideoToolbox)
         if: runner.os == 'macOS'
         continue-on-error: true
