@@ -15,13 +15,55 @@ class Timeline {
     this.H = 222; this.gutter = 64;
     this.L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96], marks: [102, 128], blur: [134, 156], keys: [162, 182], words: [188, 210] };
     this.selItem = null; this.keyTrack = [];
-    canvas.addEventListener('pointerdown', e => this.down(e));
+    // Edge grab size in px: bigger for a finger or pen than for a mouse.
+    this.slop = 6; this.touches = new Map(); this.pinch = null; this.lastTap = null; this.lastDbl = 0;
+    canvas.addEventListener('pointerdown', e => this.pdown(e));
     canvas.addEventListener('pointermove', e => this.hover(e));
-    window.addEventListener('pointermove', e => this.move(e));
-    window.addEventListener('pointerup', () => this.up());
+    window.addEventListener('pointermove', e => this.pmove(e));
+    window.addEventListener('pointerup', e => this.pup(e));
+    window.addEventListener('pointercancel', e => this.pup(e));
     canvas.addEventListener('dblclick', e => this.dbl(e));
     canvas.addEventListener('wheel', e => this.wheel(e), { passive: false });
     new ResizeObserver(() => this.draw()).observe(canvas);
+  }
+  // Pointer plumbing for touch: two fingers pinch to zoom and slide to pan,
+  // a double tap adds a zoom like a double click, edges are easier to hit.
+  pdown(e) {
+    this.slop = e.pointerType === 'mouse' ? 6 : 16;
+    if (e.pointerType === 'touch') {
+      this.touches.set(e.pointerId, [e.clientX, e.clientY]);
+      if (this.touches.size === 2) {
+        this.drag = null;
+        const [a, b] = [...this.touches.values()];
+        this.pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, cx: (a[0] + b[0]) / 2 };
+        return;
+      }
+      const now = performance.now(), l = this.lastTap;
+      this.lastTap = { t: now, x: e.clientX, y: e.clientY };
+      if (l && now - l.t < 350 && Math.hypot(e.clientX - l.x, e.clientY - l.y) < 30) { this.lastTap = null; this.dbl(e); return; }
+    }
+    this.down(e);
+  }
+  pmove(e) {
+    if (this.touches.has(e.pointerId)) {
+      this.touches.set(e.pointerId, [e.clientX, e.clientY]);
+      if (this.pinch && this.touches.size >= 2 && this.project) {
+        const [a, b] = [...this.touches.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, cx = (a[0] + b[0]) / 2;
+        const r = this.c.getBoundingClientRect();
+        if (Math.abs(d / this.pinch.d - 1) > 0.02) { this.zoomBy(d / this.pinch.d, this.ms(cx - r.left)); this.pinch.d = d; }
+        const span = this.view[1] - this.view[0];
+        if (this.view[1] - this.view[0] < this.outDur()) this.pan(-((cx - this.pinch.cx) / this.width()) * span);
+        this.pinch.cx = cx;
+        return;
+      }
+    }
+    this.move(e);
+  }
+  pup(e) {
+    const was = this.touches.delete(e.pointerId);
+    if (this.pinch) { if (this.touches.size < 2) this.pinch = null; return; }
+    void was;
+    this.up();
   }
   setProject(p) { this.project = p; this.fit(); }
   outDur() { return this.project ? this.project.clips.reduce((a, c) => a + (c.src_end_ms - c.src_start_ms) / c.speed, 0) : 0; }
@@ -72,8 +114,8 @@ class Timeline {
     if (!this.project) return null;
     for (let i = 0; i < this.project.zoom.length; i++) {
       const z = this.project.zoom[i], a = this.x(this.srcToOut(z.start_ms)), b = this.x(this.srcToOut(z.end_ms));
-      if (Math.abs(x - a) < 6) return { i, edge: 'start' };
-      if (Math.abs(x - b) < 6) return { i, edge: 'end' };
+      if (Math.abs(x - a) < this.slop) return { i, edge: 'start' };
+      if (Math.abs(x - b) < this.slop) return { i, edge: 'end' };
       if (x > a && x < b) return { i, edge: 'move' };
     }
     return null;
@@ -99,14 +141,14 @@ class Timeline {
     for (const it of this.items(lane).reverse()) {
       const [a, b, ya, yb] = this.itemBox(lane, it);
       if (y < ya - 1 || y > yb + 1) continue;
-      if (Math.abs(x - a) < 6) return { it, edge: 'start' };
-      if (Math.abs(x - b) < 6) return { it, edge: 'end' };
+      if (Math.abs(x - a) < this.slop) return { it, edge: 'start' };
+      if (Math.abs(x - b) < this.slop) return { it, edge: 'end' };
       if (x > a && x < b) return { it, edge: 'move' };
     }
     return null;
   }
   hover(e) {
-    if (!this.project || this.drag) return;
+    if (!this.project || this.drag || e.pointerType !== 'mouse') return;
     const [x, y] = this.pos(e), lane = this.lane(y);
     let cur = 'text';
     if (lane === 'zoom') { const h = this.zoomAt(x); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'copy'; }
@@ -186,6 +228,8 @@ class Timeline {
   }
   dbl(e) {
     if (!this.project) return;
+    // A double tap raises both our own detection and the browser's dblclick.
+    const now = performance.now(); if (now - this.lastDbl < 500) return; this.lastDbl = now;
     const [x, y] = this.pos(e);
     if (this.lane(y) === 'zoom' && !this.zoomAt(x)) {
       const at = this.outToSrc(this.ms(x));

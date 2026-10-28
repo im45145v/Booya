@@ -438,3 +438,26 @@ html.glass-native[data-theme="light"] .toolbar, html.glass-native[data-theme="li
 .recent-projects { text-align: left; margin: 0 0 var(--sp-4); max-width: 520px; }
 .recent-projects .item { display: flex; align-items: center; gap: 8px; }
 .recent-projects .item small { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Touch screens and pens: no double tap zoom or tap delay, and hit targets a
+   finger can land on (44 px is the usual minimum). */
+html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (pointer: coarse) {
+  .btn, .btn.sm, .btn.lg { min-height: 40px; }
+  .btn.icon { min-width: 40px; }
+  .tab { height: 44px; }
+  .field { height: 40px; }
+  .tool, .chip, .dest button { min-height: 40px; }
+  input[type=range] { height: 32px; }
+  input[type=range]::-webkit-slider-thumb { width: 24px; height: 24px; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
+  /* Area picker corner handles: a finger covers about 40 px. */
+  .pk-sel i[data-h] { width: 28px; height: 28px; margin: 0; }
+  .pk-sel i[data-h="nw"] { left: -14px; top: -14px; } .pk-sel i[data-h="ne"] { right: -14px; top: -14px; }
+  .pk-sel i[data-h="sw"] { left: -14px; bottom: -14px; } .pk-sel i[data-h="se"] { right: -14px; bottom: -14px; }
+  .pk-card { min-height: 44px; }
+  .tr-word { padding: 6px 4px; }
+  .recent { min-height: 44px; }
+}
+/* No hover on touch: show what hover would show, always. */
+@media (hover: none) { .pk-hover { display: none; } }

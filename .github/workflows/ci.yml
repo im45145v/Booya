@@ -26,6 +26,8 @@ jobs:
         run: node tests/js/shortcuts.test.js
       - name: Test caption editing
         run: node tests/js/captions-edit.test.js
+      - name: Test touch on the timeline
+        run: node tests/js/timeline-touch.test.js
       - name: Test the editor preview clock
         run: node tests/js/avsync.test.js
       - name: Test the updater manifest builder

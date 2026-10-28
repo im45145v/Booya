@@ -68,6 +68,7 @@ function shFinish() {
   layer.addEventListener('pointerdown', e => { e.preventDefault(); layer.setPointerCapture(e.pointerId); const [x, y] = shPoint(e); shDraft = { x1: x, y1: y, x2: x, y2: y }; shDraw(); });
   layer.addEventListener('pointermove', e => { if (!shDraft) return; [shDraft.x2, shDraft.y2] = shPoint(e); shDraw(); });
   layer.addEventListener('pointerup', shFinish);
+  layer.addEventListener('pointercancel', () => { shDraft = null; shDraw(); });
   window.addEventListener('keydown', e => { if (e.key === 'Escape' && shTool) { shDraft = null; shDraw(); shSetTool(null); } });
   window.addEventListener('resize', () => shTool && positionLayer());
   document.querySelectorAll('#sh-tools [data-tool]').forEach(b => (b.onclick = () => { if (!project) return; shSetTool(shTool === b.dataset.tool ? null : b.dataset.tool); }));

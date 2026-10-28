@@ -1159,6 +1159,7 @@ function drawRects(title, url, w, h, multi, hint) {
     box.onpointerdown = e => { box.setPointerCapture(e.pointerId); start = at(e); if (!multi) rects.length = 0; };
     box.onpointermove = e => { if (!start) return; const p = at(e); cur = [Math.min(p[0], start[0]), Math.min(p[1], start[1]), Math.abs(p[0] - start[0]), Math.abs(p[1] - start[1])]; paint(); };
     box.onpointerup = () => { if (cur && cur[2] > 0.005 && cur[3] > 0.005) rects.push(cur); cur = null; start = null; paint(); };
+    box.onpointercancel = () => { cur = null; start = null; paint(); };
     let done = false; const fin = v => { if (done) return; done = true; $('modal').close(); res(v.map(r => ({ x: Math.round(r[0] * w), y: Math.round(r[1] * h), w: Math.round(r[2] * w) & ~1, h: Math.round(r[3] * h) & ~1 }))); };
     $('dr-clear').onclick = () => { rects.length = 0; paint(); };
     $('dr-ok').onclick = () => fin(rects);

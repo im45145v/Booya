@@ -216,7 +216,7 @@ async function pkArea(body) {
   box.onpointermove = e => {
     lastMove = e;
     if (!drag) return refreshHover(e);
-    if (drag.fresh && !drag.moved && Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 4) drag.moved = true;
+    if (drag.fresh && !drag.moved && Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > (e.pointerType === 'mouse' ? 4 : 10)) drag.moved = true;
     if (drag.fresh && !drag.moved) return;
     let [px, py] = pt(e), gx = null, gy = null;
     if (drag.mode === 'move') {
@@ -236,6 +236,7 @@ async function pkArea(body) {
     drag = null; showGuides(null, null); paint();
     if (lastMove) refreshHover(lastMove);
   };
+  box.onpointercancel = box.onpointerup;
   box.onpointerleave = () => { lastMove = null; if (!drag) showHover(null); };
   // Alt toggles snapping live, even while the pointer is still.
   const onKey = e => {
