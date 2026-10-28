@@ -21,7 +21,7 @@ DemoLens is a **free, open source (MIT), local-first** recorder and editor for p
 | **Edit by transcript, cut fillers and pauses** | Cut fillers and pauses (local); transcript editing planned | Yes (v4) | Planned | Yes | Business + AI only | No | Yes (core feature) | No | Credits |
 | **Auto blur of secrets** | Yes, local OCR (emails, keys, cards, Aadhaar, PAN, UPI, passwords) | Manual masks | No | No | Manual blur | Manual blur | No | Manual | Manual |
 | **Noise reduction and loudness** | Local RNNoise and -16 LUFS | Local | Planned | Yes | Yes | n/a | Yes | n/a | Credits |
-| **Webcam bubble and layouts** | Webcam bubble (corner, circle, size, mirror) or side by side column; no cutout or face tracking yet | Yes, with cutout and split screen | Yes | Yes (many) | Yes | n/a | Yes | n/a | Yes |
+| **Webcam bubble and layouts** | Four layouts (screen only, bubble, side by side, camera full screen) that you can switch for any stretch of the recording, with a blend between them; mirror; a cursor following crop for 9:16 and 1:1; no cutout or face tracking yet | Yes, with cutout and split screen | Yes | Yes (many) | Yes | n/a | Yes | n/a | Yes |
 | **iPhone or iPad recording** | Not yet | Yes (USB) | No | Mobile | Mobile app | Figma, media | No | Mobile | Mobile |
 | **Instant share link** | Your own S3 or R2 bucket, signed link; no DemoLens server | Yes (30 min cap) | Yes, or self-host | Yes | Yes | Yes | Yes | Yes | No |
 | **Interactive click-through demo** | Yes: one self-contained HTML file from the event log, blur boxes applied, no network calls, shareable by signed link | No | No | No | No | Yes (core) | No | Yes (core) | No |
@@ -49,7 +49,7 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 |---|---|
 | Interactive HTML demo from the event log | Done: `demolens interactive` and the Auto edit tab, Export tab share |
 | Auto chapters and titles, local | Done earlier through the docs pipeline (rule based, optional local LLM); no separate chapter UI yet |
-| Webcam layouts | Bubble and side by side, mirror, shows in the preview; a layout that changes over time is not done |
+| Webcam layouts | Done in 0.6.0: screen only, bubble, side by side and camera full screen, switched per stretch on the timeline with a blend. Windows webcam recording (DirectShow) was added in the same release |
 | Instant share | Signed link to your own S3 or R2 for videos and interactive demos; no hosted viewer |
 | Zoom polish | Dead zone camera that holds still and follows only at the edge, anticipates the action, steadiness slider, three zoom styles; no loupe or tilt |
 | Intro and outro, callouts, watermark, background photos | Done; 0.3.1 adds arrows, boxes, ellipses and highlights, and twelve wallpapers |
@@ -64,7 +64,41 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 | Transcript editing | Basic in 0.3.1: edit caption text, find and replace, cut a line from the video; word level cuts from the text are not done |
 | Notarised builds, hosted viewer | Not done |
 
+## ScreenCharm (Mac only, $99 once) and the gaps
+
+ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a one time price of $99 (regular $149) that does auto zoom, camera layouts, a cursor following vertical video and captions. It is the closest match to what DemoLens set out to do, so this table checks each of its listed features against the code in DemoLens 0.6.0.
+
+| ScreenCharm feature | DemoLens 0.6.0 |
+|---|---|
+| Smart auto zoom, editable per zoom | Done. Scored and selective, three styles, every zoom is a segment you can drag |
+| Smooth cursor, size and speed | Done (size and smoothing) |
+| Click highlights | Done (ripples, colour) |
+| Camera bubble you can move and resize | Done (corner, size, circle or square, mirror) |
+| Camera pinned to the left, right, top or bottom edge | Partly. The bubble goes in a corner, and "side by side" puts the camera in a column on the left or right. A bubble pinned to the middle of an edge is not done |
+| Vertical (Reels, Shorts, TikTok) split video with the camera on one side and the screen following the cursor | Done in 0.6.0. In 9:16 and 1:1 the screen shows a window that follows the cursor and blends towards the zoom, and the camera sits above or below |
+| Change layout during the video | Done in 0.6.0: a Layout lane on the timeline, with a blend between layouts. ScreenCharm does not list this |
+| Captions with a choice of style | Done (local Whisper, burned in or as a file). Fewer caption styles than ScreenCharm |
+| Backgrounds: gradient, photo, solid | Done, with twelve wallpapers and a glass frame |
+| Device frames (MacBook) | Not done |
+| Motion blur on fast cursor moves and zooms | Not done |
+| Background music | Not done |
+| Mute single clips | Not done (speed per clip is done) |
+| Blur regions | Done, and DemoLens also finds emails, keys and cards for you |
+| Mic enhancement | Done (RNNoise and loudness) |
+| Canvas sizes for YouTube, LinkedIn, Shorts, Reels, TikTok | Done |
+| Trim, cut, split, per clip speed | Done |
+| Undo and redo, save and resume | Done |
+| Export up to 4K | Done (4K in the export quality list) |
+| Share link, no account for the viewer | Partly. A signed link to your own S3 or R2 bucket; no hosted viewer |
+| System audio | Linux only today. macOS and Windows system audio capture are not done (ScreenCharm has it on Mac) |
+| Record the camera and mic with the screen | Done on macOS, Linux and, new in 0.6.0, Windows (compiled in CI, not run on a real camera) |
+| Price | Free, MIT. ScreenCharm is paid |
+| Platforms | macOS, Windows, Linux. ScreenCharm is Mac only |
+
+The gaps worth closing next are device frames, motion blur, background music and per clip mute.
+
 ## Sources
+- ScreenCharm: https://screencharm.com
 - Screen Studio: https://screen.studio/ and its v4 release coverage (October 2026)
 - Cap: https://cap.so/pricing, https://cap.so/features, https://github.com/CapSoftware/Cap
 - Tella: https://www.tella.com/pricing

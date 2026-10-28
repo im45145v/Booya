@@ -42,6 +42,8 @@
   --tl-clip-sel: var(--brand-indigo);
   --tl-zoom: #6a5a8e;
   --tl-zoom-sel: #8b7ac4;
+  --tl-layout: #2f6f8f;
+  --tl-layout-sel: #3c9ac4;
   --tl-word: #10b981;
   --tl-filler: #f59e0b;
   --tl-playhead: var(--brand-amber);
@@ -72,6 +74,8 @@
   --tl-clip-sel: var(--brand-indigo-deep);
   --tl-zoom: #c9bfe6;
   --tl-zoom-sel: #7a68c0;
+  --tl-layout: #9cc7dc;
+  --tl-layout-sel: #2f86b0;
   --tl-word: #059669;
   --tl-filler: #d97706;
   --tl-playhead: #d97706;

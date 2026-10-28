@@ -12,8 +12,7 @@ class Timeline {
     this.project = null; this.playhead = 0; this.selectedZoom = -1; this.selectedClip = 0; this.drag = null;
     this.view = [0, 1]; // visible output range in ms; [0, dur] when fitted
     this.fitted = true;
-    this.H = 252; this.gutter = 64;
-    this.L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96], marks: [102, 128], blur: [134, 156], keys: [162, 182], words: [188, 210], audio: [216, 244] };
+    this.gutter = 64; this.selectedLayout = -1;
     this.selItem = null; this.keyTrack = [];
     // Waveform of the sound: { data: 0..255 per bucket, bucket: ms } and what state the sound is in.
     this.peaks = null; this.audioState = 'none';
@@ -107,6 +106,26 @@ class Timeline {
     const [a, b] = this.view, span = b - a;
     if (this.playhead > b || this.playhead < a) this.pan(this.playhead - a - span * 0.1);
   }
+  // The lanes. A layout lane (per-segment camera layouts) is there when the
+  // recording has a camera, and pushes the lanes below it down.
+  get hasLayoutLane() { return !!(this.project && this.project.webcam); }
+  get H() { return this.hasLayoutLane ? 282 : 252; }
+  get L() {
+    const o = this.hasLayoutLane ? 30 : 0;
+    const L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96] };
+    if (o) L.layout = [102, 126];
+    return Object.assign(L, { marks: [102 + o, 128 + o], blur: [134 + o, 156 + o], keys: [162 + o, 182 + o], words: [188 + o, 210 + o], audio: [216 + o, 244 + o] });
+  }
+  layoutAt(x) {
+    const segs = (this.project && this.project.layouts && this.project.layouts.segments) || [];
+    for (let i = 0; i < segs.length; i++) {
+      const z = segs[i], a = this.x(this.srcToOut(z.start_ms)), b = this.x(this.srcToOut(z.end_ms));
+      if (Math.abs(x - a) < this.slop) return { i, edge: 'start' };
+      if (Math.abs(x - b) < this.slop) return { i, edge: 'end' };
+      if (x > a && x < b) return { i, edge: 'move' };
+    }
+    return null;
+  }
   width() { return this.c.clientWidth; }
   x(ms) { const [a, b] = this.view; return this.gutter + ((ms - a) / Math.max(1, b - a)) * (this.width() - this.gutter - 8); }
   ms(x) { const [a, b] = this.view; return Math.max(0, Math.min(this.outDur(), a + ((x - this.gutter) / (this.width() - this.gutter - 8)) * (b - a))); }
@@ -154,6 +173,7 @@ class Timeline {
     const [x, y] = this.pos(e), lane = this.lane(y);
     let cur = 'text';
     if (lane === 'zoom') { const h = this.zoomAt(x); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'copy'; }
+    if (lane === 'layout') { const h = this.layoutAt(x); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'copy'; }
     if (lane === 'marks' || lane === 'blur') { const h = this.itemAt(lane, x, y); cur = h ? (h.edge === 'move' ? 'grab' : 'ew-resize') : 'default'; }
     this.c.style.cursor = cur;
   }
@@ -165,17 +185,28 @@ class Timeline {
       const h = this.zoomAt(x);
       if (h) {
         const z = this.project.zoom[h.i];
-        this.selectedZoom = h.i; this.selItem = null;
+        this.selectedZoom = h.i; this.selItem = null; this.selectedLayout = -1;
         this.drag = { kind: 'zoom', ...h, grab: this.outToSrc(this.ms(x)) - z.start_ms, len: z.end_ms - z.start_ms, moved: false };
         if (h.edge === 'move') this.c.style.cursor = 'grabbing';
         this.onSelect(); this.draw(); return;
       }
       this.selectedZoom = -1; this.onSelect();
     }
+    if (lane === 'layout') {
+      const h = this.layoutAt(x);
+      if (h) {
+        const z = this.project.layouts.segments[h.i];
+        this.selectedLayout = h.i; this.selectedZoom = -1; this.selItem = null;
+        this.drag = { kind: 'layout', ...h, grab: this.outToSrc(this.ms(x)) - z.start_ms, len: z.end_ms - z.start_ms, moved: false };
+        if (h.edge === 'move') this.c.style.cursor = 'grabbing';
+        this.onSelect(); this.draw(); return;
+      }
+      this.selectedLayout = -1; this.onSelect();
+    }
     if (lane === 'marks' || lane === 'blur') {
       const h = this.itemAt(lane, x, y);
       if (h) {
-        this.selItem = h.it.o; this.selectedZoom = -1;
+        this.selItem = h.it.o; this.selectedZoom = -1; this.selectedLayout = -1;
         this.drag = { kind: 'item', it: h.it, edge: h.edge, grab: this.outToSrc(this.ms(x)) - h.it.o.start_ms, len: h.it.o.end_ms - h.it.o.start_ms, moved: false };
         if (h.edge === 'move') this.c.style.cursor = 'grabbing';
         this.onSelect(); this.draw(); return;
@@ -203,10 +234,11 @@ class Timeline {
       else { const s = Math.max(0, Math.min(dur - this.drag.len, src - this.drag.grab)); o.start_ms = s; o.end_ms = s + this.drag.len; }
       return this.draw();
     }
-    const z = this.project.zoom[this.drag.i], src = this.outToSrc(this.ms(x));
+    const list = this.drag.kind === 'layout' ? this.project.layouts.segments : this.project.zoom;
+    const z = list[this.drag.i], src = this.outToSrc(this.ms(x));
     this.drag.moved = true;
-    // Zooms may not overlap: clamp against the neighbours on either side.
-    const others = this.project.zoom.filter((_, j) => j !== this.drag.i);
+    // Zooms (and layout changes) may not overlap: clamp against the neighbours on either side.
+    const others = list.filter((_, j) => j !== this.drag.i);
     const lo = Math.max(0, ...others.filter(o => o.end_ms <= z.start_ms + 1).map(o => o.end_ms));
     const hi = Math.min(this.project.duration_ms, ...others.filter(o => o.start_ms >= z.end_ms - 1).map(o => o.start_ms));
     if (this.drag.edge === 'start') z.start_ms = Math.max(lo, Math.min(src, z.end_ms - 200));
@@ -221,6 +253,13 @@ class Timeline {
     if (!this.drag) return;
     const d = this.drag; this.drag = null;
     if (d.kind === 'item') { this.c.style.cursor = 'grab'; if (d.moved) this.onChange(); else { this.playhead = this.srcToOut(d.it.o.start_ms); this.onSeek(this.playhead); } this.draw(); return; }
+    if (d.kind === 'layout') {
+      this.c.style.cursor = 'grab';
+      const segs = this.project.layouts.segments, cur = segs[d.i];
+      if (d.moved) { segs.sort((a, b) => a.start_ms - b.start_ms); this.selectedLayout = segs.indexOf(cur); this.onChange(); }
+      else { this.playhead = this.srcToOut(cur.start_ms); this.onSeek(this.playhead); }
+      this.draw();
+    }
     if (d.kind === 'zoom') {
       this.c.style.cursor = 'grab';
       if (d.moved) { this.project.zoom.sort((a, b) => a.start_ms - b.start_ms); this.onChange(); }
@@ -233,6 +272,10 @@ class Timeline {
     // A double tap raises both our own detection and the browser's dblclick.
     const now = performance.now(); if (now - this.lastDbl < 500) return; this.lastDbl = now;
     const [x, y] = this.pos(e);
+    if (this.lane(y) === 'layout' && !this.layoutAt(x)) {
+      this.addLayout(this.outToSrc(this.ms(x)));
+      return;
+    }
     if (this.lane(y) === 'zoom' && !this.zoomAt(x)) {
       const at = this.outToSrc(this.ms(x));
       this.project.zoom.push({ start_ms: at, end_ms: Math.min(this.project.duration_ms, at + 2000), scale: 2, follow_cursor: true, focus: [this.project.source_width / 2, this.project.source_height / 2], reason: 'manual' });
@@ -240,6 +283,21 @@ class Timeline {
       this.selectedZoom = this.project.zoom.findIndex(z => z.start_ms === at);
       this.onSelect(); this.onChange(); this.draw();
     }
+  }
+  // Adds a layout change at `at` (source ms), as long as it fits between its
+  // neighbours. Returns the new index, or -1.
+  addLayout(at, kind) {
+    const p = this.project; if (!p || !p.webcam) return -1;
+    const L = p.layouts = p.layouts || { segments: [] }; const segs = L.segments = L.segments || [];
+    if (segs.some(g => at >= g.start_ms && at < g.end_ms)) return -1;
+    const next = Math.min(p.duration_ms, ...segs.filter(g => g.start_ms > at).map(g => g.start_ms));
+    const end = Math.min(next, at + 4000);
+    if (end - at < 200) return -1;
+    const seg = { start_ms: at, end_ms: end, kind: kind || 'camera' };
+    segs.push(seg); segs.sort((a, b) => a.start_ms - b.start_ms);
+    this.selectedLayout = segs.indexOf(seg); this.selectedZoom = -1; this.selItem = null;
+    this.onSelect(); this.onChange(); this.draw();
+    return this.selectedLayout;
   }
   wheel(e) {
     if (!this.project) return;
@@ -266,7 +324,7 @@ class Timeline {
 
     // Lane labels
     ctx.fillStyle = C('--faint'); ctx.font = font(10); ctx.textBaseline = 'middle';
-    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH'], ['audio', 'AUDIO']]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
+    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['layout', 'LAYOUT'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH'], ['audio', 'AUDIO']]) if (this.L[k]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(x0 - 2, 0, x1 - x0 + 10, H); ctx.clip();
 
     // Ruler with nice tick spacing
@@ -304,6 +362,20 @@ class Timeline {
       if (sel) { ctx.fillStyle = '#fff'; ctx.fillRect(a + 2, za + 9, 2, zb - za - 18); ctx.fillRect(b - 4, za + 9, 2, zb - za - 18); }
       if (b - a > 50) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`${z.scale.toFixed(1)}x ${z.reason}`, a + 8, (za + zb) / 2); }
     });
+    // Layout changes: each block is a stretch of the recording with its own layout.
+    if (this.hasLayoutLane) {
+      const [la, lb] = this.L.layout;
+      ctx.globalAlpha = .35; ctx.fillStyle = C('--line'); rr(ctx, x0, la, x1 - x0, lb - la, 5); ctx.fill(); ctx.globalAlpha = 1;
+      const names = { screen: 'Screen only', bubble: 'Camera bubble', split: 'Side by side', camera: 'Camera full' };
+      ((this.project.layouts && this.project.layouts.segments) || []).forEach((g, i) => {
+        const a = this.x(this.srcToOut(g.start_ms)), b = this.x(this.srcToOut(g.end_ms)), sel = i === this.selectedLayout;
+        ctx.fillStyle = sel ? C('--tl-layout-sel') : C('--tl-layout');
+        rr(ctx, a, la, Math.max(3, b - a), lb - la, 6); ctx.fill();
+        if (sel) { ctx.fillStyle = '#fff'; ctx.fillRect(a + 2, la + 6, 2, lb - la - 12); ctx.fillRect(b - 4, la + 6, 2, lb - la - 12); }
+        if (b - a > 50) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText((names[g.kind] || g.kind).slice(0, Math.floor((b - a) / 6)), a + 8, (la + lb) / 2); }
+      });
+      if (!((this.project.layouts && this.project.layouts.segments) || []).length) { ctx.font = font(11); ctx.fillStyle = C('--faint'); ctx.fillText('The whole recording uses the base layout. Double click here to change it for a stretch.', x0 + 8, (la + lb) / 2); }
+    }
     // Lane backgrounds so empty lanes still read as lanes
     ctx.globalAlpha = .35; ctx.fillStyle = C('--line');
     for (const k of ['marks', 'blur', 'keys', 'words', 'audio']) { const [a, b] = this.L[k]; rr(ctx, x0, a, x1 - x0, b - a, 5); ctx.fill(); }

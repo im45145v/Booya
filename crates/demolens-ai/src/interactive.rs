@@ -152,7 +152,7 @@ pub fn build_steps(p: &Project, log: Option<&EventLog>, opts: &Options, mut prog
         // A moment before the click, so the screenshot shows what was clicked.
         let shot_t = (t - 120.0).clamp(0.0, (p.duration_ms - 40.0).max(0.0));
         let src = ffmpeg::frame_at(&p.source, shot_t, dw, dh)?;
-        let png = r.render(&src, shot_t).encode_png()?;
+        let png = r.render(&src, shot_t, None).encode_png()?;
         let said = docs::transcript_between(p, t - 1500.0, t + 2500.0);
         let title = if !said.is_empty() {
             docs::first_sentence(&said, 8)

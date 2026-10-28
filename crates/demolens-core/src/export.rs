@@ -33,19 +33,25 @@ pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Render
     Ok(Renderer::new(project.clone(), log.as_ref(), out_w, out_h, bg))
 }
 
-/// ffmpeg filter that makes the camera frame a square of `d` pixels.
-pub fn webcam_filter(w: &crate::project::Webcam, d: u32) -> String {
-    format!("crop='min(iw,ih)':'min(iw,ih)',scale={d}:{d}{}", if w.mirror { ",hflip" } else { "" })
+/// ffmpeg filter that scales the camera frame to `w` x `h` (the camera's own
+/// shape; flipping for a mirror and cropping to the pane are done when drawn).
+pub fn webcam_filter(w: u32, h: u32) -> String {
+    format!("scale={w}:{h}")
 }
 
-/// Add the webcam to a preview frame, the same way export does.
-pub fn draw_preview_webcam(renderer: &Renderer, project: &Project, frame: &mut crate::render::Frame, src_t: f64) {
-    let Some(w) = project.webcam.as_ref().filter(|w| w.visible && w.path.exists()) else { return };
-    let d = renderer.webcam_size();
-    let t = (src_t - w.offset_ms).max(0.0);
-    if let Ok(c) = ffmpeg::frame_at_filtered(&w.path, t, d, d, Some(&webcam_filter(w, d))) {
-        renderer.draw_webcam(frame, &c);
+/// The camera frame for the editor preview at source time `src_t`, or None
+/// when the layout there does not show the camera.
+pub fn preview_cam(renderer: &Renderer, project: &Project, src_t: f64) -> Option<Frame> {
+    let w = project.webcam.as_ref().filter(|w| w.visible && w.path.exists())?;
+    let mix = renderer.scene_at(src_t);
+    if !(mix.kind.needs_camera() || mix.other.is_some_and(|o| o.0.needs_camera())) {
+        return None;
     }
+    // The preview asks for one frame at a time, so it takes the camera
+    // already cropped to the biggest place it is shown.
+    let (cw, ch) = renderer.cam_box();
+    let vf = format!("scale={cw}:{ch}:force_original_aspect_ratio=increase,crop={cw}:{ch}");
+    ffmpeg::frame_at_filtered(&w.path, (src_t - w.offset_ms).max(0.0), cw, ch, Some(&vf)).ok()
 }
 
 /// Render a single preview frame at output time `out_ms` as PNG bytes.
@@ -55,9 +61,8 @@ pub fn preview_png(project: &Project, out_ms: f64, out_w: u32, out_h: u32) -> Re
     let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
     let (sw, sh) = r.decode_size();
     let src = ffmpeg::frame_at(&project.source, src_t, sw, sh)?;
-    let mut f = r.render(&src, src_t);
-    draw_preview_webcam(&r, project, &mut f, src_t);
-    f.encode_png()
+    let cam = preview_cam(&r, project, src_t);
+    r.render(&src, src_t, cam.as_ref()).encode_png()
 }
 
 fn atempo_chain(speed: f64) -> String {
@@ -310,14 +315,17 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     let mut reader = FrameReader::open(&project.source, first_src, dec_fps, dw, dh)?;
     let mut current: Option<Frame> = reader.next()?;
 
-    // Optional webcam bubble, decoded square at its on-screen size.
-    let mut cam = match project.webcam.as_ref().filter(|w| w.visible && w.path.exists()) {
-        Some(w) => {
-            let d = renderer.webcam_size();
-            let start = first_src - w.offset_ms;
-            let vf = webcam_filter(w, d);
-            FrameReader::open_filtered(&w.path, start, fps, &vf, d, d).ok().map(|r| (r, w.offset_ms, None::<Frame>))
-        }
+    // The camera, decoded at the size of the biggest place it is shown (and
+    // never bigger than it is). Only when some layout shows it.
+    let mut cam = match project.webcam.as_ref().filter(|w| w.visible && w.path.exists() && project.scene_kinds_used().iter().any(|k| k.needs_camera())) {
+        Some(w) => match ffmpeg::probe(&w.path) {
+            Ok(i) => {
+                let (cw, ch) = renderer.cam_decode_size((i.width, i.height));
+                let start = first_src - w.offset_ms;
+                FrameReader::open_filtered(&w.path, start, fps, &webcam_filter(cw, ch), cw, ch).ok().map(|r| (r, w.offset_ms, None::<Frame>))
+            }
+            Err(_) => None,
+        },
         None => None,
     };
 
@@ -409,7 +417,6 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
             }
         }
         let src = current.as_ref().context("source has no frames")?;
-        let mut frame = renderer.render(src, src_t);
         if let Some((r, offset, cur)) = cam.as_mut() {
             let cam_t = src_t - *offset;
             let want = ((cam_t - (first_src - *offset)) / 1000.0 * r.fps).floor().max(0.0) as u64;
@@ -419,10 +426,9 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
                     _ => break,
                 }
             }
-            if let Some(c) = cur.as_ref() {
-                renderer.draw_webcam(&mut frame, c);
-            }
         }
+        let cam_frame = cam.as_ref().and_then(|(_, _, cur)| cur.as_ref());
+        let mut frame = renderer.render(src, src_t, cam_frame);
         if fade_ms > 0.0 && boundaries.len() > 1 {
             // Entering a new clip: remember the previous clip's last frame.
             if let Some(&b) = boundaries.iter().find(|&&b| out_t >= b && out_t - b < 1000.0 / fps) {

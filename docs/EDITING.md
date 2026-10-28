@@ -37,6 +37,19 @@ Take them out as a file: **Auto edit > Tools > Export subtitles** (SRT or VTT). 
 
 **Edit tab > Shapes** (arrow, box, ellipse, highlight) have no text. For a label, add a callout.
 
+## Camera layouts
+
+When a recording has a camera, the **Style** tab has a **Layout** choice for the whole recording and the timeline gets a **LAYOUT** lane:
+
+- **Screen only** hides the camera.
+- **Camera bubble over the screen** is the usual round or square picture in a corner.
+- **Side by side** puts the camera in a column next to the screen (above or below it in a tall video), so nothing is covered.
+- **Camera full screen** shows only the camera.
+
+To change the layout for part of the recording, double click an empty place on the LAYOUT lane (or press **Add at playhead**). A block appears; drag it to move it, drag its edges to resize it, choose its layout under **This stretch**, and press Delete to remove it. Blocks cannot overlap. Where there is no block the whole recording layout applies. **Blend** sets how long the picture takes to glide from one layout to the next (0 cuts straight over).
+
+In a 9:16 or 1:1 video the whole screen would be tiny, so the screen shows a window that follows the cursor and blends towards the zoom. Turn off **Tall and square videos follow the cursor** to show the whole screen with bars instead.
+
 ## Names of things that are not video text
 
 - Shortcut keys: **Settings > Shortcuts**. Click the keys, press the new combination, Esc cancels.

@@ -4,7 +4,7 @@
 
 use crate::events::{CursorTrack, EventLog};
 use crate::text;
-use crate::project::{Background, BlurBox, Project};
+use crate::project::{Background, BlurBox, Project, SceneKind};
 use crate::zoom::{camera_at_mapped, Camera, CameraTiming};
 use rayon::prelude::*;
 
@@ -343,6 +343,35 @@ pub struct Layout {
     pub radius: f64,
 }
 
+/// Where the camera is drawn in one layout.
+#[derive(Debug, Clone, Copy)]
+pub struct CamPane {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub radius: f64,
+    /// Drawn over the picture with its own shadow and a thin ring (a bubble),
+    /// rather than as a panel of the layout.
+    pub floating: bool,
+}
+
+/// How the picture is put together in one layout.
+pub struct Scene {
+    pub kind: SceneKind,
+    pub layout: Layout,
+    /// The glass panel behind the recording (glass style only).
+    pub panel: Option<Layout>,
+    background: Frame,
+    pub cam: Option<CamPane>,
+    /// The recording shows a window around the cursor instead of all of it.
+    pub crop: bool,
+    /// For `crop`: the centre of that window (source pixels) every `FOLLOW_STEP_MS`.
+    follow: Vec<(f64, f64)>,
+}
+
+const FOLLOW_STEP_MS: f64 = 40.0;
+
 pub struct Renderer {
     pub project: Project,
     pub out_w: u32,
@@ -352,11 +381,13 @@ pub struct Renderer {
     /// Where a finger or pen touched down (also in `clicks`, for the zoom).
     touches: Vec<(f64, f64, f64)>,
     labels: Vec<KeyLabel>,
-    background: Frame,
     /// The plain backdrop, used behind title cards.
     card_bg: Frame,
+    /// One entry for each layout the project uses.
+    scenes: Vec<Scene>,
+    /// The recording's rectangle in the main layout.
     pub layout: Layout,
-    /// The glass panel behind the recording (glass style only).
+    /// The glass panel in the main layout.
     pub panel: Option<Layout>,
     glass: crate::project::Glass,
 }
@@ -375,8 +406,14 @@ impl Renderer {
         let p = &self.project;
         let (sw, sh) = (p.source_width.max(2), p.source_height.max(2));
         let max_zoom = p.zoom.iter().map(|z| z.scale).fold(1.0, f64::max);
-        let need_w = (self.layout.w * max_zoom).ceil();
-        if need_w >= sw as f64 {
+        let mut need_w: f64 = 0.0;
+        for sc in self.scenes.iter().filter(|s| s.kind != SceneKind::Camera) {
+            // A window of the screen is narrower than the screen, so the
+            // whole screen has to be decoded wider for the same sharpness.
+            let shown = if sc.crop { (sh as f64 * sc.layout.w / sc.layout.h).min(sw as f64) } else { sw as f64 };
+            need_w = need_w.max((sc.layout.w * max_zoom * sw as f64 / shown).ceil());
+        }
+        if need_w >= sw as f64 || need_w <= 0.0 {
             return (sw, sh);
         }
         let k = need_w / sw as f64;
@@ -394,45 +431,204 @@ impl Renderer {
             Some(l) if project.keys.enabled => build_key_labels(l, &project.keys),
             _ => Vec::new(),
         };
-        let background = Self::paint_background(&project.style.background, out_w, out_h, bg_image);
-        let short = out_w.min(out_h) as f64;
         let glass = project.style.glass.clamped();
-        let inset_px = if glass.enabled { (glass.inset * short).round() } else { 0.0 };
+        let card_bg = Self::paint_background(&project.style.background, out_w, out_h, bg_image.clone());
+        let mut kinds = project.scene_kinds_used();
+        // The editor shows any layout the user may switch to; the main one first.
+        let main = project.base_scene();
+        kinds.retain(|k| *k != main);
+        kinds.insert(0, main);
+        let scenes: Vec<Scene> = kinds.into_iter().map(|k| Self::build_scene(&project, k, out_w, out_h, &card_bg, track.as_ref())).collect();
+        let (layout, panel) = (scenes[0].layout, scenes[0].panel);
+        Self { project, out_w, out_h, track, clicks, touches, labels, card_bg, scenes, layout, panel, glass }
+    }
+
+    /// Build one more layout. Public so the editor can ask for a layout that
+    /// is not in the project yet.
+    fn build_scene(project: &Project, kind: SceneKind, out_w: u32, out_h: u32, backdrop: &Frame, track: Option<&CursorTrack>) -> Scene {
+        use crate::project::Corner;
+        let glass = project.style.glass.clamped();
+        let short = out_w.min(out_h) as f64;
+        let (ow, oh) = (out_w as f64, out_h as f64);
+        let tall = out_h >= out_w;
+        let cam_style = project.webcam.as_ref();
+        let inset_px = if glass.enabled && kind != SceneKind::Camera { (glass.inset * short).round() } else { 0.0 };
         // With glass, the panel needs its own margin around the recording.
         let pad = project.style.padding.clamp(0.0, 0.4) * short + inset_px;
-        // A side-by-side webcam takes a column off the screen's side.
-        let col = Self::side_column(&project, out_w, out_h);
-        let (aw, ah) = (out_w as f64 - 2.0 * pad - col.map(|c| c.0).unwrap_or(0.0), out_h as f64 - 2.0 * pad);
-        let src_aspect = project.source_width as f64 / project.source_height as f64;
-        let (w, h) = if aw / ah > src_aspect { (ah * src_aspect, ah) } else { (aw, aw / src_aspect) };
-        // Centre the screen in the area that is left (right of the camera when it is on the left).
-        let area_x = match col {
-            Some((c, true)) => c + pad,
-            _ => pad,
-        };
-        let layout = Layout {
-            x: if col.is_some() { area_x + (aw - w) / 2.0 } else { (out_w as f64 - w) / 2.0 },
-            y: (out_h as f64 - h) / 2.0,
-            w,
-            h,
-            radius: (project.style.corner_radius * short).min(w.min(h) / 2.0),
-        };
-        let mut layout = layout;
-        let panel = glass.enabled.then(|| {
-            let (pw, ph) = (layout.w + 2.0 * inset_px, layout.h + 2.0 * inset_px);
-            let pr = (glass.radius * short).min(pw.min(ph) / 2.0);
-            // Concentric corners: the recording's radius follows the panel's.
-            layout.radius = layout.radius.max((pr - inset_px).max(0.0)).min(layout.w.min(layout.h) / 2.0);
-            Layout { x: layout.x - inset_px, y: layout.y - inset_px, w: pw, h: ph, radius: pr }
-        });
-        let card_bg = background.clone();
-        let mut background = background;
-        Self::bake_shadow(&mut background, &project, panel.unwrap_or(layout), out_w, out_h);
+        let m = short * 0.035;
+        let radius = project.style.corner_radius * short;
+        let (mut ax, mut ay, mut aw, mut ah) = (pad, pad, ow - 2.0 * pad, oh - 2.0 * pad);
+        let mut cam: Option<CamPane> = None;
+        let corner = cam_style.map(|w| w.corner).unwrap_or(Corner::BottomRight);
+        let size = cam_style.map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24);
+        let circle = cam_style.map(|w| w.circle).unwrap_or(true);
+        match kind {
+            SceneKind::Screen => {}
+            SceneKind::Bubble => {
+                let d = ((size * short).round() as u32 & !1).max(16) as f64;
+                let (x, y) = match corner {
+                    Corner::TopLeft => (m, m),
+                    Corner::TopRight => (ow - d - m, m),
+                    Corner::BottomLeft => (m, oh - d - m),
+                    Corner::BottomRight => (ow - d - m, oh - d - m),
+                };
+                cam = Some(CamPane { x, y, w: d, h: d, radius: if circle { d / 2.0 } else { d * 0.16 }, floating: true });
+            }
+            SceneKind::Split if !tall => {
+                // A column beside the recording, nothing covered.
+                let d = ((((size * 1.6).min(0.45) * short).max(16.0)).round() as u32 & !1).max(16) as f64;
+                let col = d + m;
+                let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
+                ax = if left { col + pad } else { pad };
+                aw = ow - 2.0 * pad - col;
+                let x = if left { m } else { ow - d - m };
+                cam = Some(CamPane { x, y: (oh - d) / 2.0, w: d, h: d, radius: if circle { d / 2.0 } else { d * 0.16 }, floating: true });
+            }
+            SceneKind::Split => {
+                // Camera on top (or below), the recording in the rest.
+                let ch = (ah * if out_w == out_h { 0.40 } else { 0.34 }).round();
+                let gap = (short * 0.025).max(pad * 0.5);
+                let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+                let y = if top { pad } else { oh - pad - ch };
+                cam = Some(CamPane { x: pad, y, w: aw, h: ch, radius, floating: false });
+                if top {
+                    ay += ch + gap;
+                }
+                ah -= ch + gap;
+            }
+            SceneKind::Camera => {
+                cam = Some(CamPane { x: pad, y: pad, w: aw, h: ah, radius, floating: false });
+            }
+        }
+        let src_aspect = project.source_width as f64 / project.source_height.max(1) as f64;
+        let mut layout;
+        let mut panel = None;
+        let mut crop = false;
+        if kind == SceneKind::Camera {
+            let c = cam.expect("camera pane");
+            layout = Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius };
+        } else {
+            // In a tall or square picture the whole screen would be tiny:
+            // show a window of it that follows the cursor instead.
+            crop = project.layouts.follow_cursor && tall && aw / ah.max(1.0) < src_aspect * 0.9;
+            let (w, h) = if crop {
+                (aw, ah)
+            } else if aw / ah > src_aspect {
+                (ah * src_aspect, ah)
+            } else {
+                (aw, aw / src_aspect)
+            };
+            layout = Layout { x: ax + (aw - w) / 2.0, y: ay + (ah - h) / 2.0, w, h, radius: radius.min(w.min(h) / 2.0) };
+            if glass.enabled {
+                let (pw, ph) = (layout.w + 2.0 * inset_px, layout.h + 2.0 * inset_px);
+                let pr = (glass.radius * short).min(pw.min(ph) / 2.0);
+                // Concentric corners: the recording's radius follows the panel's.
+                layout.radius = layout.radius.max((pr - inset_px).max(0.0)).min(layout.w.min(layout.h) / 2.0);
+                panel = Some(Layout { x: layout.x - inset_px, y: layout.y - inset_px, w: pw, h: ph, radius: pr });
+            }
+        }
+        let mut background = backdrop.clone();
+        Self::bake_shadow(&mut background, project, panel.unwrap_or(layout), out_w, out_h);
+        if let Some(c) = cam.filter(|c| !c.floating && kind != SceneKind::Camera) {
+            Self::bake_shadow(&mut background, project, Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius }, out_w, out_h);
+        }
         if let Some(pl) = panel {
             let t = glass.tint.map(|v| v as f32);
             frost_rect(&mut background, pl.x, pl.y, pl.w, pl.h, pl.radius, glass.blur * short, t, glass.tint_opacity as f32, glass.highlight as f32, 1.0);
         }
-        Self { project, out_w, out_h, track, clicks, touches, labels, background, card_bg, layout, panel, glass }
+        let follow = match (crop, track) {
+            (true, Some(tr)) => Self::follow_table(tr, project, layout.w / layout.h),
+            _ => Vec::new(),
+        };
+        Scene { kind, layout, panel, background, cam, crop, follow }
+    }
+
+    /// Where the window on the screen is centred over time. The cursor can
+    /// roam inside the middle of the window; past that the window is pulled
+    /// along with an easing, so the picture never jerks.
+    fn follow_table(tr: &CursorTrack, p: &Project, aspect: f64) -> Vec<(f64, f64)> {
+        let (sw, sh) = (p.source_width as f64, p.source_height as f64);
+        let bw = (sh * aspect).min(sw);
+        let bh = if bw >= sw { sw / aspect } else { sh };
+        let (lim_x, lim_y) = (bw * 0.5 * 0.35, bh * 0.5 * 0.35);
+        let k = 1.0 - (-FOLLOW_STEP_MS / 380.0).exp();
+        let n = (p.duration_ms / FOLLOW_STEP_MS).ceil() as usize + 2;
+        let mut pos = tr.smooth_at(0.0, 450.0).unwrap_or((sw / 2.0, sh / 2.0));
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f64 * FOLLOW_STEP_MS;
+            if let Some(tg) = tr.smooth_at(t, 450.0) {
+                let (dx, dy) = (tg.0 - pos.0, tg.1 - pos.1);
+                if dx.abs() > lim_x {
+                    pos.0 += (tg.0 - dx.signum() * lim_x - pos.0) * k;
+                }
+                if dy.abs() > lim_y {
+                    pos.1 += (tg.1 - dy.signum() * lim_y - pos.1) * k;
+                }
+            }
+            out.push(pos);
+        }
+        out
+    }
+
+    /// The visible rectangle of the source in a layout, in source pixels.
+    fn view_rect(&self, sc: &Scene, zcam: &Camera, src_t: f64) -> (f64, f64, f64, f64) {
+        let (sw, sh) = (self.project.source_width as f64, self.project.source_height as f64);
+        if !sc.crop {
+            return zcam.view_rect(sw, sh);
+        }
+        let aspect = sc.layout.w / sc.layout.h;
+        let bw = (sh * aspect).min(sw);
+        let bh = if bw >= sw { sw / aspect } else { sh };
+        let (vw, vh) = (bw / zcam.scale, bh / zcam.scale);
+        let (fx, fy) = if sc.follow.is_empty() {
+            (sw / 2.0, sh / 2.0)
+        } else {
+            let f = (src_t / FOLLOW_STEP_MS).max(0.0);
+            let i = (f.floor() as usize).min(sc.follow.len() - 1);
+            let j = (i + 1).min(sc.follow.len() - 1);
+            let u = f - f.floor();
+            (sc.follow[i].0 + (sc.follow[j].0 - sc.follow[i].0) * u, sc.follow[i].1 + (sc.follow[j].1 - sc.follow[i].1) * u)
+        };
+        // While a zoom is in, the zoom decides where to look.
+        let k = ((zcam.scale - 1.0) / 0.25).clamp(0.0, 1.0);
+        let k = k * k * (3.0 - 2.0 * k);
+        let (cx, cy) = (fx + (zcam.cx - fx) * k, fy + (zcam.cy - fy) * k);
+        let (cx, cy) = (cx.clamp(vw / 2.0, (sw - vw / 2.0).max(vw / 2.0)), cy.clamp(vh / 2.0, (sh - vh / 2.0).max(vh / 2.0)));
+        (cx - vw / 2.0, cy - vh / 2.0, vw, vh)
+    }
+
+    /// Size of the biggest place the camera is shown, in output pixels.
+    pub fn cam_box(&self) -> (u32, u32) {
+        let (mut w, mut h) = (16.0f64, 16.0f64);
+        for c in self.scenes.iter().filter_map(|s| s.cam) {
+            w = w.max(c.w);
+            h = h.max(c.h);
+        }
+        let even = |v: f64| ((v.ceil() as u32) & !1).max(2);
+        (even(w), even(h))
+    }
+
+    fn scene(&self, kind: SceneKind) -> &Scene {
+        self.scenes.iter().find(|s| s.kind == kind).unwrap_or(&self.scenes[0])
+    }
+
+    /// The layout and cross-fade at source time `src_t`.
+    pub fn scene_at(&self, src_t: f64) -> crate::project::SceneMix {
+        self.project.scene_at(src_t)
+    }
+
+    /// Size to decode the camera video at, given its own size: big enough for
+    /// the largest place it is shown, never bigger than itself.
+    pub fn cam_decode_size(&self, native: (u32, u32)) -> (u32, u32) {
+        let (nw, nh) = (native.0.max(2) as f64, native.1.max(2) as f64);
+        let mut k: f64 = 0.0;
+        for c in self.scenes.iter().filter_map(|s| s.cam) {
+            k = k.max((c.w / nw).max(c.h / nh));
+        }
+        let k = k.clamp(0.05, 1.0);
+        let even = |v: f64| ((v.round() as u32) & !1).max(2);
+        (even(nw * k), even(nh * k))
     }
 
     /// The drop shadow never changes between frames, so it is painted into the
@@ -551,67 +747,67 @@ impl Renderer {
         }
     }
 
-    /// Width of the camera column and whether it is on the left, for the side layout.
-    fn side_column(project: &Project, out_w: u32, out_h: u32) -> Option<(f64, bool)> {
-        use crate::project::{Corner, WebcamLayout};
-        let w = project.webcam.as_ref().filter(|w| w.visible && w.layout == WebcamLayout::Side)?;
-        let short = out_w.min(out_h) as f64;
-        let d = ((w.size.clamp(0.08, 0.5) * 1.6).min(0.45) * short).max(16.0);
-        let left = matches!(w.corner, Corner::TopLeft | Corner::BottomLeft);
-        Some((d + short * 0.035, left))
-    }
-
-    /// Webcam bubble diameter in output pixels.
-    pub fn webcam_size(&self) -> u32 {
-        let short = self.out_w.min(self.out_h) as f64;
-        let d = match Self::side_column(&self.project, self.out_w, self.out_h) {
-            Some((col, _)) => col - short * 0.035,
-            None => self.project.webcam.as_ref().map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24) * short,
-        };
-        ((d.round() as u32) & !1).max(16)
-    }
-
-    /// Composite the webcam frame (already square, `webcam_size`) in its corner.
-    pub fn draw_webcam(&self, out: &mut Frame, cam: &Frame) {
-        use crate::project::Corner;
-        let Some(w) = self.project.webcam.as_ref() else { return };
-        let d = cam.w as f64;
-        let short = self.out_w.min(self.out_h) as f64;
-        let m = short * 0.035;
-        let side = Self::side_column(&self.project, self.out_w, self.out_h);
-        let (x0, y0) = match w.corner {
-            _ if side.is_some() => {
-                let left = side.map(|s| s.1).unwrap_or(false);
-                // Centred vertically, a margin from its edge.
-                (if left { m } else { self.out_w as f64 - d - m }, (self.out_h as f64 - d) / 2.0)
+    /// Draw the camera frame into its place in a layout. The frame keeps its
+    /// own shape; it is cropped to fill the pane (a face stays centred).
+    fn draw_cam(&self, out: &mut Frame, pane: &CamPane, cam: &Frame) {
+        let mirror = self.project.webcam.as_ref().is_some_and(|w| w.mirror);
+        let (cx, cy, hw, hh) = (pane.x + pane.w / 2.0, pane.y + pane.h / 2.0, pane.w / 2.0, pane.h / 2.0);
+        let (ca, pa) = (cam.w as f64 / cam.h.max(1) as f64, pane.w / pane.h.max(1.0));
+        let colour = |fx: f64, fy: f64| -> [f32; 3] {
+            let mut u = (fx - pane.x) / pane.w;
+            let mut v = (fy - pane.y) / pane.h;
+            if mirror {
+                u = 1.0 - u;
             }
-            Corner::TopLeft => (m, m),
-            Corner::TopRight => (self.out_w as f64 - d - m, m),
-            Corner::BottomLeft => (m, self.out_h as f64 - d - m),
-            Corner::BottomRight => (self.out_w as f64 - d - m, self.out_h as f64 - d - m),
+            if ca > pa {
+                u = (u - 0.5) * pa / ca + 0.5;
+            } else {
+                v = (v - 0.5) * ca / pa + 0.5;
+            }
+            cam.sample(u * cam.w as f64, v * cam.h as f64)
         };
-        let r = if w.circle { d / 2.0 } else { d * 0.16 };
-        let (cx, cy, h) = (x0 + d / 2.0, y0 + d / 2.0, d / 2.0);
-        // Soft shadow, then the video, then a thin white ring.
-        for yy in (y0 as i64 - 8)..(y0 + d) as i64 + 12 {
-            for xx in (x0 as i64 - 8)..(x0 + d) as i64 + 8 {
-                let (fx, fy) = (xx as f64 + 0.5, yy as f64 + 0.5);
-                let ds = sd_round_rect(fx, fy - 4.0, cx, cy, h, h, r);
-                if ds > 0.0 && ds < 10.0 {
-                    out.blend(xx, yy, [0.0; 3], (0.22 * (1.0 - ds / 10.0)) as f32);
-                }
-                let dd = sd_round_rect(fx, fy, cx, cy, h, h, r);
-                let cov = (0.5 - dd).clamp(0.0, 1.0) as f32;
-                if cov > 0.0 {
-                    let px = cam.px((fx - x0) as i64, (fy - y0) as i64);
-                    out.blend(xx, yy, [px[0], px[1], px[2]], cov);
-                }
-                let ring = (1.5 - (dd + 1.5).abs()).clamp(0.0, 1.0) as f32;
-                if ring > 0.0 {
-                    out.blend(xx, yy, [255.0; 3], 0.9 * ring);
+        if pane.floating {
+            let (x0, y0, d) = (pane.x, pane.y, pane.w);
+            // Soft shadow, then the video, then a thin white ring.
+            for yy in (y0 as i64 - 8)..(y0 + d) as i64 + 12 {
+                for xx in (x0 as i64 - 8)..(x0 + d) as i64 + 8 {
+                    let (fx, fy) = (xx as f64 + 0.5, yy as f64 + 0.5);
+                    let ds = sd_round_rect(fx, fy - 4.0, cx, cy, hw, hh, pane.radius);
+                    if ds > 0.0 && ds < 10.0 {
+                        out.blend(xx, yy, [0.0; 3], (0.22 * (1.0 - ds / 10.0)) as f32);
+                    }
+                    let dd = sd_round_rect(fx, fy, cx, cy, hw, hh, pane.radius);
+                    let cov = (0.5 - dd).clamp(0.0, 1.0) as f32;
+                    if cov > 0.0 {
+                        out.blend(xx, yy, colour(fx, fy), cov);
+                    }
+                    let ring = (1.5 - (dd + 1.5).abs()).clamp(0.0, 1.0) as f32;
+                    if ring > 0.0 {
+                        out.blend(xx, yy, [255.0; 3], 0.9 * ring);
+                    }
                 }
             }
+            return;
         }
+        let w = self.out_w as usize;
+        let y0 = (pane.y - 1.0).floor().max(0.0) as usize;
+        let y1 = ((pane.y + pane.h + 1.0).ceil() as usize).min(self.out_h as usize);
+        let x0 = (pane.x - 1.0).floor().max(0.0) as usize;
+        let x1 = ((pane.x + pane.w + 1.0).ceil() as usize).min(w);
+        out.data[y0 * w * 4..y1 * w * 4].par_chunks_mut(w * 4).enumerate().for_each(|(i, row)| {
+            let fy = (y0 + i) as f64 + 0.5;
+            for x in x0..x1 {
+                let fx = x as f64 + 0.5;
+                let cov = (0.5 - sd_round_rect(fx, fy, cx, cy, hw, hh, pane.radius)).clamp(0.0, 1.0) as f32;
+                if cov > 0.0 {
+                    let s = colour(fx, fy);
+                    let px = &mut row[x * 4..x * 4 + 4];
+                    for k in 0..3 {
+                        px[k] = (px[k] as f32 + (s[k] - px[k] as f32) * cov).round() as u8;
+                    }
+                }
+            }
+        });
     }
 
     /// The camera for the frame showing source time `src_t`. It is worked out
@@ -625,8 +821,22 @@ impl Renderer {
         camera_at_mapped(p.src_to_out(src_t), &segs, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o))
     }
 
-    /// Render one output frame. `src` must be the source frame at `src_t`.
-    pub fn render(&self, src: &Frame, src_t: f64) -> Frame {
+    /// Render one output frame. `src` must be the source frame at `src_t`;
+    /// `cam` the camera frame for the same moment, when there is a camera.
+    /// Around a change of layout the two layouts are cross-faded.
+    pub fn render(&self, src: &Frame, src_t: f64, cam: Option<&Frame>) -> Frame {
+        let mix = self.scene_at(src_t);
+        let mut f = self.render_scene(self.scene(mix.kind), src, src_t, cam);
+        if let Some((other, k)) = mix.other {
+            if other != mix.kind && k > 0.0 {
+                let g = self.render_scene(self.scene(other), src, src_t, cam);
+                f.mix_from(&g, k as f32);
+            }
+        }
+        f
+    }
+
+    fn render_scene(&self, sc: &Scene, src: &Frame, src_t: f64, cam_frame: Option<&Frame>) -> Frame {
         let p = &self.project;
         // 1. Blur boxes are applied in source space, so they move with zoom.
         let blurs: Vec<&BlurBox> = p.blur.iter().filter(|b| src_t >= b.start_ms && src_t <= b.end_ms).collect();
@@ -654,20 +864,21 @@ impl Renderer {
             &owned
         };
 
-        let cam = self.camera(src_t);
-        let (vx, vy, vw, vh) = cam.view_rect(p.source_width as f64, p.source_height as f64);
+        let zcam = self.camera(src_t);
+        let (vx, vy, vw, vh) = self.view_rect(sc, &zcam, src_t);
         let sx_scale = src.w as f64 / p.source_width as f64;
         let sy_scale = src.h as f64 / p.source_height as f64;
-        let l = self.layout;
+        let l = sc.layout;
         let short = self.out_w.min(self.out_h) as f64;
         let (cx, cy, hw, hh) = (l.x + l.w / 2.0, l.y + l.h / 2.0, l.w / 2.0, l.h / 2.0);
 
         // 2. Zoomed recording over the pre-baked background and shadow. Only the
         // rows and columns the card can touch are visited.
-        let mut out = self.background.clone();
+        let mut out = sc.background.clone();
         let w = self.out_w as usize;
+        let screen = sc.kind != SceneKind::Camera;
         let y0 = (l.y - 1.0).floor().max(0.0) as usize;
-        let y1 = ((l.y + l.h + 1.0).ceil() as usize).min(self.out_h as usize);
+        let y1 = if screen { ((l.y + l.h + 1.0).ceil() as usize).min(self.out_h as usize) } else { y0 };
         let x0 = (l.x - 1.0).floor().max(0.0) as usize;
         let x1 = ((l.x + l.w + 1.0).ceil() as usize).min(w);
         out.data[y0 * w * 4..y1 * w * 4].par_chunks_mut(w * 4).enumerate().for_each(|(i, row)| {
@@ -688,13 +899,21 @@ impl Renderer {
             }
         });
 
+        // A camera panel of the layout (beside, above or full picture) goes
+        // under the overlays; a floating bubble goes over everything.
+        if let (Some(pane), Some(c)) = (sc.cam.filter(|c| !c.floating), cam_frame) {
+            self.draw_cam(&mut out, &pane, c);
+        }
+
         // Source -> output mapping for overlays.
         let to_out = |sx: f64, sy: f64| (l.x + (sx - vx) / vw * l.w, l.y + (sy - vy) / vh * l.h);
         let px_per_src = l.w / vw;
+        // Marks of the recording outside the window shown (a tall picture) are skipped.
+        let within = |x: f64, y: f64| !sc.crop || (x >= l.x - 40.0 && x <= l.x + l.w + 40.0 && y >= l.y - 40.0 && y <= l.y + l.h + 40.0);
         let base = (p.source_width as f64 / 1440.0).max(0.75);
 
         // 3. Click ripples.
-        if p.cursor.click_ripples {
+        if screen && p.cursor.click_ripples {
             let rc = p.cursor.ripple_color.map(|c| c as f32);
             for &(t, x, y) in &self.clicks {
                 if self.touches.iter().any(|&(tt, _, _)| tt == t) {
@@ -706,6 +925,9 @@ impl Renderer {
                 }
                 let k = age / 600.0;
                 let (ox, oy) = to_out(x, y);
+                if !within(ox, oy) {
+                    continue;
+                }
                 let r = (10.0 + 34.0 * (1.0 - (1.0 - k).powi(3))) * base * px_per_src * p.cursor.size / 1.5;
                 let thick = (3.5 * base * px_per_src).max(1.5);
                 let alpha = (0.85 * (1.0 - k)) as f32;
@@ -723,7 +945,7 @@ impl Renderer {
 
         // 3b. Touch: a soft fingertip disc that settles, with one thin ring
         // around it, so a tap reads differently from a mouse click.
-        if p.cursor.click_ripples {
+        if screen && p.cursor.click_ripples {
             let rc = p.cursor.ripple_color.map(|c| c as f32);
             for &(t, x, y) in &self.touches {
                 let age = src_t - t;
@@ -732,6 +954,9 @@ impl Renderer {
                 }
                 let k = age / 700.0;
                 let (ox, oy) = to_out(x, y);
+                if !within(ox, oy) {
+                    continue;
+                }
                 let unit = base * px_per_src * p.cursor.size / 1.5;
                 let r = (24.0 - 6.0 * (1.0 - (1.0 - k).powi(2)).min(1.0) + 4.0 * k) * unit;
                 let ring_r = r * (1.25 + 0.9 * k);
@@ -751,12 +976,15 @@ impl Renderer {
         }
 
         // Where the cursor is in output space (for label placement).
-        let cursor_out = self.track.as_ref().and_then(|tr| tr.smooth_at(src_t, p.cursor.smoothing_ms)).map(|(x, y)| to_out(x, y));
+        let cursor_out = self.track.as_ref().filter(|_| screen).and_then(|tr| tr.smooth_at(src_t, p.cursor.smoothing_ms)).map(|(x, y)| to_out(x, y));
 
         // 4. Cursor (smoothed, optionally bigger).
-        if p.cursor.visible {
+        if screen && p.cursor.visible {
             if let Some(tr) = &self.track {
-                if let Some((sx, sy)) = tr.smooth_at(src_t, p.cursor.smoothing_ms) {
+                if let Some((sx, sy)) = tr.smooth_at(src_t, p.cursor.smoothing_ms).filter(|&(sx, sy)| {
+                    let (ox, oy) = to_out(sx, sy);
+                    within(ox, oy)
+                }) {
                     let (ox, oy) = to_out(sx, sy);
                     let s = p.cursor.size * base * px_per_src;
                     let outline: Vec<(f64, f64)> = ARROW
@@ -828,6 +1056,9 @@ impl Renderer {
         self.draw_shapes(&mut out, src_t);
         self.draw_callouts(&mut out, src_t);
         self.draw_watermark(&mut out);
+        if let (Some(pane), Some(c)) = (sc.cam.filter(|c| c.floating), cam_frame) {
+            self.draw_cam(&mut out, &pane, c);
+        }
         out
     }
 
@@ -1032,7 +1263,7 @@ mod tests {
             let r = Renderer::new(p, Some(&log), 640, 360, None);
             let mut src = Frame::new(64, 36);
             src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[140, 140, 140, 255]));
-            let f = r.render(&src, 600.0);
+            let f = r.render(&src, 600.0, None);
             let mut counts = Vec::new();
             for y in 250..360usize {
                 let mut runs = 0;
@@ -1109,7 +1340,7 @@ mod tests {
         let r = Renderer::new(p, None, 320, 180, None);
         let mut src = Frame::new(64, 36);
         src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[200, 0, 0, 255]));
-        let out = r.render(&src, 0.0);
+        let out = r.render(&src, 0.0, None);
         assert_eq!(&out.data[0..3], &[10, 20, 30]);
         let mid = ((90 * 320 + 160) * 4) as usize;
         assert_eq!(&out.data[mid..mid + 3], &[200, 0, 0]);
@@ -1136,8 +1367,8 @@ mod tests {
         let r = Renderer::new(p, None, 320, 180, None);
         let mut src = Frame::new(64, 36);
         src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[0, 0, 255, 255]));
-        let a = r.render(&src, 0.0);
-        let b = r.render(&src, 500.0);
+        let a = r.render(&src, 0.0, None);
+        let b = r.render(&src, 500.0, None);
         assert_eq!(a.data, b.data, "frames are deterministic");
         let below = ((((r.layout.y + r.layout.h) as usize + 2) * 320 + 160) * 4) as usize;
         assert!(a.data[below] < 200, "shadow under the card");
@@ -1157,7 +1388,7 @@ mod tests {
             let v = if (i % 100) % 2 == 0 { 255 } else { 0 };
             c.copy_from_slice(&[v, v, v, 255]);
         }
-        let out = r.render(&src, 10.0);
+        let out = r.render(&src, 10.0, None);
         let px = |x: usize, y: usize| out.data[(y * 200 + x) * 4] as i32;
         // Left half (blurred) is smooth, right half keeps contrast.
         assert!((px(40, 50) - px(42, 50)).abs() < 40);
@@ -1184,10 +1415,10 @@ mod webcam_layout_tests {
         let bubble = Renderer::new(project(WebcamLayout::Bubble, Corner::BottomLeft), None, 1280, 720, None);
         let side = Renderer::new(project(WebcamLayout::Side, Corner::BottomLeft), None, 1280, 720, None);
         assert!(side.layout.w < bubble.layout.w);
-        let cam_right_edge = 720.0 * 0.035 / 1.0 + side.webcam_size() as f64;
+        let cam_right_edge = 720.0 * 0.035 / 1.0 + side.scenes[0].cam.unwrap().w;
         assert!(side.layout.x >= cam_right_edge - 1.0, "screen starts at {} but the camera ends at {}", side.layout.x, cam_right_edge);
         let right = Renderer::new(project(WebcamLayout::Side, Corner::TopRight), None, 1280, 720, None);
-        assert!(right.layout.x + right.layout.w <= 1280.0 - right.webcam_size() as f64);
+        assert!(right.layout.x + right.layout.w <= 1280.0 - right.scenes[0].cam.unwrap().w);
     }
 }
 
@@ -1203,9 +1434,9 @@ mod watermark_tests {
         p.watermark = Some(Watermark { text: "acme.com".into(), opacity: 1.0, ..Default::default() });
         let r = Renderer::new(p.clone(), None, 640, 360, None);
         let src = Frame { w: 640, h: 360, data: vec![0; 640 * 360 * 4].chunks_exact_mut(4).flat_map(|_| [10u8, 10, 10, 255]).collect() };
-        let with = r.render(&src, 0.0);
+        let with = r.render(&src, 0.0, None);
         p.watermark = None;
-        let without = Renderer::new(p, None, 640, 360, None).render(&src, 0.0);
+        let without = Renderer::new(p, None, 640, 360, None).render(&src, 0.0, None);
         let diff = |x0: usize, x1: usize, y0: usize, y1: usize| (y0..y1).any(|y| (x0..x1).any(|x| with.data[(y * 640 + x) * 4] != without.data[(y * 640 + x) * 4]));
         assert!(diff(480, 640, 300, 360), "nothing drawn in the bottom right");
         assert!(!diff(0, 320, 0, 180), "something drawn far from the corner");
@@ -1244,9 +1475,9 @@ mod callout_tests {
         p.callouts.push(Callout { text: "Click here".into(), start_ms: 1000.0, end_ms: 4000.0, x: 0.5, y: 0.8 });
         let r = Renderer::new(p, None, 640, 360, None);
         let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
-        let before = r.render(&src, 500.0);
-        let during = r.render(&src, 2500.0);
-        let after = r.render(&src, 4500.0);
+        let before = r.render(&src, 500.0, None);
+        let during = r.render(&src, 2500.0, None);
+        let after = r.render(&src, 4500.0, None);
         assert_eq!(before.data, after.data);
         assert_ne!(before.data, during.data);
     }
@@ -1267,7 +1498,7 @@ mod shape_tests {
         p.shapes.push(shape(kind));
         let r = Renderer::new(p, None, 640, 360, None);
         let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
-        (r.render(&src, 500.0), r.render(&src, 2500.0), r.render(&src, 4500.0))
+        (r.render(&src, 500.0, None), r.render(&src, 2500.0, None), r.render(&src, 4500.0, None))
     }
 
     #[test]
@@ -1403,14 +1634,220 @@ mod glass_tests {
         let mut p = Project::new("a.mp4".into(), None, 640, 360, 4000.0);
         p.callouts.push(Callout { text: "Hello".into(), x: 0.5, y: 0.5, start_ms: 0.0, end_ms: 3000.0 });
         let src = checker(640, 360);
-        let flat = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0);
+        let flat = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0, None);
         p.style.glass.enabled = true;
         p.style.glass.overlays = true;
-        let glass = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0);
+        let glass = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0, None);
         assert_ne!(flat.data, glass.data);
         // With overlays off the callout pill is the flat one again; only the frame differs.
         p.style.glass.overlays = false;
         let no_overlay = Renderer::new(p, None, 640, 360, None);
         assert!(no_overlay.panel.is_some());
+    }
+}
+
+#[cfg(test)]
+mod layout_scene_tests {
+    use super::*;
+    use crate::project::{Aspect, Corner, SceneSegment, Webcam};
+
+    fn grey(w: u32, h: u32, v: u8) -> Frame {
+        Frame { w, h, data: (0..w * h).flat_map(|_| [v, v, v, 255]).collect() }
+    }
+
+    fn with_camera() -> Project {
+        let mut p = Project::new("a.mp4".into(), None, 1920, 1080, 10_000.0);
+        p.style.padding = 0.0;
+        p.style.corner_radius = 0.0;
+        p.style.shadow = 0.0;
+        p.cursor.visible = false;
+        let mut w = Webcam::new("c.mkv".into());
+        w.corner = Corner::BottomRight;
+        p.webcam = Some(w);
+        p
+    }
+
+    fn px(f: &Frame, x: usize, y: usize) -> u8 {
+        f.data[(y * f.w as usize + x) * 4]
+    }
+
+    #[test]
+    fn a_project_without_a_camera_is_always_the_screen() {
+        let mut p = with_camera();
+        p.webcam = None;
+        p.layouts.segments.push(SceneSegment { start_ms: 1000.0, end_ms: 2000.0, kind: SceneKind::Camera });
+        assert_eq!(p.scene_runs().len(), 1);
+        assert_eq!(p.scene_at(1500.0).kind, SceneKind::Screen);
+    }
+
+    #[test]
+    fn segments_fill_the_recording_and_the_base_layout_is_between_them() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Screen);
+        p.layouts.segments = vec![
+            SceneSegment { start_ms: 2000.0, end_ms: 4000.0, kind: SceneKind::Camera },
+            SceneSegment { start_ms: 3000.0, end_ms: 6000.0, kind: SceneKind::Split },
+        ];
+        let runs = p.scene_runs();
+        let kinds: Vec<_> = runs.iter().map(|r| (r.start_ms, r.end_ms, r.kind)).collect();
+        assert_eq!(kinds, vec![(0.0, 2000.0, SceneKind::Screen), (2000.0, 4000.0, SceneKind::Camera), (4000.0, 6000.0, SceneKind::Split), (6000.0, 10_000.0, SceneKind::Screen)]);
+        assert!(runs.windows(2).all(|w| (w[0].end_ms - w[1].start_ms).abs() < 1e-9));
+    }
+
+    #[test]
+    fn the_layouts_fade_into_each_other_around_the_change_and_not_elsewhere() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Screen);
+        p.layouts.transition_ms = 400.0;
+        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera }];
+        assert_eq!(p.scene_at(1000.0).other, None);
+        assert_eq!(p.scene_at(3700.0).other, None);
+        let (k_before, k_mid, k_after) = (p.scene_at(3850.0), p.scene_at(4000.0), p.scene_at(4150.0));
+        assert_eq!(k_before.kind, SceneKind::Screen);
+        assert!(k_before.other.unwrap().1 < 0.5 && k_before.other.unwrap().1 > 0.0);
+        assert!((k_mid.other.unwrap().1 - 0.5).abs() < 0.02, "half way at the change");
+        assert!(k_after.other.is_some_and(|(_, k)| k > 0.5 && k < 1.0));
+        assert_eq!(p.scene_at(4300.0).other, None);
+        assert_eq!(p.scene_at(4300.0).kind, SceneKind::Camera);
+        // Never a jump: the mix is continuous across the change.
+        let mut last = 0.0;
+        for i in 0..80 {
+            let m = p.scene_at(3800.0 + i as f64 * 5.0);
+            let k = match (m.kind, m.other) {
+                (SceneKind::Screen, Some((_, k))) => k,
+                (SceneKind::Screen, None) => 0.0,
+                (_, Some((_, k))) => k,
+                (_, None) => 1.0,
+            };
+            assert!(k >= last - 1e-9 && k - last < 0.12, "{k} after {last}");
+            last = k;
+        }
+        p.layouts.transition_ms = 0.0;
+        assert_eq!(p.scene_at(3999.0).other, None);
+    }
+
+    #[test]
+    fn the_camera_fills_the_picture_in_the_camera_layout_and_the_screen_does_not_show() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Camera);
+        let r = Renderer::new(p, None, 640, 360, None);
+        let screen = grey(640, 360, 200);
+        let cam = grey(320, 240, 40);
+        let f = r.render(&screen, 100.0, Some(&cam));
+        assert_eq!(px(&f, 320, 180), 40);
+        assert_eq!(px(&f, 5, 5), 40);
+        // No camera frame yet: no screen either, only the backdrop.
+        let none = r.render(&screen, 100.0, None);
+        assert_ne!(px(&none, 320, 180), 200);
+    }
+
+    #[test]
+    fn the_split_layout_puts_the_camera_above_the_screen_in_a_tall_picture() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Split);
+        p.webcam.as_mut().unwrap().corner = Corner::TopLeft;
+        let (w, h) = Aspect::Portrait.size(720);
+        let r = Renderer::new(p, None, w, h, None);
+        let sc = &r.scenes[0];
+        let cam = sc.cam.unwrap();
+        assert!(!cam.floating && cam.y < sc.layout.y);
+        assert!(cam.y + cam.h <= sc.layout.y, "the camera is clear of the screen");
+        assert!(sc.crop, "a tall pane shows a window of the screen");
+        let f = r.render(&grey(1920, 1080, 200), 100.0, Some(&grey(320, 240, 40)));
+        assert_eq!(px(&f, (cam.x + cam.w / 2.0) as usize, (cam.y + cam.h / 2.0) as usize), 40);
+        assert_eq!(px(&f, (sc.layout.x + sc.layout.w / 2.0) as usize, (sc.layout.y + sc.layout.h / 2.0) as usize), 200);
+    }
+
+    #[test]
+    fn a_crossfade_between_layouts_is_between_the_two_pictures() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Screen);
+        p.layouts.transition_ms = 400.0;
+        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera }];
+        let r = Renderer::new(p, None, 320, 180, None);
+        let (screen, cam) = (grey(1920, 1080, 220), grey(320, 240, 20));
+        let before = px(&r.render(&screen, 3000.0, Some(&cam)), 160, 90);
+        let mid = px(&r.render(&screen, 4000.0, Some(&cam)), 160, 90);
+        let after = px(&r.render(&screen, 5000.0, Some(&cam)), 160, 90);
+        assert_eq!((before, after), (220, 20));
+        assert!(mid > 90 && mid < 150, "mid {mid}");
+    }
+
+    fn drifting_cursor() -> crate::events::EventLog {
+        use crate::events::{Event, EventKind};
+        let mut log = crate::events::EventLog::new(1920, 1080);
+        log.events.clear();
+        // Cursor sits at the far left for 5 s, then moves to the far right and stays.
+        for i in 0..=200 {
+            let t = i as f64 * 50.0;
+            let x = if t < 5000.0 { 100.0 } else { (100.0 + (t - 5000.0) * 1.0).min(1800.0) };
+            log.events.push(Event { t, kind: EventKind::Move { x, y: 540.0 } });
+        }
+        log
+    }
+
+    #[test]
+    fn a_window_of_the_screen_follows_the_cursor_in_a_tall_picture() {
+        let log = drifting_cursor();
+        let mut p = with_camera();
+        p.webcam = None;
+        p.layouts.base = Some(SceneKind::Screen);
+        let r = Renderer::new(p, Some(&log), 720, 1280, None);
+        let sc = &r.scenes[0];
+        assert!(sc.crop);
+        let cam = r.camera(1000.0);
+        let (x1, _, w1, _) = r.view_rect(sc, &cam, 1000.0);
+        let (x2, _, w2, _) = r.view_rect(sc, &r.camera(9500.0), 9500.0);
+        assert!(w1 < 1920.0 * 0.4, "a narrow window, not the whole screen: {w1}");
+        assert!((w1 - w2).abs() < 1e-6);
+        assert!(x1 <= 100.0 && x1 >= 0.0, "left at first: {x1}");
+        assert!(x2 + w2 > 1500.0, "right at the end: {}", x2 + w2);
+        // The window never leaves the screen and never jumps between frames.
+        let mut last = x1;
+        for i in 0..400 {
+            let t = 1000.0 + i as f64 * 25.0;
+            let (x, _, w, _) = r.view_rect(sc, &r.camera(t), t);
+            assert!(x >= -1e-6 && x + w <= 1920.0 + 1e-6);
+            assert!((x - last).abs() < 25.0, "moved {} in one step at {t}", (x - last).abs());
+            last = x;
+        }
+    }
+
+    #[test]
+    fn follow_cursor_can_be_turned_off_to_fit_the_whole_screen() {
+        let mut p = with_camera();
+        p.webcam = None;
+        p.layouts.follow_cursor = false;
+        let r = Renderer::new(p, None, 720, 1280, None);
+        assert!(!r.scenes[0].crop);
+        assert!((r.scenes[0].layout.w / r.scenes[0].layout.h - 1920.0 / 1080.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_landscape_picture_still_fits_the_whole_screen() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Split);
+        let r = Renderer::new(p, None, 1280, 720, None);
+        assert!(!r.scenes[0].crop);
+    }
+
+    #[test]
+    fn a_square_picture_follows_the_cursor_too() {
+        let mut p = with_camera();
+        p.webcam = None;
+        let (w, h) = Aspect::Square.size(720);
+        let r = Renderer::new(p, None, w, h, None);
+        assert!(r.scenes[0].crop);
+    }
+
+    #[test]
+    fn the_camera_is_decoded_no_bigger_than_it_is_and_no_bigger_than_needed() {
+        let mut p = with_camera();
+        p.layouts.base = Some(SceneKind::Camera);
+        let r = Renderer::new(p.clone(), None, 1920, 1080, None);
+        assert_eq!(r.cam_decode_size((640, 480)), (640, 480));
+        let r = Renderer::new(with_camera(), None, 1920, 1080, None);
+        let (w, h) = r.cam_decode_size((1920, 1080));
+        assert!(w < 1920 && h < 1080 && w % 2 == 0 && h % 2 == 0);
     }
 }
