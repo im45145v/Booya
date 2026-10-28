@@ -166,7 +166,7 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     // 30 s windows are the usual place where fast, continuous speech loses
     // whole sentences; here every second is heard by at least one full chunk.
     let chunks = plan_chunks(compacted.len(), 16_000);
-    let parts = run_ranges(&compacted, model, language, &prompt, &chunks)?;
+    let parts = run_ranges(&compacted, model, language, &prompt, &chunks, false)?;
     let mut words = merge_chunks(&chunks, parts, 16_000);
     for w in &mut words {
         w.start_ms = uncompact_ms(w.start_ms, &map, 16_000);
@@ -184,12 +184,27 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     let holes: Vec<(f64, f64)> = uncovered(&words, &tight, 1_500.0).into_iter().flat_map(|h| split_hole(h, 7_000.0)).collect();
     if !holes.is_empty() {
         let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
-        if let Ok(found) = run_ranges(&audio, model, language, &prompt, &ranges) {
+        let mut found = run_ranges(&audio, model, language, &prompt, &ranges, false).unwrap_or_default();
+        // A stretch that still gave fewer than two words is heard once more,
+        // this time without whisper's "this is not speech" shortcut.
+        let again: Vec<usize> = (0..ranges.len()).filter(|&i| found.get(i).map(|w| w.iter().filter(|w| !demolens_core::captions::is_nonspeech(&w.text)).count() < 2).unwrap_or(true)).collect();
+        if !again.is_empty() {
+            let rs: Vec<(usize, usize)> = again.iter().map(|&i| ranges[i]).collect();
+            if let Ok(second) = run_ranges(&audio, model, language, &prompt, &rs, true) {
+                for (i, ws) in again.into_iter().zip(second) {
+                    if found.len() <= i {
+                        found.resize(i + 1, Vec::new());
+                    }
+                    found[i] = ws;
+                }
+            }
+        }
+        {
             for (((a, b), (from, to)), ws) in holes.iter().zip(&ranges).zip(found) {
                 // Whisper's times are from the start of the stretch it was given.
                 let off = *from as f64 * 1000.0 / 16_000.0;
                 let end = *to as f64 * 1000.0 / 16_000.0;
-                let mut ws: Vec<CaptionWord> = ws
+                let ws: Vec<CaptionWord> = ws
                     .into_iter()
                     .map(|mut w| {
                         w.start_ms += off;
@@ -198,11 +213,10 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
                     })
                     .filter(|w| !demolens_core::captions::is_nonspeech(&w.text))
                     .collect();
-                let spread = respread_if_implausible(&mut ws, &tight, off, end);
+                let mut ws = place_heard_again(ws, &tight, (*a, *b), (off, end));
                 if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
-                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again{} {:?}", if spread { " (times spread)" } else { "" }, ws.iter().map(|w| (w.text.as_str(), w.start_ms.round())).collect::<Vec<_>>());
+                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again {:?}", ws.iter().map(|w| (w.text.as_str(), w.start_ms.round())).collect::<Vec<_>>());
                 }
-                ws.retain(|w| w.start_ms >= a - 100.0 && w.start_ms < *b);
                 if ws.len() >= 2 && !only_hallucination(&ws) {
                     words.append(&mut ws);
                 }
@@ -213,8 +227,7 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
         eprintln!("transcribe: voiced {voiced:?}\ntranscribe: onsets {tight:?}\ntranscribe: raw {:?}", words.iter().map(|w| (w.text.as_str(), w.start_ms.round(), w.end_ms.round())).collect::<Vec<_>>());
     }
-    retime_implausible(&mut words, &voiced);
-    anchor_to_voice(&mut words, &tight);
+    fix_times(&mut words, &voiced, &tight);
     if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
         eprintln!("transcribe: retimed {:?}", words.iter().map(|w| (w.text.as_str(), w.start_ms.round(), w.end_ms.round())).collect::<Vec<_>>());
     }
@@ -225,6 +238,75 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
         let _ = write_private(&cache, &s);
     }
     Ok(words)
+}
+
+
+/// Brings whisper's word times onto the voice. Whisper's word times are
+/// crude: a small model can hold one word over several seconds and then pile
+/// everything after it into one instant, or past the end of the audio. The
+/// words are right but their times are not, and a caption with no time on
+/// screen never shows, so a whole sentence went missing.
+///
+/// The steps: spread local pile-ups over the voice they belong to; when the
+/// times as a whole cannot be believed (see `times_are_unbelievable`) lay all
+/// the words over the voiced stretches in proportion to their length instead;
+/// finally move any word still sitting in silence onto the voice.
+pub fn fix_times(words: &mut Vec<CaptionWord>, voiced: &[(f64, f64)], tight: &[(f64, f64)]) {
+    retime_implausible(words, voiced);
+    if times_are_unbelievable(words, tight) {
+        respread_all(words, tight);
+    }
+    anchor_to_voice(words, tight);
+    // A caption needs a moment on screen: no word may end up with no time.
+    for i in 0..words.len() {
+        let next = words.get(i + 1).map(|n| n.start_ms).unwrap_or(f64::MAX);
+        let w = &mut words[i];
+        if w.end_ms - w.start_ms < 60.0 {
+            w.end_ms = (w.start_ms + 60.0).min(next.max(w.start_ms + 20.0));
+        }
+    }
+}
+
+/// Proportional positions of the words over the voice: each takes a share of
+/// the voiced time in proportion to its length.
+fn proportional(words: &[CaptionWord], voiced: &[(f64, f64)]) -> Option<Vec<CaptionWord>> {
+    let total: f64 = voiced.iter().map(|v| v.1 - v.0).sum();
+    if words.len() < 4 || total < 80.0 * words.len() as f64 {
+        return None;
+    }
+    let mut v = words.to_vec();
+    spread(&mut v, voiced, total);
+    Some(v)
+}
+
+/// True when the times could not be what was spoken: words after the voice
+/// has ended, a run of words with no duration, or words more than a few
+/// seconds from where their share of the voice puts them.
+pub fn times_are_unbelievable(words: &[CaptionWord], voiced: &[(f64, f64)]) -> bool {
+    let Some(end) = voiced.last().map(|v| v.1) else { return false };
+    let Some(reference) = proportional(words, voiced) else { return false };
+    let late = words.iter().filter(|w| w.start_ms > end + 500.0).count();
+    let mut squashed = 0;
+    let mut run = 0;
+    for w in words {
+        if w.end_ms - w.start_ms < 40.0 {
+            run += 1;
+            squashed = squashed.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    // Only meaningful when the words run to the end of the voice. A transcript
+    // that stops early (words missing) has correct times for what it has.
+    let reaches = words.last().map(|w| w.end_ms >= end - 1_500.0).unwrap_or(false);
+    let far = if reaches { words.iter().zip(&reference).filter(|(w, r)| (w.start_ms - r.start_ms).abs() > 3_500.0).count() } else { 0 };
+    late >= 1 || squashed >= 3 || far >= 2
+}
+
+fn respread_all(words: &mut Vec<CaptionWord>, voiced: &[(f64, f64)]) {
+    if let Some(v) = proportional(words, voiced) {
+        *words = v;
+    }
 }
 
 /// Where the voice really is, in ms: runs of at least 60 ms that are clearly
@@ -503,6 +585,36 @@ pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)],
     true
 }
 
+/// Words heard again in a hole `(a, b)` of the voice, placed inside it. Whisper
+/// often gets the words right but stamps them late (or past the end of the
+/// short clip it was given), and dropping words by their time lost whole
+/// sentences. Words that fall outside the hole, or whose times are not
+/// believable, are laid over the voice in the hole instead. `window` is the
+/// stretch of audio that was heard (from, to), in ms.
+pub fn place_heard_again(mut ws: Vec<CaptionWord>, voiced: &[(f64, f64)], (a, b): (f64, f64), window: (f64, f64)) -> Vec<CaptionWord> {
+    if ws.len() < 2 {
+        return ws;
+    }
+    let outside = ws.iter().filter(|w| w.start_ms < a - 100.0 || w.start_ms >= b).count();
+    if outside > 0 {
+        let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(x, y)| (x.max(a) < y.min(b)).then(|| (x.max(a), y.min(b)))).collect();
+        let total: f64 = pieces.iter().map(|(x, y)| y - x).sum();
+        if total >= 60.0 * ws.len() as f64 {
+            spread(&mut ws, &pieces, total);
+        } else {
+            // Not enough voice to lay them over: keep them in the hole in order.
+            let slot = (b - a) / ws.len() as f64;
+            for (i, w) in ws.iter_mut().enumerate() {
+                w.start_ms = a + slot * i as f64;
+                w.end_ms = w.start_ms + slot * 0.95;
+            }
+        }
+    } else {
+        respread_if_implausible(&mut ws, voiced, window.0, window.1);
+    }
+    ws
+}
+
 /// A voiced stretch with nothing transcribed, cut into pieces of at most
 /// `max_ms` (whisper tiny does much better on a few seconds than on ten).
 pub fn split_hole((a, b): (f64, f64), max_ms: f64) -> Vec<(f64, f64)> {
@@ -548,7 +660,7 @@ pub fn normalise_for_speech(mut audio: Vec<f32>) -> Vec<f32> {
 /// Run whisper over each range (start, end in samples) of `audio`. The words of
 /// range k come back in ms from the start of that range.
 #[cfg(feature = "whisper")]
-fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str, ranges: &[(usize, usize)]) -> Result<Vec<Vec<CaptionWord>>> {
+fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str, ranges: &[(usize, usize)], lenient: bool) -> Result<Vec<Vec<CaptionWord>>> {
     use anyhow::Context;
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -576,11 +688,13 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
         p.set_no_context(true);
         p.set_suppress_blank(true);
         // Less eager to call a window "no speech": fast talkers read as quiet.
-        p.set_no_speech_thold(0.35);
+        // A lenient pass (used on stretches where the voice is plainly on
+        // but nothing was written) never gives up on a window as "no speech".
+        p.set_no_speech_thold(if lenient { 1.0 } else { 0.35 });
         p.set_temperature(0.0);
-        p.set_temperature_inc(0.2);
+        p.set_temperature_inc(if lenient { 0.4 } else { 0.2 });
         p.set_entropy_thold(2.4);
-        p.set_logprob_thold(-1.0);
+        p.set_logprob_thold(if lenient { -2.0 } else { -1.0 });
         p.set_print_progress(false);
         p.set_print_realtime(false);
         p.set_print_special(false);
@@ -602,12 +716,12 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
 }
 
 #[cfg(not(feature = "whisper"))]
-fn run_ranges(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: &str, _ranges: &[(usize, usize)]) -> Result<Vec<Vec<CaptionWord>>> {
+fn run_ranges(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: &str, _ranges: &[(usize, usize)], _lenient: bool) -> Result<Vec<Vec<CaptionWord>>> {
     anyhow::bail!("this build of DemoLens has no speech recognition (built without the 'whisper' feature)")
 }
 
 fn run_whisper(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str) -> Result<Vec<CaptionWord>> {
-    Ok(run_ranges(audio, model, language, prompt, &[(0, audio.len())])?.into_iter().next().unwrap_or_default())
+    Ok(run_ranges(audio, model, language, prompt, &[(0, audio.len())], false)?.into_iter().next().unwrap_or_default())
 }
 
 /// Load the model and run it over one second of silence. Proves the file is a
@@ -951,5 +1065,67 @@ mod tests {
         let stretched = vec![word("you", 1_320.0, 7_800.0)];
         assert_eq!(uncovered(&stretched, &voiced, 2_000.0), vec![(2_320.0, 7_880.0)]);
         assert!(uncovered(&[], &[], 2_000.0).is_empty());
+    }
+
+    /// The voice of the 20 s clip a user sent: a pause at the start, three
+    /// stretches of talking (about 6 s, 6 s and 3 s) and silence to the end.
+    fn clip_voice() -> Vec<(f64, f64)> {
+        vec![(1420.0, 2080.0), (2680.0, 7360.0), (8360.0, 10740.0), (10960.0, 14520.0), (15380.0, 15900.0), (16480.0, 17000.0)]
+    }
+
+    #[test]
+    fn a_sentence_whisper_stamped_after_the_voice_is_still_shown() {
+        // What the small model gave for that clip: the middle sentence drifts
+        // later and later, and the last dozen words are all stamped at the very
+        // end of the file (20.27 s), where no one is talking.
+        let spec: &[(&str, f64, f64)] = &[
+            ("So", 170.0, 510.0), ("I'm", 510.0, 1420.0), ("just", 1420.0, 1700.0), ("trying", 1700.0, 2770.0), ("to", 2770.0, 3070.0), ("check", 3070.0, 3930.0),
+            ("my", 3930.0, 4270.0), ("mic", 4270.0, 4780.0), ("and", 4780.0, 5290.0), ("this", 5290.0, 5970.0), ("is", 5970.0, 6310.0), ("how", 6310.0, 6820.0),
+            ("we", 6820.0, 7160.0), ("can", 7160.0, 8350.0), ("join", 8350.0, 8360.0), ("the", 8360.0, 8970.0), ("permissions.", 8970.0, 11260.0),
+            ("And", 11260.0, 11770.0), ("this", 11770.0, 12450.0), ("is", 12450.0, 12940.0), ("where", 12940.0, 13670.0), ("you", 13670.0, 14150.0),
+            ("can", 14150.0, 15350.0), ("find", 15350.0, 15390.0), ("my", 15390.0, 15690.0), ("phone", 15690.0, 16550.0), ("and", 16550.0, 17740.0), ("then", 17740.0, 17740.0),
+            ("if", 17740.0, 18080.0), ("you", 18080.0, 18630.0), ("click", 18630.0, 19450.0), ("on", 19450.0, 19790.0), ("others,", 19790.0, 20260.0),
+            ("you", 20260.0, 20260.0), ("will", 20260.0, 20260.0), ("get", 20260.0, 20260.0), ("a", 20260.0, 20260.0), ("prompt", 20260.0, 20260.0), ("like", 20260.0, 20260.0),
+            ("this.", 20260.0, 20260.0), ("Let's", 20260.0, 20260.0), ("see.", 20260.0, 20260.0), ("Thank", 20260.0, 20260.0), ("you.", 20260.0, 30000.0),
+        ];
+        let mut words: Vec<CaptionWord> = spec.iter().map(|&(t, a, b)| word(t, a, b)).collect();
+        let voiced = clip_voice();
+        fix_times(&mut words, &voiced, &voiced);
+        let end = voiced.last().unwrap().1;
+        for (i, w) in words.iter().enumerate() {
+            assert!(w.start_ms <= end + 200.0, "{} starts at {} after the voice ended ({end})", w.text, w.start_ms);
+            assert!(w.end_ms - w.start_ms >= 60.0, "{} has no time: {w:?}", w.text);
+            assert!(i == 0 || w.start_ms >= words[i - 1].start_ms, "words stay in order at {}", w.text);
+        }
+        // Every sentence is on screen while it is said.
+        let at = |t: &str| words.iter().find(|w| w.text == t).unwrap().start_ms;
+        assert!(at("find") < 14_600.0 && at("find") > 8_300.0, "the middle sentence is where the voice is: {}", at("find"));
+        assert!(at("Thank") > 15_300.0, "{}", at("Thank"));
+        let caps = demolens_core::captions::words_to_captions(&words, 42, 900.0);
+        assert!(caps.iter().all(|c| c.end_ms - c.start_ms >= 500.0), "{:?}", caps.iter().map(|c| (c.start_ms, c.end_ms, &c.text)).collect::<Vec<_>>());
+        // Nothing is on screen with no one speaking for long, and the 8 to 13 s stretch has captions.
+        let covered = |t: f64| caps.iter().any(|c| t >= c.start_ms && t < c.end_ms);
+        assert!((8_500..14_000).step_by(250).all(|t| covered(t as f64)), "a stretch of speech has no caption");
+    }
+
+    #[test]
+    fn words_heard_again_for_a_hole_are_placed_inside_it_not_thrown_away() {
+        // Whisper heard the hole again but stamped the words past its end.
+        let heard: Vec<CaptionWord> = ["and", "this", "is", "where", "you", "can", "find"].iter().enumerate().map(|(i, t)| word(t, 14_000.0 + i as f64 * 20.0, 14_015.0 + i as f64 * 20.0)).collect();
+        let voiced = clip_voice();
+        let placed = place_heard_again(heard, &voiced, (8360.0, 10740.0), (8060.0, 11040.0));
+        assert_eq!(placed.len(), 7, "no word is dropped");
+        assert!(placed.iter().all(|w| w.start_ms >= 8_260.0 && w.start_ms < 10_740.0), "{:?}", placed.iter().map(|w| w.start_ms).collect::<Vec<_>>());
+        assert!(placed.windows(2).all(|p| p[1].start_ms > p[0].start_ms));
+    }
+
+    #[test]
+    fn believable_times_are_left_alone() {
+        let voiced = clip_voice();
+        let spec: &[(&str, f64, f64)] = &[("So", 1450.0, 1700.0), ("I'm", 1700.0, 2000.0), ("just", 2700.0, 3000.0), ("trying", 3000.0, 3400.0), ("to", 3400.0, 3500.0), ("check", 3500.0, 4000.0)];
+        let mut words: Vec<CaptionWord> = spec.iter().map(|&(t, a, b)| word(t, a, b)).collect();
+        let before = words.clone();
+        fix_times(&mut words, &voiced, &voiced);
+        assert_eq!(words, before);
     }
 }

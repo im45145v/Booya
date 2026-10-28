@@ -82,24 +82,24 @@ pub fn remap_project(p: &mut Project, sp: &Splice, take: &Project, scale: f64) {
             continue;
         }
         if c.src_start_ms >= until {
-            after.push(Clip { src_start_ms: c.src_start_ms + d, src_end_ms: c.src_end_ms + d, speed: c.speed });
+            after.push(Clip { src_start_ms: c.src_start_ms + d, src_end_ms: c.src_end_ms + d, speed: c.speed, mute: c.mute });
             continue;
         }
         if c.src_start_ms < at {
-            before.push(Clip { src_start_ms: c.src_start_ms, src_end_ms: at, speed: c.speed });
+            before.push(Clip { src_start_ms: c.src_start_ms, src_end_ms: at, speed: c.speed, mute: c.mute });
         }
         if c.src_end_ms > until {
-            after.push(Clip { src_start_ms: until + d, src_end_ms: c.src_end_ms + d, speed: c.speed });
+            after.push(Clip { src_start_ms: until + d, src_end_ms: c.src_end_ms + d, speed: c.speed, mute: c.mute });
         }
     }
     let mut mid: Vec<Clip> = take
         .clips
         .iter()
-        .map(|c| Clip { src_start_ms: c.src_start_ms + at, src_end_ms: c.src_end_ms.min(sp.take_ms) + at, speed: c.speed })
+        .map(|c| Clip { src_start_ms: c.src_start_ms + at, src_end_ms: c.src_end_ms.min(sp.take_ms) + at, speed: c.speed, mute: c.mute })
         .filter(|c| c.src_end_ms - c.src_start_ms >= 1.0)
         .collect();
     if mid.is_empty() {
-        mid.push(Clip { src_start_ms: at, src_end_ms: at + sp.take_ms, speed: 1.0 });
+        mid.push(Clip { src_start_ms: at, src_end_ms: at + sp.take_ms, speed: 1.0, mute: false });
     }
     before.retain(|c| c.src_end_ms - c.src_start_ms >= 1.0);
     after.retain(|c| c.src_end_ms - c.src_start_ms >= 1.0);
@@ -385,7 +385,7 @@ mod tests {
 
     fn proj(clips: Vec<(f64, f64, f64)>, dur: f64) -> Project {
         let mut p = Project::new("a.mp4".into(), None, 1920, 1080, dur);
-        p.clips = clips.into_iter().map(|(a, b, s)| Clip { src_start_ms: a, src_end_ms: b, speed: s }).collect();
+        p.clips = clips.into_iter().map(|(a, b, s)| Clip { src_start_ms: a, src_end_ms: b, speed: s, mute: false }).collect();
         p
     }
 

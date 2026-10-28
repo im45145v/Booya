@@ -130,6 +130,31 @@ jobs:
           $left = Get-Process -Name ffmpeg, ffprobe -ErrorAction SilentlyContinue
           if ($left) { $left | Format-Table; throw "ffmpeg or ffprobe is still running after the run" }
           "### Windows capture, doctor and export`n`nPassed: doctor, sources, screen and area capture, export, no leftover processes." | Out-File -Append $env:GITHUB_STEP_SUMMARY
+      - name: Windows microphone pipeline (no device on the runner)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          # The runner has no microphone, or a virtual one. Either way the
+          # pipeline has to finish and say what happened, never stay silent.
+          $out = & "$PWD\target\release\demolens.exe" doctor --audio --seconds 2 | Out-String
+          $code = $LASTEXITCODE
+          $out
+          $r = $out | ConvertFrom-Json
+          if (-not $r.backend) { throw "doctor --audio did not say which backend it used" }
+          if ($r.ok) { "A microphone recorded: peak $($r.peak_db) dBFS via $($r.backend)" }
+          else {
+            if ($code -ne 1) { throw "doctor --audio should exit 1 when the mic did not record" }
+            if (-not "$($r.message)".StartsWith('Mic not recorded')) { throw "the failure was not explained: $($r.message)" }
+            if (-not (Test-Path $r.log)) { throw "no audio.log was written" }
+            "Surfaced as expected: $($r.message)"
+          }
+          Start-Sleep -Seconds 1
+          if (Get-Process -Name ffmpeg -ErrorAction SilentlyContinue) { throw "ffmpeg is still running after the microphone check" }
+          "### Windows microphone pipeline`n`n$($r.backend): $($r.message)$($r.peak_db)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          # The failure above was expected; do not let its exit code become the step's.
+          $global:LASTEXITCODE = 0
+          exit 0
       - name: Speed numbers (macOS, VideoToolbox)
         if: runner.os == 'macOS'
         continue-on-error: true
@@ -222,6 +247,10 @@ jobs:
         run: cargo run -q -p demolens-core --example e2e_fixture -- "$RUNNER_TEMP/fx" speech
       - name: The editor can be heard
         run: python3 tests/e2e/test_audio.py "$RUNNER_TEMP/fx"
+      - name: Permissions screen
+        run: python3 tests/e2e/test_permissions.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
+      - name: Frames, music and clip mute controls
+        run: python3 tests/e2e/test_editing_ui.py "$RUNNER_TEMP/fx"
       - name: Window sizes and splitters
         run: python3 tests/e2e/test_layout.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layout lane and controls

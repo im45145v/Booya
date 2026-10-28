@@ -139,6 +139,50 @@ def test_no_sound_in_the_recording(pw, fx):
         s.close()
 
 
+def test_native_player_is_driven_and_corrected(pw, fx):
+    """When the app can play sound itself, the page only drives it: the web view's audio element stays silent, and a drift over 60 ms is corrected with a seek."""
+    import time
+    clock = {"t0": None, "off": 0.0}
+
+    def load(self, a):
+        return {"available": True, "device": "Test output", "rate": 48000, "channels": 2, "voice_s": 12.0, "has_music": False, "has_audio": True, "peaks": [10, 200, 90, 255] * 60, "bucket_ms": 50.0, "faint": False}
+
+    def play(self, a):
+        clock["t0"] = time.time() - a["voiceS"]
+        return None
+
+    def seek(self, a):
+        clock["t0"] = time.time() - a["voiceS"]
+        clock["off"] = 0.0
+        return None
+
+    def state(self, a):
+        pos = (time.time() - clock["t0"]) if clock["t0"] else 0.0
+        return {"playing": True, "voice_s": pos + clock["off"], "music_s": pos, "rate": 1.0, "error": None}
+
+    s = Studio(pw, fx, extra={"audio_native_load": load, "audio_play": play, "audio_state": state, "audio_seek": seek})
+    try:
+        s.open(); s.load_sample()
+        wait_state(s.page, "ready")
+        assert s.page.text_content("#audio-chip").startswith("Sound on")
+        s.page.click("#play")
+        s.page.wait_for_timeout(1200)
+        assert any(c == "audio_play" for c, _ in s.calls), [c for c, _ in s.calls][-12:]
+        st = s.page.evaluate("() => ({ paused: pa.paused, muted: pa.muted })")
+        assert st["paused"] or st["muted"], st
+        assert not any(c == "audio_seek" for c, _ in s.calls), ("in sync: no seek", [(c, a) for c, a in s.calls if c.startswith("audio_")][:12])
+        clock["off"] = 0.5  # the player drifts half a second ahead
+        s.page.wait_for_timeout(1500)
+        seeks = [a for c, a in s.calls if c == "audio_seek"]
+        assert len(seeks) == 1, ("a 500 ms drift is re-seeked once, then stays in sync", seeks)
+        s.page.click("#play")
+        s.page.wait_for_timeout(300)
+        assert any(c == "audio_pause" for c, _ in s.calls)
+        assert not s.errors, s.errors
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":
     fx = Path(sys.argv[1])
     with sync_playwright() as pw:

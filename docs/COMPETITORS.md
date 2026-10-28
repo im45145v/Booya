@@ -68,7 +68,7 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 
 ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a one time price of $99 (regular $149) that does auto zoom, camera layouts, a cursor following vertical video and captions. It is the closest match to what DemoLens set out to do, so this table checks each of its listed features against the code in DemoLens 0.6.0.
 
-| ScreenCharm feature | DemoLens 0.6.0 |
+| ScreenCharm feature | DemoLens 0.7.0 |
 |---|---|
 | Smart auto zoom, editable per zoom | Done. Scored and selective, three styles, every zoom is a segment you can drag |
 | Smooth cursor, size and speed | Done (size and smoothing) |
@@ -79,10 +79,10 @@ ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a o
 | Change layout during the video | Done in 0.6.0: a Layout lane on the timeline, with a blend between layouts. ScreenCharm does not list this |
 | Captions with a choice of style | Done (local Whisper, burned in or as a file). Fewer caption styles than ScreenCharm |
 | Backgrounds: gradient, photo, solid | Done, with twelve wallpapers and a glass frame |
-| Device frames (MacBook) | Not done |
-| Motion blur on fast cursor moves and zooms | Not done |
-| Background music | Not done |
-| Mute single clips | Not done (speed per clip is done) |
+| Device frames (MacBook) | Done in 0.7.0: a vector laptop, browser window and phone frame (simple shapes, no maker artwork) |
+| Motion blur on fast cursor moves and zooms | Zoom and pan blur done in 0.7.0 (a toggle). Blur on the cursor itself is not done |
+| Background music | Done in 0.7.0: import a file, volume, ducking under the voice, fades, start point and loop |
+| Mute single clips | Done in 0.7.0 (and speed per clip) |
 | Blur regions | Done, and DemoLens also finds emails, keys and cards for you |
 | Mic enhancement | Done (RNNoise and loudness) |
 | Canvas sizes for YouTube, LinkedIn, Shorts, Reels, TikTok | Done |
@@ -90,12 +90,12 @@ ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a o
 | Undo and redo, save and resume | Done |
 | Export up to 4K | Done (4K in the export quality list) |
 | Share link, no account for the viewer | Partly. A signed link to your own S3 or R2 bucket; no hosted viewer |
-| System audio | Linux only today. macOS and Windows system audio capture are not done (ScreenCharm has it on Mac) |
+| System audio | Linux, and new in 0.7.0 Windows (WASAPI loopback) and macOS (ScreenCaptureKit audio). Both are compiled in CI and have not been run on hardware |
 | Record the camera and mic with the screen | Done on macOS, Linux and, new in 0.6.0, Windows (compiled in CI, not run on a real camera) |
 | Price | Free, MIT. ScreenCharm is paid |
 | Platforms | macOS, Windows, Linux. ScreenCharm is Mac only |
 
-The gaps worth closing next are device frames, motion blur, background music and per clip mute.
+The gaps worth closing next are blur on the cursor, a hosted viewer for share links, and testing the Windows and macOS audio on real hardware.
 
 ## Sources
 - ScreenCharm: https://screencharm.com

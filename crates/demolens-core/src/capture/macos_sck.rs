@@ -143,6 +143,11 @@ pub fn has_permission() -> bool {
     cg::has_access()
 }
 
+/// Shows the system's Screen Recording prompt (first time only).
+pub fn request_permission() -> bool {
+    cg::request_access()
+}
+
 /// One captured display, for `demolens doctor` and the display picker.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DisplayInfo {
@@ -690,4 +695,169 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
     let r = find();
     CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bundle.to_string(), r.clone());
     r
+}
+
+// ---------------------------------------------------------------------------
+// System audio
+// ---------------------------------------------------------------------------
+
+/// Records everything the Mac plays (not DemoLens itself) with its own
+/// ScreenCaptureKit stream, which asks for sound and for a tiny picture that
+/// is thrown away. The sound is written as a float WAV on the recording's
+/// clock (gaps become silence) and turned into the Matroska sidecar on stop.
+pub struct AudioRec {
+    stop: Option<Sender<()>>,
+    join: Option<std::thread::JoinHandle<()>>,
+    state: Arc<Mutex<AudioState>>,
+    wav: std::path::PathBuf,
+}
+
+struct AudioState {
+    writer: Option<super::audiosink::WavWriter<std::io::BufWriter<std::fs::File>>>,
+    filler: super::audiosink::GapFiller,
+    error: Option<String>,
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+fn push_audio(state: &Mutex<AudioState>, epoch: f64, interleaved: &[f32]) {
+    if interleaved.is_empty() {
+        return;
+    }
+    let now_ms = (unix_now() - epoch) * 1000.0;
+    let mut g = state.lock().unwrap();
+    let pad = g.filler.before(now_ms, interleaved.len() / 2);
+    let r = match g.writer.as_mut() {
+        Some(w) => (|| {
+            if pad > 0 {
+                w.write_silence(pad)?;
+            }
+            w.write(interleaved)
+        })(),
+        None => Ok(()),
+    };
+    if let Err(e) = r {
+        g.error = Some(format!("could not write the system audio: {e}"));
+        g.writer = None;
+    }
+}
+
+impl AudioRec {
+    /// Starts recording into `wav`. `epoch` is the unix time of the shared
+    /// recording clock. The error is the reason, ready to show.
+    pub fn start(epoch: f64, wav: &std::path::Path) -> Result<AudioRec, String> {
+        if !has_permission() {
+            return Err(PERMISSION_MESSAGE.to_string());
+        }
+        let file = std::fs::File::create(wav).map_err(|e| format!("could not create the system audio file: {e}"))?;
+        let writer = super::audiosink::WavWriter::new(std::io::BufWriter::new(file), 48_000, 2).map_err(|e| format!("could not write the system audio file: {e}"))?;
+        let state = Arc::new(Mutex::new(AudioState { writer: Some(writer), filler: super::audiosink::GapFiller::new(48_000), error: None }));
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let st = state.clone();
+        let join = std::thread::spawn(move || {
+            let setup = || -> Result<SCStream, String> {
+                let content = shareable()?;
+                let src = build_source(&content, &CaptureTarget::Screen { display: 0 })?;
+                let config = SCStreamConfiguration::new()
+                    .with_width(64)
+                    .with_height(64)
+                    .with_fps(1)
+                    .with_shows_cursor(false)
+                    .with_captures_audio(true)
+                    .with_sample_rate(48_000)
+                    .with_channel_count(2)
+                    .with_excludes_current_process_audio(true);
+                let mut stream = SCStream::new(&src.filter, &config).map_err(|e| format!("could not create the system audio stream: {e}"))?;
+                let st2 = st.clone();
+                stream
+                    .add_output_handler(
+                        move |sample: CMSampleBuffer, ty: SCStreamOutputType| {
+                            if ty != SCStreamOutputType::Audio {
+                                return;
+                            }
+                            let Ok(list) = sample.audio_buffer_list() else { return };
+                            let bufs: Vec<(&[u8], usize)> = (0..list.num_buffers()).filter_map(|i| list.get(i)).map(|b| (b.data(), b.number_channels as usize)).collect();
+                            let stereo = super::audiosink::interleave_stereo(&bufs);
+                            push_audio(&st2, epoch, &stereo);
+                        },
+                        SCStreamOutputType::Audio,
+                    )
+                    .map_err(|e| format!("could not attach the system audio handler: {e}"))?;
+                // The tiny picture stream is not used, but is given a handler so
+                // the system does not complain about frames nobody takes.
+                let _ = stream.add_output_handler(|_s: CMSampleBuffer, _t: SCStreamOutputType| {}, SCStreamOutputType::Screen);
+                stream.start_capture().map_err(|e| {
+                    if cg::has_access() {
+                        format!("could not start system audio capture: {e}")
+                    } else {
+                        PERMISSION_MESSAGE.to_string()
+                    }
+                })?;
+                Ok(stream)
+            };
+            match setup() {
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                }
+                Ok(stream) => {
+                    let _ = ready_tx.send(Ok(()));
+                    let _ = stop_rx.recv();
+                    let _ = stream.stop_capture();
+                }
+            }
+        });
+        match ready_rx.recv_timeout(Duration::from_secs(8)) {
+            Ok(Ok(())) => Ok(AudioRec { stop: Some(stop_tx), join: Some(join), state, wav: wav.to_path_buf() }),
+            Ok(Err(e)) => {
+                let _ = join.join();
+                let _ = std::fs::remove_file(wav);
+                Err(e)
+            }
+            Err(_) => {
+                drop(stop_tx);
+                let _ = std::fs::remove_file(wav);
+                Err("system audio capture did not start in time".to_string())
+            }
+        }
+    }
+
+    /// Stops, then writes `out` (Matroska, stamped where the first sample was
+    /// taken on the recording clock). Nothing played is not an error: no file
+    /// is written and the caller finds none.
+    pub fn finish(mut self, out: &std::path::Path) -> Result<(), String> {
+        drop(self.stop.take());
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+        let (writer, first_ms, error) = {
+            let mut g = self.state.lock().unwrap();
+            (g.writer.take(), g.filler.first_ms(), g.error.take())
+        };
+        let frames = match writer {
+            Some(w) => w.finish().map_err(|e| format!("could not finish the system audio file: {e}"))?,
+            None => 0,
+        };
+        if let Some(e) = error {
+            let _ = std::fs::remove_file(&self.wav);
+            return Err(e);
+        }
+        let (Some(first_ms), true) = (first_ms, frames > 0) else {
+            let _ = std::fs::remove_file(&self.wav);
+            return Ok(());
+        };
+        super::audiosink::wav_to_mkv(&self.wav, out, first_ms / 1000.0).map_err(|e| format!("{e:#}"))
+    }
+}
+
+impl Drop for AudioRec {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+        let _ = std::fs::remove_file(&self.wav);
+    }
 }

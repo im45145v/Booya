@@ -135,12 +135,14 @@ impl InputLogger {
     }
 
     fn start_hook(&mut self) {
-        if self.keys == KeyLogging::Off {
-            return;
-        }
+        // Off: on Linux and Windows the helper still runs, in wheel only mode,
+        // because scrolling cannot be polled there. It never sees a key.
         #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
         {
-            self.hook = keyhook::spawn(self.shared.clone());
+            self.hook = keyhook::spawn(self.shared.clone(), self.keys != KeyLogging::Off);
+        }
+        if self.keys == KeyLogging::Off {
+            return;
         }
         #[cfg(target_os = "macos")]
         {
@@ -280,6 +282,8 @@ pub fn run_keyhook_if_requested() {
 }
 
 pub const KEYHOOK_ARG: &str = "--demolens-keyhook";
+/// Second argument of the helper: report scrolling only, never keys.
+pub const WHEEL_ONLY_ARG: &str = "wheel-only";
 
 #[cfg(all(feature = "input-hooks", not(target_os = "macos")))]
 mod keyhook {
@@ -289,10 +293,16 @@ mod keyhook {
     use std::io::{BufRead, Write};
     use std::process::Stdio;
 
-    pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<std::process::Child> {
+    /// `keys` false starts the helper in wheel only mode: it reports scrolling
+    /// and drops every key press the moment it sees one.
+    pub fn spawn(shared: Arc<Mutex<Shared>>, keys: bool) -> Option<std::process::Child> {
         let exe = std::env::current_exe().ok()?;
         let mut cmd = crate::proc::command(exe);
-        cmd.arg(KEYHOOK_ARG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        cmd.arg(KEYHOOK_ARG);
+        if !keys {
+            cmd.arg(WHEEL_ONLY_ARG);
+        }
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -312,6 +322,14 @@ mod keyhook {
                     "M" => {
                         let held = list(parts.next());
                         shared.lock().unwrap().push(now, EventKind::Mods { held });
+                    }
+                    // `S<TAB>dx<TAB>dy`: the wheel or trackpad scrolled.
+                    "S" => {
+                        let num = |s: Option<&str>| s.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        let (dx, dy) = (num(parts.next()), num(parts.next()));
+                        let mut g = shared.lock().unwrap();
+                        let (x, y) = g.last_pos;
+                        g.push(now, EventKind::Scroll { x, y, dx, dy });
                     }
                     // `K<TAB>key<TAB>mods`: a key was pressed.
                     "K" => {
@@ -455,10 +473,14 @@ mod keyhook {
             std::process::exit(0);
         });
         let start = std::time::Instant::now();
+        let wheel_only = std::env::args().nth(2).as_deref() == Some(WHEEL_ONLY_ARG);
         let mut combo = crate::keycombo::ComboBuilder::new();
         let res = listen(move |ev| {
             let now_ms = start.elapsed().as_secs_f64() * 1000.0;
             match ev.event_type {
+                EventType::Wheel { delta_x, delta_y } => emit(&format!("S\t{delta_x}\t{delta_y}")),
+                // In wheel only mode keys are never looked at, let alone sent.
+                EventType::KeyPress(_) | EventType::KeyRelease(_) if wheel_only => {}
                 EventType::KeyPress(k) => {
                     if let Some(m) = modifier(k) {
                         // Holding a modifier repeats the press; only a change counts.
@@ -507,6 +529,7 @@ mod poll {
             let mut last = (f64::NAN, f64::NAN);
             let mut down = [false; 3];
             let mut last_change = Instant::now();
+            let mut scrolls: Option<u32> = None;
             loop {
                 if !shared.lock().unwrap().active {
                     break;
@@ -518,6 +541,15 @@ mod poll {
                 };
                 let pos = (mx - region.x as f64, my - region.y as f64);
                 let mut evs = Vec::new();
+                // macOS counts the scroll events the system posts (no permission needed).
+                if let Some(n) = src.scroll_count() {
+                    if let Some(prev) = scrolls {
+                        if n != prev {
+                            evs.push(EventKind::Scroll { x: pos.0, y: pos.1, dx: 0.0, dy: n.wrapping_sub(prev) as f64 });
+                        }
+                    }
+                    scrolls = Some(n);
+                }
                 if pos != last {
                     evs.push(EventKind::Move { x: pos.0, y: pos.1 });
                     last = pos;
@@ -575,6 +607,10 @@ mod poll {
                     Some((rx as f64, ry as f64, [mask & xlib::Button1Mask != 0, mask & xlib::Button3Mask != 0, mask & xlib::Button2Mask != 0]))
                 }
             }
+            /// Scrolling comes from the wheel helper process on this OS.
+            pub fn scroll_count(&mut self) -> Option<u32> {
+                None
+            }
         }
         impl Drop for Pointer {
             fn drop(&mut self) {
@@ -602,6 +638,10 @@ mod poll {
                 // VK_LBUTTON, VK_RBUTTON, VK_MBUTTON
                 Some((p.x as f64, p.y as f64, [down(1), down(2), down(4)]))
             }
+            /// Scrolling comes from the wheel helper process on this OS.
+            pub fn scroll_count(&mut self) -> Option<u32> {
+                None
+            }
         }
     }
 
@@ -619,6 +659,9 @@ mod poll {
                 let b = super::super::mac::buttons();
                 Some((x * self.scale, y * self.scale, b))
             }
+            pub fn scroll_count(&mut self) -> Option<u32> {
+                Some(super::super::mac::scroll_counter())
+            }
         }
     }
 
@@ -631,6 +674,9 @@ mod poll {
                 None
             }
             pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
+                None
+            }
+            pub fn scroll_count(&mut self) -> Option<u32> {
                 None
             }
         }
@@ -667,6 +713,7 @@ mod mac {
         fn CGEventCreate(source: *const c_void) -> *mut c_void;
         fn CGEventGetLocation(event: *const c_void) -> CGPoint;
         fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+        fn CGEventSourceCounterForEventType(state: i32, event_type: u32) -> u32;
         fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
         fn CGEventSourceFlagsState(state: i32) -> u64;
         fn CGPreflightListenEventAccess() -> bool;
@@ -733,6 +780,13 @@ mod mac {
             }
             false
         }
+    }
+
+    /// How many scroll events the system has posted since login. It needs no
+    /// permission (unlike an event tap), and a change means "scrolling now".
+    pub fn scroll_counter() -> u32 {
+        // 1 = hardware (HID) state, 22 = kCGEventScrollWheel.
+        unsafe { CGEventSourceCounterForEventType(1, 22) }
     }
 
     pub fn buttons() -> [bool; 3] {

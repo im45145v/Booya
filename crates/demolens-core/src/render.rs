@@ -243,7 +243,7 @@ fn point_in_poly(x: f64, y: f64, poly: &[(f64, f64)]) -> bool {
     inside
 }
 
-fn fill_poly(f: &mut Frame, poly: &[(f64, f64)], rgb: [f32; 3], alpha: f32) {
+pub(crate) fn fill_poly(f: &mut Frame, poly: &[(f64, f64)], rgb: [f32; 3], alpha: f32) {
     let minx = poly.iter().map(|p| p.0).fold(f64::MAX, f64::min).floor() as i64;
     let maxx = poly.iter().map(|p| p.0).fold(f64::MIN, f64::max).ceil() as i64;
     let miny = poly.iter().map(|p| p.1).fold(f64::MAX, f64::min).floor() as i64;
@@ -263,7 +263,11 @@ fn fill_poly(f: &mut Frame, poly: &[(f64, f64)], rgb: [f32; 3], alpha: f32) {
     }
 }
 
-fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32) {
+pub(crate) fn fill_circle(f: &mut Frame, cx: f64, cy: f64, r: f64, rgb: [f32; 3], alpha: f32) {
+    fill_round_rect(f, cx - r, cy - r, 2.0 * r, 2.0 * r, r, rgb, alpha);
+}
+
+pub(crate) fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32) {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
     for py in (y.floor() as i64)..=((y + h).ceil() as i64) {
         for px in (x.floor() as i64)..=((x + w).ceil() as i64) {
@@ -396,6 +400,10 @@ fn lerp3(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
     [0, 1, 2].map(|k| (a[k] as f64 + (b[k] as f64 - a[k] as f64) * t).round() as u8)
 }
 
+/// The shutter of the motion blur (ms of footage that is blended) and how many pictures it blends.
+const MOTION_BLUR_MS: f64 = 90.0;
+const MOTION_BLUR_SAMPLES: usize = 5;
+
 impl Renderer {
     /// The smallest source decode size that still gives at least one source
     /// pixel per output pixel at the deepest zoom. Decoding a Retina recording
@@ -452,7 +460,11 @@ impl Renderer {
         let (ow, oh) = (out_w as f64, out_h as f64);
         let tall = out_h >= out_w;
         let cam_style = project.webcam.as_ref();
-        let inset_px = if glass.enabled && kind != SceneKind::Camera { (glass.inset * short).round() } else { 0.0 };
+        // A device frame replaces the glass panel.
+        let frame = if kind != SceneKind::Camera { project.style.frame } else { crate::project::DeviceFrame::None };
+        let framed = frame != crate::project::DeviceFrame::None;
+        let glass_on = glass.enabled && !framed;
+        let inset_px = if glass_on && kind != SceneKind::Camera { (glass.inset * short).round() } else { 0.0 };
         // With glass, the panel needs its own margin around the recording.
         let pad = project.style.padding.clamp(0.0, 0.4) * short + inset_px;
         let m = short * 0.035;
@@ -466,19 +478,14 @@ impl Renderer {
             SceneKind::Screen => {}
             SceneKind::Bubble => {
                 let d = ((size * short).round() as u32 & !1).max(16) as f64;
-                let (x, y) = match corner {
-                    Corner::TopLeft => (m, m),
-                    Corner::TopRight => (ow - d - m, m),
-                    Corner::BottomLeft => (m, oh - d - m),
-                    Corner::BottomRight => (ow - d - m, oh - d - m),
-                };
+                let (x, y) = corner.place(ow, oh, d, d, m);
                 cam = Some(CamPane { x, y, w: d, h: d, radius: if circle { d / 2.0 } else { d * 0.16 }, floating: true });
             }
             SceneKind::Split if !tall => {
                 // A column beside the recording, nothing covered.
                 let d = ((((size * 1.6).min(0.45) * short).max(16.0)).round() as u32 & !1).max(16) as f64;
                 let col = d + m;
-                let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
+                let left = corner.is_left();
                 ax = if left { col + pad } else { pad };
                 aw = ow - 2.0 * pad - col;
                 let x = if left { m } else { ow - d - m };
@@ -488,7 +495,7 @@ impl Renderer {
                 // Camera on top (or below), the recording in the rest.
                 let ch = (ah * if out_w == out_h { 0.40 } else { 0.34 }).round();
                 let gap = (short * 0.025).max(pad * 0.5);
-                let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+                let top = corner.is_top();
                 let y = if top { pad } else { oh - pad - ch };
                 cam = Some(CamPane { x: pad, y, w: aw, h: ch, radius, floating: false });
                 if top {
@@ -499,6 +506,13 @@ impl Renderer {
             SceneKind::Camera => {
                 cam = Some(CamPane { x: pad, y: pad, w: aw, h: ah, radius, floating: false });
             }
+        }
+        if framed {
+            let i = crate::frames::insets(frame, short);
+            ax += i.left;
+            ay += i.top;
+            aw = (aw - i.width()).max(16.0);
+            ah = (ah - i.height()).max(16.0);
         }
         let src_aspect = project.source_width as f64 / project.source_height.max(1) as f64;
         let mut layout;
@@ -519,7 +533,10 @@ impl Renderer {
                 (aw, aw / src_aspect)
             };
             layout = Layout { x: ax + (aw - w) / 2.0, y: ay + (ah - h) / 2.0, w, h, radius: radius.min(w.min(h) / 2.0) };
-            if glass.enabled {
+            if let Some(r) = crate::frames::screen_radius(frame, short) {
+                layout.radius = r.min(layout.w.min(layout.h) / 2.0);
+            }
+            if glass_on {
                 let (pw, ph) = (layout.w + 2.0 * inset_px, layout.h + 2.0 * inset_px);
                 let pr = (glass.radius * short).min(pw.min(ph) / 2.0);
                 // Concentric corners: the recording's radius follows the panel's.
@@ -528,7 +545,13 @@ impl Renderer {
             }
         }
         let mut background = backdrop.clone();
-        Self::bake_shadow(&mut background, project, panel.unwrap_or(layout), out_w, out_h);
+        if framed {
+            let (ox, oy, ow2, oh2, r) = crate::frames::outer(frame, (layout.x, layout.y, layout.w, layout.h), short);
+            Self::bake_shadow(&mut background, project, Layout { x: ox, y: oy, w: ow2, h: oh2, radius: r }, out_w, out_h);
+            crate::frames::draw(&mut background, frame, (layout.x, layout.y, layout.w, layout.h), short);
+        } else {
+            Self::bake_shadow(&mut background, project, panel.unwrap_or(layout), out_w, out_h);
+        }
         if let Some(c) = cam.filter(|c| !c.floating && kind != SceneKind::Camera) {
             Self::bake_shadow(&mut background, project, Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius }, out_w, out_h);
         }
@@ -707,7 +730,9 @@ impl Renderer {
         if !self.project.caption_style.burn_in {
             return None;
         }
-        self.project.captions.iter().find(|c| src_t >= c.start_ms && src_t < c.end_ms)
+        // The latest caption that has started wins, so one with odd times
+        // can never hide the ones after it.
+        self.project.captions.iter().filter(|c| src_t >= c.start_ms && src_t < c.end_ms).max_by(|a, b| a.start_ms.total_cmp(&b.start_ms))
     }
 
     fn draw_caption(&self, out: &mut Frame, c: &crate::project::Caption, src_t: f64) {
@@ -825,6 +850,52 @@ impl Renderer {
     /// `cam` the camera frame for the same moment, when there is a camera.
     /// Around a change of layout the two layouts are cross-faded.
     pub fn render(&self, src: &Frame, src_t: f64, cam: Option<&Frame>) -> Frame {
+        if self.project.style.motion_blur {
+            if let Some(f) = self.render_blurred(src, src_t, cam) {
+                return f;
+            }
+        }
+        self.render_once(src, src_t, cam)
+    }
+
+    /// How fast the camera is moving at `src_t`, as the share of the screen
+    /// width it travels (position) plus the zoom it changes, over the shutter.
+    pub fn camera_motion(&self, src_t: f64) -> f64 {
+        let (a, b) = (self.camera(src_t - MOTION_BLUR_MS / 2.0), self.camera(src_t + MOTION_BLUR_MS / 2.0));
+        let w = self.project.source_width.max(1) as f64;
+        ((b.cx - a.cx).abs() + (b.cy - a.cy).abs()) / w * b.scale.max(a.scale) + (b.scale - a.scale).abs()
+    }
+
+    /// The frame with motion blur: several frames spread over a short shutter
+    /// are averaged. Only while the camera zooms or pans; otherwise `None`
+    /// and the sharp frame is used, so a still shot costs nothing extra.
+    fn render_blurred(&self, src: &Frame, src_t: f64, cam: Option<&Frame>) -> Option<Frame> {
+        if self.camera_motion(src_t) < 0.004 {
+            return None;
+        }
+        let n = MOTION_BLUR_SAMPLES;
+        let mut acc: Vec<f32> = Vec::new();
+        let mut size = (0, 0);
+        for k in 0..n {
+            let t = src_t + (k as f64 / (n - 1) as f64 - 0.5) * MOTION_BLUR_MS;
+            let f = self.render_once(src, t, cam);
+            if acc.is_empty() {
+                acc = vec![0.0; f.data.len()];
+                size = (f.w, f.h);
+            }
+            for (a, v) in acc.iter_mut().zip(f.data.iter()) {
+                *a += *v as f32;
+            }
+        }
+        let mut out = Frame::new(size.0, size.1);
+        let inv = 1.0 / n as f32;
+        for (o, a) in out.data.iter_mut().zip(acc.iter()) {
+            *o = (a * inv).round().clamp(0.0, 255.0) as u8;
+        }
+        Some(out)
+    }
+
+    fn render_once(&self, src: &Frame, src_t: f64, cam: Option<&Frame>) -> Frame {
         let mix = self.scene_at(src_t);
         let mut f = self.render_scene(self.scene(mix.kind), src, src_t, cam);
         if let Some((other, k)) = mix.other {
@@ -1202,7 +1273,6 @@ impl Renderer {
 
     /// The watermark text, in its corner with a soft shadow so it reads on any background.
     fn draw_watermark(&self, out: &mut Frame) {
-        use crate::project::Corner;
         let Some(w) = self.project.watermark.as_ref().filter(|w| !w.text.trim().is_empty()) else { return };
         let short = self.out_w.min(self.out_h) as f32;
         let px = (w.size.clamp(0.012, 0.08) as f32 * short).max(10.0);
@@ -1210,14 +1280,9 @@ impl Renderer {
         let text: String = w.text.chars().take(80).collect();
         let tw = text::measure(&text, px);
         let m = short * 0.035;
-        let x = match w.corner {
-            Corner::TopLeft | Corner::BottomLeft => m,
-            _ => self.out_w as f32 - tw - m,
-        };
-        let y = match w.corner {
-            Corner::TopLeft | Corner::TopRight => m,
-            _ => self.out_h as f32 - text::line_height(px) - m,
-        };
+        let lh = text::line_height(px);
+        let (x, y) = w.corner.place(self.out_w as f64, self.out_h as f64, tw as f64, lh as f64, m as f64);
+        let (x, y) = (x as f32, y as f32);
         text::draw(out, x + 1.5, y + 1.5, px, &text, [0.0, 0.0, 0.0], alpha * 0.55);
         text::draw(out, x, y, px, &text, [255.0, 255.0, 255.0], alpha);
     }
@@ -1611,6 +1676,89 @@ mod glass_tests {
         assert!(top_left > bottom_right, "top left {top_left} should beat bottom right {bottom_right}");
         assert!(top_left > 120, "rim should be visibly bright, got {top_left}");
         let _ = rim;
+    }
+
+    #[test]
+    fn each_device_frame_makes_room_draws_its_chrome_and_keeps_the_screen_inside() {
+        use crate::project::DeviceFrame;
+        let base = Project::new("a.mp4".into(), None, 1920, 1080, 5000.0);
+        let plain = Renderer::new(base.clone(), None, 1280, 720, None);
+        let grey = |w: u32, h: u32| {
+            let mut f = Frame::new(w, h);
+            for px in f.data.chunks_exact_mut(4) {
+                px.copy_from_slice(&[120, 120, 120, 255]);
+            }
+            f
+        };
+        let bare = plain.render(&grey(1920, 1080), 1000.0, None);
+        for dev in [DeviceFrame::Laptop, DeviceFrame::Browser, DeviceFrame::Phone] {
+            let mut p = base.clone();
+            p.style.frame = dev;
+            let r = Renderer::new(p, None, 1280, 720, None);
+            let l = r.layout;
+            assert!(l.w < plain.layout.w && l.h < plain.layout.h, "{dev:?} must shrink the screen");
+            assert!(l.x >= 0.0 && l.y >= 0.0 && l.x + l.w <= 1280.0 && l.y + l.h <= 720.0, "{dev:?} {l:?}");
+            let f = r.render(&grey(1920, 1080), 1000.0, None);
+            // The screen itself still shows the recording.
+            let (cx, cy) = ((l.x + l.w / 2.0) as u32, (l.y + l.h / 2.0) as u32);
+            assert_eq!(at(&f, cx, cy), 120);
+            // And the chrome is drawn on top of the plain background, near the screen.
+            let probe = match dev {
+                DeviceFrame::Browser => (cx, (l.y - 5.0) as u32),
+                DeviceFrame::Laptop => (cx - 100, (l.y + l.h + 5.0) as u32),
+                _ => ((l.x - 4.0) as u32, cy),
+            };
+            assert_ne!([at(&f, probe.0, probe.1), f.data[((probe.1 * 1280 + probe.0) * 4 + 1) as usize]], [at(&bare, probe.0, probe.1), bare.data[((probe.1 * 1280 + probe.0) * 4 + 1) as usize]], "{dev:?} chrome missing at {probe:?}");
+        }
+    }
+
+    #[test]
+    fn the_frames_are_plain_shapes_and_round_trip_through_a_project_file() {
+        use crate::project::DeviceFrame;
+        let mut p = Project::new("a.mp4".into(), None, 1920, 1080, 5000.0);
+        p.style.frame = DeviceFrame::Phone;
+        p.style.motion_blur = true;
+        let back: Project = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.style.frame, DeviceFrame::Phone);
+        assert!(back.style.motion_blur);
+        // A project from before 0.7.0 has neither.
+        let mut v: serde_json::Value = serde_json::to_value(&p).unwrap();
+        v["style"].as_object_mut().unwrap().remove("frame");
+        v["style"].as_object_mut().unwrap().remove("motion_blur");
+        let old: Project = serde_json::from_value(v).unwrap();
+        assert_eq!(old.style.frame, DeviceFrame::None);
+        assert!(!old.style.motion_blur);
+    }
+
+    #[test]
+    fn motion_blur_smears_only_while_the_camera_moves() {
+        use crate::zoom::ZoomSegment;
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 20_000.0);
+        p.zoom = vec![ZoomSegment { start_ms: 4000.0, end_ms: 14_000.0, scale: 2.0, follow_cursor: false, focus: (400.0, 200.0), reason: "click".into() }];
+        p.style.padding = 0.0;
+        p.style.shadow = 0.0;
+        p.style.corner_radius = 0.0;
+        // A picture with sharp vertical stripes, so a zoom in the middle of the ease smears them.
+        let mut src = Frame::new(640, 360);
+        for (i, px) in src.data.chunks_exact_mut(4).enumerate() {
+            let v = if (i % 640) / 4 % 2 == 0 { 255 } else { 0 };
+            px.copy_from_slice(&[v, v, v, 255]);
+        }
+        let sharp = Renderer::new(p.clone(), None, 640, 360, None);
+        p.style.motion_blur = true;
+        let blur = Renderer::new(p, None, 640, 360, None);
+        // In the middle of the ease in the camera moves: blur differs from sharp.
+        let mid = 4000.0 + 450.0;
+        assert!(blur.camera_motion(mid) > 0.004, "{}", blur.camera_motion(mid));
+        let (a, b) = (sharp.render(&src, mid, None), blur.render(&src, mid, None));
+        let diff = |x: &Frame, y: &Frame| x.data.iter().zip(&y.data).map(|(a, b)| (*a as i64 - *b as i64).unsigned_abs()).sum::<u64>();
+        assert!(diff(&a, &b) > 1000, "blur must change the picture while moving");
+        // Contrast falls: the stripes are less sharp.
+        let contrast = |f: &Frame| (0..64u32).map(|x| (at(f, 100 + x, 100) as i32 - at(f, 101 + x, 100) as i32).unsigned_abs() as u64).sum::<u64>();
+        assert!(contrast(&b) < contrast(&a), "{} vs {}", contrast(&b), contrast(&a));
+        // Held still (the zoom is fully in) the two are identical.
+        assert_eq!(diff(&sharp.render(&src, 9000.0, None), &blur.render(&src, 9000.0, None)), 0);
+        assert_eq!(diff(&sharp.render(&src, 1000.0, None), &blur.render(&src, 1000.0, None)), 0);
     }
 
     #[test]

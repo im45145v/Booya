@@ -80,6 +80,9 @@ pub struct Remuxed {
     /// video frame. The MP4's video starts at 0, so an event logged at `t`
     /// on that clock belongs at `t - video_start_s` in the video.
     pub video_start_s: f64,
+    /// Things the user should hear about (a microphone that could not be
+    /// joined, or only roughly).
+    pub warnings: Vec<String>,
 }
 
 pub fn remux_to_mp4(mkv: &Path) -> Result<PathBuf> {
@@ -90,6 +93,68 @@ pub fn remux_to_mp4(mkv: &Path) -> Result<PathBuf> {
 /// capture recorded one.
 pub fn mic_sidecar(mkv: &Path) -> PathBuf {
     mkv.with_extension("mic.mkv")
+}
+
+/// The separate system audio file that goes with `recording.mkv`, when the
+/// capture recorded one (Windows and macOS; Linux mixes it while recording).
+pub fn sys_sidecar(mkv: &Path) -> PathBuf {
+    mkv.with_extension("sys.mkv")
+}
+
+/// The ffmpeg filter graph that mixes the microphone (input 0) and the system
+/// audio (input 1) on their shared clock: the one that started later is
+/// delayed by the difference, so both stay where they happened. The system
+/// sound is a little lower than the voice, and a limiter keeps the sum from
+/// clipping. A start far outside the recording's clock (over 30 s apart) is
+/// treated as unaligned and starts with the other.
+pub fn system_mix_filter(mic_start: f64, sys_start: f64) -> String {
+    let (mut m, mut s) = (mic_start, sys_start);
+    if (m - s).abs() > 30.0 {
+        if m < s { s = m } else { m = s }
+    }
+    let base = m.min(s);
+    let ms = |t: f64| ((t - base).max(0.0) * 1000.0).round() as i64;
+    let fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=N/SR/TB";
+    format!("[0:a]{fmt},adelay={}:all=1[m];[1:a]{fmt},volume=0.8,adelay={}:all=1[s];[m][s]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[o]", ms(m), ms(s))
+}
+
+/// Folds the system audio sidecar into the microphone sidecar, so the remux
+/// only ever sees one audio file. With no microphone, the system audio takes
+/// its place. Returns false when there was no system audio to add (nothing
+/// played). On an error the microphone file is left as it was.
+pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
+    let sys = sys_sidecar(mkv);
+    let big = |p: &Path| std::fs::metadata(p).map(|m| m.len() > 4096).unwrap_or(false);
+    if !big(&sys) {
+        let _ = std::fs::remove_file(&sys);
+        return Ok(false);
+    }
+    let mic = mic_sidecar(mkv);
+    if !big(&mic) {
+        std::fs::rename(&sys, &mic).context("could not move the system audio into place")?;
+        return Ok(true);
+    }
+    let (m, s) = (stream_times(&mic, "a:0"), stream_times(&sys, "a:0"));
+    let (Some(m), Some(s)) = (m, s) else { bail!("the {} file could not be read", if m.is_none() { "microphone" } else { "system audio" }) };
+    let tmp = mic.with_extension("mkv.part");
+    let base = m.0.min(s.0);
+    let out = crate::proc::command(ffmpeg_bin())
+        .args(["-v", "error", "-nostdin", "-y", "-i"])
+        .arg(&mic)
+        .arg("-i")
+        .arg(&sys)
+        .args(["-filter_complex", &system_mix_filter(m.0, s.0), "-map", "[o]", "-c:a", "pcm_f32le", "-output_ts_offset", &format!("{:.3}", if (m.0 - s.0).abs() > 30.0 { m.0 } else { base }), "-f", "matroska"])
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to start ffmpeg to mix the system audio")?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        bail!("ffmpeg could not mix the system audio: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    std::fs::rename(&tmp, &mic)?;
+    let _ = std::fs::remove_file(&sys);
+    Ok(true)
 }
 
 /// Remux `recording.mkv` into `recording.mp4` next to it (video is copied,
@@ -103,13 +168,60 @@ pub fn mic_sidecar(mkv: &Path) -> PathBuf {
 /// not on the same timeline (start far outside the recording) is shifted to
 /// start with the video.
 pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
+    match remux_inner(mkv, Join::Aligned) {
+        Err(e) if has_sidecar(mkv) => {
+            // Never lose the voice silently: first try again without the
+            // fine alignment, then without the microphone (keeping its file).
+            eprintln!("demolens: joining the microphone failed: {e:#}");
+            match remux_inner(mkv, Join::Plain) {
+                Ok(mut r) => {
+                    r.warnings.push(format!("The microphone could not be lined up with the video exactly ({}), so it was added as it was recorded and may be a little off.", short(&e)));
+                    Ok(r)
+                }
+                Err(e2) => match remux_inner(mkv, Join::Skip) {
+                    Ok(mut r) => {
+                        r.warnings.push(format!("Mic not recorded in the video: it could not be joined ({}). The raw microphone file is kept at {}.", short(&e2), mic_sidecar(mkv).display()));
+                        Ok(r)
+                    }
+                    Err(_) => Err(e),
+                },
+            }
+        }
+        r => r,
+    }
+}
+
+fn short(e: &anyhow::Error) -> String {
+    let t = format!("{e:#}");
+    t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("unknown error").chars().take(160).collect()
+}
+
+fn has_sidecar(mkv: &Path) -> bool {
+    std::fs::metadata(mic_sidecar(mkv)).map(|m| m.len() > 4096).unwrap_or(false)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Join {
+    /// The microphone is lined up on the shared clock.
+    Aligned,
+    /// The microphone is resampled and added with no alignment.
+    Plain,
+    /// Video only; the microphone file stays where it is.
+    Skip,
+}
+
+fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
     let mp4 = mkv.with_extension("mp4");
     let tmp = mkv.with_extension("mp4.part");
     let _ = std::fs::remove_file(&tmp);
     let video = stream_times(mkv, "v:0");
     let side = mic_sidecar(mkv);
-    let has_side = std::fs::metadata(&side).map(|m| m.len() > 4096).unwrap_or(false);
+    let has_side = has_sidecar(mkv) && join != Join::Skip;
     let audio = if has_side { stream_times(&side, "a:0") } else { stream_times(mkv, "a:0") };
+    if has_side && audio.is_none() {
+        // Never drop the voice without saying so: the caller reports this.
+        bail!("the microphone file could not be read");
+    }
     let mut cmd = crate::proc::command(ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y"]);
     let mut video_start_s = 0.0;
@@ -123,7 +235,9 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
         // touched.
         let a_start = if (a.0 - v.0).abs() > 30.0 + v.1 { v.0 } else { a.0 };
         let mut f = audio_align_filter(v, (a_start, a.1)).unwrap_or_else(audio_plain_filter);
-        if a_start < v.0 && !f.contains("atrim") {
+        if join == Join::Plain {
+            f = audio_plain_filter();
+        } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
         align = Some(f);
@@ -177,8 +291,10 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
     }
     std::fs::rename(&tmp, &mp4)?;
     let _ = std::fs::remove_file(mkv);
-    let _ = std::fs::remove_file(&side);
-    Ok(Remuxed { path: mp4, video_start_s })
+    if join != Join::Skip {
+        let _ = std::fs::remove_file(&side);
+    }
+    Ok(Remuxed { path: mp4, video_start_s, warnings: Vec::new() })
 }
 
 /// How a recording's tracks line up. Used by `demolens verify`.
@@ -377,6 +493,45 @@ mod tests {
     }
 
     #[test]
+    fn a_microphone_file_that_cannot_be_joined_is_reported_and_kept() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-badmic");
+        let mkv = d.join("recording.mkv");
+        let ok = crate::proc::command(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"])
+            .arg(&mkv)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        // Big enough to look like a recording, but not audio.
+        std::fs::write(mic_sidecar(&mkv), vec![7u8; 20_000]).unwrap();
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        assert!(r.path.exists(), "the video still comes out");
+        assert!(r.warnings.iter().any(|w| w.starts_with("Mic not recorded")), "{:?}", r.warnings);
+        assert!(mic_sidecar(&mkv).exists(), "the raw microphone file is kept for recovery");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_plain_join_adds_the_microphone_without_alignment() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-plain");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"], &mkv));
+        assert!(run(&["-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=2", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        let r = remux_inner(&mkv, Join::Plain).unwrap();
+        let rep = sync_report(&r.path, None).unwrap();
+        assert_eq!(rep.audio_rate, Some(48_000));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn a_failed_remux_keeps_the_original() {
         let d = tmpdir("remux-bad");
         let mkv = d.join("recording.mkv");
@@ -384,5 +539,62 @@ mod tests {
         assert!(remux_to_mp4(&mkv).is_err());
         assert!(mkv.exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn system_audio_is_mixed_onto_the_voice_on_the_shared_clock() {
+        let d = tmpdir("sysmix");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| {
+            crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success()
+        };
+        // Voice: 2 s of 440 Hz stamped from 0.5 s. System sound: 3 s of 880 Hz stamped from 1.0 s.
+        assert!(run(&["-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=2", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        assert!(run(&["-itsoffset", "1.0", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:d=3", "-c:a", "pcm_f32le"], &sys_sidecar(&mkv)));
+        assert!(merge_system_audio(&mkv).unwrap());
+        assert!(!sys_sidecar(&mkv).exists(), "the system file is folded in");
+        let (start, dur) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
+        assert!((start - 0.5).abs() < 0.06, "starts with the voice: {start}");
+        // (Matroska reports the end time as the duration of a file that starts late.)
+        assert!((dur - 4.0).abs() < 0.2, "ends with the system sound: {dur}");
+        // Both are really in the mix, where they belong (times here count from the file start). Mean level: the voice alone first (a mono sine
+        // placed in a stereo mix reads about -24 dB), both together while they overlap (about 2 dB more),
+        // then the system sound alone (0.8 of the level, about -26 dB).
+        let level = |from: &str, to: &str| {
+            let o = crate::proc::command(ffmpeg_bin())
+                .args(["-v", "info", "-i"]).arg(mic_sidecar(&mkv))
+                .args(["-af", &format!("atrim={from}:{to},volumedetect"), "-f", "null", "-"]).output().unwrap();
+            let text = String::from_utf8_lossy(&o.stderr).to_string();
+            let v = text.lines().find_map(|l| l.split("mean_volume:").nth(1)).map(|r| r.trim().trim_end_matches(" dB").parse::<f32>().unwrap());
+            v.unwrap_or(-99.0)
+        };
+        let (early, both, late) = (level("0.1", "0.45"), level("0.7", "1.8"), level("2.2", "3.2"));
+        assert!((early + 24.1).abs() < 1.2, "the voice alone: {early}");
+        assert!(both > early + 1.2, "voice and system sound together: {both} vs {early}");
+        assert!((late + 26.0).abs() < 1.2, "the system sound alone, a little lower: {late}");
+    }
+
+    #[test]
+    fn system_audio_alone_becomes_the_audio_and_an_empty_one_is_dropped() {
+        let d = tmpdir("sysonly");
+        let mkv = d.join("recording.mkv");
+        std::fs::write(sys_sidecar(&mkv), vec![9u8; 20_000]).unwrap();
+        assert!(merge_system_audio(&mkv).unwrap());
+        assert_eq!(std::fs::metadata(mic_sidecar(&mkv)).unwrap().len(), 20_000);
+        assert!(!sys_sidecar(&mkv).exists());
+        // Nothing played: a stub file is removed and the voice is untouched.
+        std::fs::write(sys_sidecar(&mkv), vec![1u8; 100]).unwrap();
+        assert!(!merge_system_audio(&mkv).unwrap());
+        assert!(!sys_sidecar(&mkv).exists() && mic_sidecar(&mkv).exists());
+    }
+
+    #[test]
+    fn the_mix_delays_whichever_started_later() {
+        let f = system_mix_filter(0.5, 1.0);
+        assert!(f.contains("adelay=0:all=1[m]") && f.contains("adelay=500:all=1[s]"), "{f}");
+        let f = system_mix_filter(2.0, 1.0);
+        assert!(f.contains("adelay=1000:all=1[m]") && f.contains("adelay=0:all=1[s]"), "{f}");
+        let far = system_mix_filter(1.0, 5000.0);
+        assert!(far.contains("adelay=0:all=1[m]") && far.contains("adelay=0:all=1[s]"), "an unaligned clock starts with the other: {far}");
     }
 }

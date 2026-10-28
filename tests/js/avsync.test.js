@@ -28,3 +28,11 @@ test('the sound is left alone when in step, nudged when close, moved when far', 
   assert.ok(ahead.rate < 2 && ahead.rate >= 2 * 0.94);
   assert.deepEqual(A.audioCorrection(5.0, 6.0, 1), { seek: true, rate: 1 });
 });
+
+test('native sound is re-seeked only beyond 60 ms of drift', () => {
+  assert.equal(A.nativeCorrection(10, 10.05), false);
+  assert.equal(A.nativeCorrection(10, 9.95), false);
+  assert.equal(A.nativeCorrection(10, 10.07), true);
+  assert.equal(A.nativeCorrection(10, 9.9), true);
+  assert.equal(A.NATIVE_TOLERANCE_S, 0.06);
+});

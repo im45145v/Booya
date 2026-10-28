@@ -1,8 +1,11 @@
 //! Microphone devices and the input level meter.
 
 use anyhow::{anyhow, Result};
+#[cfg(not(windows))]
 use std::io::Read;
-use std::process::{Child, Stdio};
+#[cfg(not(windows))]
+use std::process::Stdio;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -23,13 +26,76 @@ pub fn list_mics() -> Vec<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output();
-        out.map(|o| parse_dshow_audio(&String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
+        // The names Windows shows (default first), which is also what the
+        // recorder opens. DirectShow's list is only the fallback.
+        let v = super::wasapi::input_names();
+        if !v.is_empty() {
+            return v;
+        }
+        dshow_devices().into_iter().map(|d| d.name).collect()
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Vec::new()
     }
+}
+
+/// DirectShow audio devices, from ffmpeg.
+#[cfg(target_os = "windows")]
+pub(crate) fn dshow_devices() -> Vec<DshowDevice> {
+    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output();
+    out.map(|o| parse_dshow_audio_devices(&String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
+}
+
+/// A DirectShow audio device: the friendly name and the "alternative name"
+/// (a device path that is plain ASCII, so it survives any quoting or code
+/// page problem that a name with accents or symbols can hit).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DshowDevice {
+    pub name: String,
+    pub alt: Option<String>,
+}
+
+/// Parses `ffmpeg -list_devices true -f dshow -i dummy`, pairing each audio
+/// device with the "Alternative name" line that follows it.
+#[allow(dead_code)]
+pub(crate) fn parse_dshow_audio_devices(text: &str) -> Vec<DshowDevice> {
+    let mut v: Vec<DshowDevice> = Vec::new();
+    let mut in_audio_section = false;
+    let mut last_is_audio = false;
+    for l in text.lines() {
+        let quoted = || {
+            let a = l.find('"')? + 1;
+            let b = l.rfind('"')?;
+            (b > a).then(|| l[a..b].to_string())
+        };
+        if l.contains("DirectShow audio devices") {
+            in_audio_section = true;
+            continue;
+        }
+        if l.contains("DirectShow video devices") {
+            in_audio_section = false;
+            last_is_audio = false;
+            continue;
+        }
+        if l.contains("Alternative name") {
+            if last_is_audio {
+                if let (Some(d), Some(alt)) = (v.last_mut(), quoted()) {
+                    d.alt = Some(alt);
+                }
+            }
+            continue;
+        }
+        if l.contains("(audio)") || (in_audio_section && !l.contains("(video)") && !l.contains("(none)")) {
+            if let Some(n) = quoted() {
+                v.push(DshowDevice { name: n, alt: None });
+                last_is_audio = true;
+                continue;
+            }
+        }
+        last_is_audio = false;
+    }
+    v
 }
 
 #[allow(dead_code)]
@@ -106,8 +172,20 @@ pub(crate) fn input_args(name: Option<&str>) -> Result<Vec<String>> {
     }
     #[cfg(target_os = "windows")]
     {
-        let dev = name.map(str::to_string).or_else(|| std::env::var("DEMOLENS_MIC").ok()).or_else(|| list_mics().into_iter().next()).unwrap_or_else(|| "Microphone".into());
-        Ok(vec!["-f".into(), "dshow".into(), "-i".into(), format!("audio={dev}")])
+        // DirectShow lists devices in its own order, which is not the Windows
+        // default, so the choice is made against the list ffmpeg itself sees.
+        let devs = dshow_devices();
+        let names: Vec<String> = devs.iter().map(|d| d.name.clone()).collect();
+        let want = name.map(str::to_string).or_else(|| std::env::var("DEMOLENS_MIC").ok());
+        let default = super::wasapi::input_names().into_iter().next();
+        let dev = super::mic::pick_device_name(&names, want.as_deref(), default.as_deref()).ok_or_else(|| anyhow!("DirectShow lists no microphone"))?;
+        let entry = devs.iter().find(|d| d.name == dev);
+        // A name with accents or symbols is passed by its device path.
+        let target = match entry.and_then(|d| d.alt.clone()) {
+            Some(alt) if !dev.is_ascii() || dev.contains('"') => alt,
+            _ => dev,
+        };
+        Ok(vec!["-f".into(), "dshow".into(), "-i".into(), format!("audio={target}")])
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
@@ -136,13 +214,30 @@ pub fn levels_db(samples: &[i16]) -> (f32, f32) {
 /// Reads the microphone and reports a level about every 100 ms until dropped
 /// or stopped. Used for the meter before and during a recording.
 pub struct MicMeter {
-    child: Child,
+    child: Option<Child>,
     stop: Arc<AtomicBool>,
+    #[cfg(windows)]
+    _wasapi: Option<super::wasapi::Recorder>,
 }
 
 impl MicMeter {
     /// `on_level(rms_db, peak_db)` is called from a background thread.
     pub fn start(name: Option<&str>, on_level: impl Fn(f32, f32) + Send + 'static) -> Result<Self> {
+        #[cfg(windows)]
+        {
+            // In process, the same way the recording opens the device.
+            let on_level = std::sync::Mutex::new(on_level);
+            match super::wasapi::meter(name.map(str::to_string), move |r, p| (on_level.lock().unwrap())(r, p)) {
+                Ok(w) => return Ok(Self { child: None, stop: Arc::new(AtomicBool::new(false)), _wasapi: Some(w) }),
+                Err(_) => return Err(anyhow!("the microphone could not be opened for the level meter")),
+            }
+        }
+        #[cfg(not(windows))]
+        Self::start_ffmpeg(name, on_level)
+    }
+
+    #[cfg(not(windows))]
+    fn start_ffmpeg(name: Option<&str>, on_level: impl Fn(f32, f32) + Send + 'static) -> Result<Self> {
         let input = input_args(name)?;
         let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
         cmd.args(["-hide_banner", "-nostats", "-v", "error", "-nostdin"]).args(&input);
@@ -170,13 +265,20 @@ impl MicMeter {
                     on_level(rms, peak);
                 }
             })?;
-        Ok(Self { child, stop })
+        Ok(Self { child: Some(child), stop })
     }
 
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(c) = self.child.as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        #[cfg(windows)]
+        {
+            // Dropping the recorder stops the stream and frees the device.
+            self._wasapi = None;
+        }
     }
 }
 
@@ -188,6 +290,24 @@ impl Drop for MicMeter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dshow_devices_are_paired_with_their_alternative_names() {
+        let text = r#"[dshow @ 000001] DirectShow video devices (some may be both video and audio devices)
+[dshow @ 000001]  "Integrated Camera" (video)
+[dshow @ 000001]   Alternative name "@device_pnp_\\?\usb#vid_04f2"
+[dshow @ 000001] DirectShow audio devices
+[dshow @ 000001]  "Mikrofon (Realtek(R) Audio) é" (audio)
+[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\wave_{AAA}"
+[dshow @ 000001]  "Headset (USB)" (audio)
+[dshow @ 000001]   Alternative name "@device_cm_{33D9A762}\wave_{BBB}"
+"#;
+        let d = super::parse_dshow_audio_devices(text);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].name, "Mikrofon (Realtek(R) Audio) é");
+        assert!(d[0].alt.as_deref().unwrap().starts_with("@device_cm_"));
+        assert!(d[1].alt.as_deref().unwrap().ends_with("wave_{BBB}"));
+    }
+
     use super::*;
 
     #[test]

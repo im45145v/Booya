@@ -49,7 +49,14 @@
     return { seek: false, rate: speed };
   }
 
-  const api = { nextLatency, frameLead, frameTime, audioCorrection, MAX_LEAD_MS };
+  // The natively played sound (see playback.rs) has no speed nudging: it is
+  // put back on the clock with a seek once it is more than 60 ms away.
+  const NATIVE_TOLERANCE_S = 0.06;
+  function nativeCorrection(wantSec, haveSec) {
+    return Math.abs(wantSec - haveSec) > NATIVE_TOLERANCE_S;
+  }
+
+  const api = { nextLatency, frameLead, frameTime, audioCorrection, nativeCorrection, NATIVE_TOLERANCE_S, MAX_LEAD_MS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AvSync = api;
 })(typeof window !== 'undefined' ? window : globalThis);

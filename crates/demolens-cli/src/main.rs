@@ -19,6 +19,8 @@ USAGE:
                   [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
   demolens sources [--thumbs dir] [--all]   list the screens and windows the picker shows (and save previews); --all also prints hidden windows and why
+  demolens doctor --audio [--seconds 3] [--mic NAME]  record the microphone for a few seconds and report the level
+                  (which backend, the devices found, the peak in dBFS, and the reason when it did not record)
   demolens doctor [--seconds 3] [--prompt-keys]  check permissions, displays and ffmpeg, run a short
                   test capture and print the result as JSON (exit 1 if it failed)
   demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
@@ -26,7 +28,7 @@ USAGE:
   demolens verify <video> [events.jsonl]   A/V sync report for a finished recording
   demolens syncprobe [--capture] [--json] | --flashes FILE  Measure sound vs picture through every stage (exit 1 if off)
   demolens new <video> [--events FILE] [-o project.json]
-  demolens zoom <events.jsonl> --duration MS
+  demolens zoom <events.jsonl> --duration MS [--clicks N]   zoom only where N clicks (default 3) land in one small area within 4.5 s
   demolens preview <project.json> --at MS [-o frame.png] [--quality 720]
   demolens export <project.json> -o out.mp4|out.webm|out.gif [--aspect 16:9|9:16|1:1]
                   [--quality 720|1080|1440|2160] [--fps 30]
@@ -99,6 +101,20 @@ fn run() -> Result<()> {
         "record" => record(a),
         "doctor" => {
             let secs: f64 = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?.unwrap_or(3.0);
+            if a.flag("--audio") {
+                let mic = a.opt(&["--mic"]);
+                let r = demolens_core::capture::mic::check_audio(mic.as_deref(), secs);
+                let ok = matches!(r.state, demolens_core::capture::mic::MicState::Ok { .. });
+                let report = serde_json::json!({
+                    "ok": ok, "backend": r.backend, "devices": r.devices, "state": r.state,
+                    "peak_db": r.peak_db, "message": r.state.message(), "log": r.log.display().to_string(),
+                });
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                if !ok {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             if a.flag("--prompt-keys") {
                 demolens_core::input::key_permission_missing(true);
             }
@@ -230,7 +246,9 @@ fn run() -> Result<()> {
             let ev = PathBuf::from(a.pos("events file")?);
             let dur: f64 = a.opt(&["--duration"]).context("--duration required")?.parse()?;
             let log = EventLog::load(&ev)?;
-            let segs = zoom::generate_zoom_segments(&log, dur, &zoom::ZoomConfig::default());
+            let clicks: usize = a.opt(&["--clicks"]).map(|v| v.parse()).transpose()?.unwrap_or(3);
+            let cfg = zoom::ZoomConfig::default().with_clicks(clicks, 4500.0);
+            let segs = zoom::generate_zoom_segments(&log, dur, &cfg);
             println!("{}", serde_json::to_string_pretty(&segs)?);
             Ok(())
         }

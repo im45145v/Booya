@@ -18,6 +18,7 @@ async function checkForUpdate(quiet) {
     if (!quiet) status('Could not check for updates: ' + humanError(e), 'error');
     return null;
   }
+  if (!u) return null;
   lastUpdate = u;
   if (u.available) showUpdateBanner(u);
   else if (!quiet) status(`DemoLens ${u.current} is the latest version.`, 'success');
