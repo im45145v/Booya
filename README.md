@@ -63,9 +63,12 @@ If you record developer tools, your screen is full of tokens, emails and custome
 - **Shortcuts you can change**: Settings > Shortcuts lists every recording action (start or stop, pause, record an area, a window or the full screen, restart the take, discard, drop a marker, toggle the microphone, webcam and key display). Click a row, press the new keys, and it checks for clashes with your other shortcuts and with other apps. Reset one row or all of them. The keys you set show in the tooltips, the menu and the tray menu.
 - **Markers**: press the marker shortcut (or the flag button on the pill) during a recording and the editor adds a zoom to the cursor at that moment.
 - **Webcam and layouts**: record the webcam alongside the screen (macOS, Linux and, new in 0.6.0, Windows). Show it as a circle or rounded square in any corner, in a column beside the screen, full screen, or not at all, and change the layout for any stretch of the recording on the timeline, with a blend between layouts. In 9:16 and 1:1 videos the screen follows the cursor. Optional mirror. It all shows in the editor preview, not only in the export ([how](docs/EDITING.md)).
-- **Auto zoom**: zoom segments are generated from the moments worth a closer look: aimed clicks, the start of typing, a cursor that rests, and markers. Navigation (tab and window switches, the Dock, menus, drags, scrolling) is skipped. Subtle, Normal and Lively set how picky it is ([rules](docs/EDITING.md)). The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
+- **Auto zoom**: the camera stays on the whole screen and zooms only for a cluster of clicks in one small area (3 on Normal, a setting), a burst of typing, or a marker. Navigation (tab and window switches, the Dock, menus, drags) is skipped, and it eases out while you scroll. Subtle, Normal and Lively set how picky it is ([rules](docs/EDITING.md)). The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
 - **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
 - **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
+- **Device frames, motion blur, music**: put the recording in a vector laptop, browser or phone frame, blur fast zoom and pan moves, and add a music track that ducks under your voice, with fades. Mute a single clip, and pin the camera to a corner or an edge. See `docs/EDITING.md`.
+- **System audio**: off by default (the speaker button). Linux records the monitor with the screen; Windows uses WASAPI loopback and macOS a ScreenCaptureKit audio stream, both as a sidecar mixed into the voice track.
+- **First run on a Mac**: a Welcome screen asks for Screen Recording (required), Microphone, Input Monitoring and System audio, one row each with a button that asks or opens the exact Settings page, and tells you if an update switched one off. It is also under Settings > Permissions. Windows and Linux show the microphone only.
 - **Glass frame**: Style > Glass puts the recording on a frosted panel over the background, with adjustable blur, tint, edge light, corner radius and inset. Captions, notes and key labels use the same frosted look. The built-in presets "Frosted" and "Frosted dark" start from it.
 - **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, twelve built-in wallpapers, intro and outro title cards, timed text callouts and drawn shapes (arrow, box, ellipse, highlight).
 - **Interactive demo**: `demolens interactive demo.json` (or the Auto edit tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
@@ -122,7 +125,7 @@ JSON Lines. The first line is a header, then one event per line. Times are milli
 
 ### Auto zoom
 
-Clicks, typing starts, cursor rests and markers are scored; groups that reach the intensity threshold become segments (the full rules and numbers are in `docs/EDITING.md`). Each segment starts 0.6 s before the event, holds 2.5 s after the last one and is never closer than 4.5 s to the next zoom. At render time the camera moves on a critically damped spring curve, follows the smoothed cursor, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/demolens-core/src/zoom.rs`.
+The camera stays on the whole screen and zooms only for a cluster of clicks (3 in one small area within 4.5 s on Normal, a setting), a burst of typing over 1.5 s, or a marker. It eases out while you scroll, never zooms in the first second and holds long. The full rules and numbers are in `docs/EDITING.md`. At render time the camera moves on a critically damped spring curve, follows the smoothed cursor inside a dead zone, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/demolens-core/src/zoom.rs`.
 
 ## Local models
 
@@ -197,10 +200,10 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
-| Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
+| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | ScreenCaptureKit audio stream (macOS 13+, off by default, written on the side and mixed in; not yet run on a Mac) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
+| Windows | ffmpeg `gdigrab`: screen, window (by title), area | WASAPI in process (DirectShow as fallback; set `DEMOLENS_MIC` to choose) | WASAPI loopback of the default speakers (off by default, written on the side and mixed in) | rdev |
 
-Native GPU capture on Windows (Windows.Graphics.Capture) and system audio on macOS are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.
+Native GPU capture on Windows (Windows.Graphics.Capture) is stubbed with a TODO in `crates/demolens-core/src/capture/`. Run `demolens doctor --audio` to record 3 seconds from the microphone and see its level. The ffmpeg output of a recording's audio is kept in `audio.log` in the project folder.
 
 ### Is capture working? `demolens doctor`
 
@@ -308,9 +311,9 @@ Done: blur boxes, a visual area picker with window snapping, webcam overlay, opt
 - Intel Mac builds. The release ships Apple Silicon only; Intel Macs can build from source with `cargo build --release --target x86_64-apple-darwin`.
 - Local voiceover with Piper, to replace or fix narration.
 - Loudness normalisation for the mic track.
-- System audio on macOS through SCStream, and Windows.Graphics.Capture plus WASAPI loopback (Windows).
+- Windows.Graphics.Capture (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.
-- Motion blur on zoom transitions and cursor.
+- Motion blur on the cursor (zoom and pan blur is done).
 
 ## License
 

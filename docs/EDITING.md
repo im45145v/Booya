@@ -64,45 +64,47 @@ In a 9:16 or 1:1 video the whole screen would be tiny, so the screen shows a win
 
 ## Auto zoom: when it zooms
 
-Auto zoom is selective. It scores what happened and only moves the camera when the viewer has something small to look at. Every zoom it makes is a normal segment on the timeline: drag it, resize it, change its scale or delete it.
+The camera stays on the whole screen unless something small is worth a closer look. A recording opens full screen, and most of a typical minute stays that way: expect 3 to 6 zooms a minute, usually fewer. Every zoom is a normal segment on the timeline: drag it, resize it, change its scale or delete it.
 
-**What scores**
+**What makes a zoom**
 
-| Moment | Score |
-| --- | --- |
-| A marker you dropped | 1.0 |
-| Typing starts (3 or more keys with under 1.2 s between them) | 0.8 |
-| A click where the cursor had settled first (an aimed click) | 0.75 |
-| The cursor arrives somewhere and rests about 1 s | 0.6 |
-| A click while the cursor was still moving | 0.4 |
+- **A cluster of clicks.** At least 3 left clicks (Normal) that land inside a small area, about a fifth of the screen, within 4.5 s of each other. The count and the window are settings (Auto zoom > Clicks to zoom, Within). Subtle needs 4 clicks, Lively needs 2.
+- **Typing.** A burst of at least 5 keys that goes on for more than 1.5 s, in one place.
+- **A marker** you dropped during the recording.
 
-Events that follow each other (within 3 s and within a quarter of the screen, or within 1.8 s wherever they are) form one group. A group zooms when its best score plus 0.15 per extra event reaches the threshold of the chosen intensity.
+That is all. A single click does not zoom, and neither does a cursor that rests, a window that slides in, the screen changing or a cursor that moves a long way. Those used to count and made the camera jump for no reason.
 
-**What never zooms**
+**What never counts**
 
 - Clicks in the menu bar, the tab strip, the Dock or the taskbar, and at the screen edges.
 - Right and middle clicks, and drags.
-- Clicks within 1.2 s after a tab or window switch (Cmd or Ctrl plus Tab, T, W, N, a digit, Page Up, Page Down, the arrows or the backtick key).
-- A click straight after the cursor jumped across the screen.
-- The second click of a quick double click (under 0.35 s).
-- Shortcuts. They do not start a zoom on their own.
+- Clicks within 1.2 s after a tab or window switch, and the second click of a quick double click.
+- Clicks while the page is scrolling.
+- Anything in the first second.
 
 **Staying in, panning and zooming out**
 
-- If the next event is within a quarter of the screen (about 18 percent for Subtle, 30 percent for Lively), the camera stays zoomed and pans to it.
-- If the next event is far away but comes soon (under 1.8 s), the camera goes straight there. It does not zoom out and in again.
-- After 2 to 3 s without activity (the Zoom hold slider) it eases out.
-- Zooms start about 0.6 s before the event, are at least 4.4 s long and are never closer than 4.5 s start to start (Normal). The better one stays when two collide.
+- Clicks that keep coming in the same area stay in the running zoom, and the camera pans to them inside a dead zone (the Steadiness setting), so small cursor motion does not move the view.
+- The camera eases in and out on a spring curve (about 0.9 s each way), holds 2.5 s after the last click or key, and never overshoots.
+- The whole screen stays up at least 1.5 s between two zooms.
+- **Scrolling.** Scroll events are logged on every system. While you scroll, the camera eases out to the full screen and stays there until the scrolling has stopped for 0.8 s.
 
 **Intensity**
 
 | | Subtle | Normal | Lively |
 | --- | --- | --- | --- |
-| Needs a score of | 0.8 | 0.55 | 0.35 |
+| Clicks in one area | 4 | 3 | 2 |
 | Level | 1.5x | 1.6x | 1.8x |
-| One zoom per at least | 5.5 s | 4.5 s | 3.5 s |
-| Dwell time | 1.5 s | 1 s | 0.8 s |
+| Hold after the last event | 2 s | 2.5 s | 3 s |
 
-Subtle zooms on typing, markers and clusters of clicks. Normal also zooms on a single aimed click and on a cursor that rests. Lively also zooms on hurried clicks. The depth is never more than 2x and always keeps a margin round what was clicked. The camera uses a spring curve: it leaves at once, eases to a stop and never overshoots.
+The depth is never more than 2x and always keeps a margin round what was clicked.
 
-**Limits.** "Small target" is judged by the cursor settling before a click, because the event log has no information about what is under the cursor. Scroll events are not logged, so scrolling cannot be skipped by rule, but it moves no clicks and so makes no zoom.
+**Limits.** "Small area" is judged from where the clicks landed, because the event log has no information about what is under the cursor. Typing is detected from the key events, so with key capture off there are no typing zooms.
+
+## Device frames, motion blur, music and muting a clip
+
+- **Device frame** (Style > Frame): a simple vector laptop, browser window or phone drawn around the recording. They are plain shapes, not any maker's artwork. Choose None to keep the plain or glass look.
+- **Motion blur** (Style > Frame): blurs the picture along the direction the camera is moving during zooms and pans. Off by default; the picture is only smeared while the camera is moving.
+- **Music** (Style > Music): pick an audio file. Set the volume, how far it ducks under your voice (and by how many dB), the fade in and out, where it starts and whether it loops. The editor plays it natively, the export mixes the same way.
+- **Mute a clip** (Edit tab): select a clip and tick Mute clip. The recorded sound (voice and system audio) in that clip goes silent and the picture stays. The music keeps playing.
+- **Camera position**: the camera bubble can sit in any of the four corners or the middle of any edge.
