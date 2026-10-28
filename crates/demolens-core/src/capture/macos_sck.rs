@@ -464,10 +464,12 @@ pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
             y: 0,
             w: info.pixels.0,
             h: info.pixels.1,
+            z: 0,
         });
     }
     let scale = ordered_displays(&content).first().map(|d| display_info(0, d).scale).unwrap_or(1.0);
-    for w in content.windows() {
+    // ScreenCaptureKit returns windows front to back, so the index is the stacking order.
+    for (z, w) in content.windows().iter().enumerate() {
         let f = w.frame();
         if !w.is_on_screen() || w.window_layer() != 0 || f.size.width < 120.0 || f.size.height < 80.0 {
             continue;
@@ -491,6 +493,7 @@ pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
             y: (f.origin.y * scale) as i32,
             w: (f.size.width * scale) as u32,
             h: (f.size.height * scale) as u32,
+            z: z as u32,
         });
     }
     sort_sources(&mut v);

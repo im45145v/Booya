@@ -353,6 +353,12 @@ dialog.wide { width: min(980px, 94vw); }
 .pk-sel i[data-h="nw"] { left: -7px; top: -7px; cursor: nwse-resize; } .pk-sel i[data-h="ne"] { right: -7px; top: -7px; cursor: nesw-resize; }
 .pk-sel i[data-h="sw"] { left: -7px; bottom: -7px; cursor: nesw-resize; } .pk-sel i[data-h="se"] { right: -7px; bottom: -7px; cursor: nwse-resize; }
 .pk-size { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 2px 8px; border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font: 600 var(--fs-sm) var(--mono); pointer-events: none; white-space: nowrap; }
+.pk-hover { position: absolute; pointer-events: none; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 3px; }
+.pk-tip { position: absolute; left: 6px; top: 6px; max-width: calc(100% - 12px); padding: 2px 8px; border-radius: 10px; background: rgba(0,0,0,.75); color: #fff; font: var(--fs-sm) var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pk-tip b { font-weight: 700; }
+.pk-guide { position: absolute; pointer-events: none; background: var(--brand-amber); opacity: .9; }
+.pk-guide.v { top: 0; bottom: 0; width: 1px; } .pk-guide.h { left: 0; right: 0; height: 1px; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 .pk-nums { margin-top: var(--sp-3); align-items: center; }
 .pk-nums label.inline .field { width: 84px; }
 .pk-icon.disp { background: var(--accent); } .pk-icon .ico { width: 14px; height: 14px; }

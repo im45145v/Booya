@@ -103,10 +103,12 @@ pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
     use super::sources::{sort_sources, SourceInfo};
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
     let (sw, sh) = screen_size(&display)?;
-    let mut v = vec![SourceInfo { kind: "display".into(), id: "0".into(), title: "Entire screen".into(), app: String::new(), bundle: String::new(), x: 0, y: 0, w: sw, h: sh }];
+    let mut v = vec![SourceInfo { kind: "display".into(), id: "0".into(), title: "Entire screen".into(), app: String::new(), bundle: String::new(), x: 0, y: 0, w: sw, h: sh, z: 0 }];
     let tree = Command::new("xwininfo").env("DISPLAY", &display).args(["-root", "-tree"]).output().context("xwininfo not found (install x11-utils)")?;
     let mut seen = std::collections::HashSet::new();
-    for (id, title, class, w, h, x, y) in parse_tree(&String::from_utf8_lossy(&tree.stdout)) {
+    // xwininfo prints the topmost child first, so the index is the stacking order.
+    let all = parse_tree(&String::from_utf8_lossy(&tree.stdout));
+    for (i, (id, title, class, w, h, x, y)) in all.into_iter().enumerate() {
         if title.is_empty() || class.to_lowercase().contains("demolens") || w < 120 || h < 80 || !seen.insert(id.clone()) {
             continue;
         }
@@ -115,7 +117,7 @@ pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
         if !info.map(|o| String::from_utf8_lossy(&o.stdout).contains("IsViewable")).unwrap_or(false) {
             continue;
         }
-        v.push(SourceInfo { kind: "window".into(), id, title, app: class, bundle: String::new(), x, y, w, h });
+        v.push(SourceInfo { kind: "window".into(), id, title, app: class, bundle: String::new(), x, y, w, h, z: i as u32 });
     }
     sort_sources(&mut v);
     Ok(v)

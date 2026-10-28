@@ -106,14 +106,19 @@ async function openPicker(tab = 'screens') {
 async function pkArea(body) {
   body.innerHTML = '<div class="pk-empty">Taking a screenshot to pick from...</div>';
   let s;
+  let sources = [];
+  const listing = invoke('capture_sources').then(v => (sources = v), () => {});
   try { s = await invoke('screen_snapshot'); } catch (e) { body.innerHTML = `<div class="pk-empty"><b>Could not take a screenshot.</b><br>${esc(humanError(e))}</div>`; return; }
   if (!$('modal').open || !$('pk-body')) return;
+  await listing;
+  if (!$('modal').open || !$('pk-body')) return;
   const W = s.w, H = s.h;
-  let aspect = 0, sel = null;
-  body.innerHTML = `<p class="muted small">Drag on the screenshot to choose the part to record. Drag the box to move it, or a corner to resize.</p>
+  const wins = Snap.usableWindows(sources, W, H), edges = Snap.edgeTargets(wins, W, H);
+  let aspect = 0, sel = null, snapOn = true;
+  body.innerHTML = `<p class="muted small">Hover a window and click to snap to it, or drag for a free area. Drag the box to move it, or a corner to resize. Hold ${/Mac/i.test(navigator.platform) ? 'Option' : 'Alt'} to turn snapping off for a moment.</p>
     <div class="pk-aspects" role="radiogroup" aria-label="Aspect ratio">${PK_ASPECTS.map(([n], i) => `<button class="chip" role="radio" data-i="${i}" aria-checked="${i === 0}">${n}</button>`).join('')}
-      <span class="spacer"></span><button class="chip" id="pk-full">Whole screen</button></div>
-    <div class="draw pk-draw" id="pk-draw"><img src="${s.url}" alt="" draggable="false" /><div class="pk-sel" id="pk-sel" hidden><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i><span class="pk-size" id="pk-size"></span></div></div>
+      <span class="spacer"></span><button class="chip" id="pk-snap" aria-pressed="true" title="Snap to windows and to window and screen edges">Snap</button><button class="chip" id="pk-full">Whole screen</button></div>
+    <div class="draw pk-draw" id="pk-draw"><img src="${s.url}" alt="" draggable="false" /><div class="pk-sel" id="pk-sel" hidden><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i><span class="pk-size" id="pk-size"></span></div><div class="pk-hover" id="pk-hover" hidden><span class="pk-tip" id="pk-tip"></span></div><i class="pk-guide v" id="pk-gv" hidden></i><i class="pk-guide h" id="pk-gh" hidden></i></div>
     <div class="row pk-nums"><label class="inline">X<input class="field" id="pk-x" type="number" min="0" /></label><label class="inline">Y<input class="field" id="pk-y" type="number" min="0" /></label><label class="inline">Width<input class="field" id="pk-w" type="number" min="2" /></label><label class="inline">Height<input class="field" id="pk-h" type="number" min="2" /></label>
       <span class="spacer"></span><button class="btn primary" id="pk-use" disabled>Record this area</button></div>`;
   const box = $('pk-draw'), el = $('pk-sel');
@@ -129,7 +134,7 @@ async function pkArea(body) {
     if (!sel) return;
     Object.assign(el.style, { left: sel.x / W * 100 + '%', top: sel.y / H * 100 + '%', width: sel.w / W * 100 + '%', height: sel.h / H * 100 + '%' });
     $('pk-size').textContent = `${sel.w & ~1} x ${sel.h & ~1}`;
-    ['x', 'y', 'w', 'h'].forEach(k => { if (document.activeElement !== $('pk-' + k)) $('pk-' + k).value = sel[k]; });
+    ['x', 'y', 'w', 'h'].forEach(k => { if (document.activeElement !== $('pk-' + k)) $('pk-' + k).value = Math.round(sel[k]); });
   };
   // A rectangle from a fixed corner (ax, ay) to the pointer, honouring the aspect lock and the bounds.
   const fromCorner = (ax, ay, px, py) => {
@@ -144,24 +149,82 @@ async function pkArea(body) {
     return { x: sx > 0 ? ax : ax - w, y: sy > 0 ? ay : ay - h, w, h };
   };
   const pt = e => { const b = box.getBoundingClientRect(); return [Math.max(0, Math.min(W, (e.clientX - b.left) / b.width * W)), Math.max(0, Math.min(H, (e.clientY - b.top) / b.height * H))]; };
-  let drag = null;
+  // Snapping: hover a window to highlight it, click to take its frame, and pull edges onto neighbours.
+  const hov = $('pk-hover'), guideV = $('pk-gv'), guideH = $('pk-gh');
+  const snapping = e => snapOn && !e.altKey;
+  const tolPx = () => 8 * W / box.getBoundingClientRect().width;
+  const place = (node, r) => Object.assign(node.style, { left: r.x / W * 100 + '%', top: r.y / H * 100 + '%', width: r.w / W * 100 + '%', height: r.h / H * 100 + '%' });
+  const hitAt = (e, px, py) => {
+    if (!snapping(e)) return null;
+    const w = Snap.windowAt(wins, px, py);
+    return w ? { win: w, rect: Snap.fitAspect(w, aspect) } : null;
+  };
+  const showGuides = (gx, gy) => {
+    guideV.hidden = gx == null; guideH.hidden = gy == null;
+    if (gx != null) guideV.style.left = gx / W * 100 + '%';
+    if (gy != null) guideH.style.top = gy / H * 100 + '%';
+  };
+  const showHover = hit => {
+    hov.hidden = !hit;
+    if (!hit) return;
+    place(hov, hit.rect);
+    $('pk-tip').innerHTML = `<b>${esc(hit.win.app || hit.win.title)}</b> ${hit.rect.w} x ${hit.rect.h}`;
+  };
+  let drag = null, lastMove = null;
+  const refreshHover = e => {
+    if (drag || e.target?.dataset?.h) return showHover(null);
+    const [px, py] = pt(e);
+    // Over the current selection the pointer moves it, so no window highlight there.
+    if (sel && px >= sel.x && px <= sel.x + sel.w && py >= sel.y && py <= sel.y + sel.h) return showHover(null);
+    showHover(hitAt(e, px, py));
+  };
   box.onpointerdown = e => {
     box.setPointerCapture(e.pointerId);
-    const [px, py] = pt(e), h = e.target.dataset?.h;
+    let [px, py] = pt(e);
+    const h = e.target.dataset?.h;
+    showHover(null);
     if (h && sel) {
       const ax = h.includes('w') ? sel.x + sel.w : sel.x, ay = h.startsWith('n') ? sel.y + sel.h : sel.y;
       drag = { mode: 'corner', ax, ay };
     } else if (sel && e.target === el) drag = { mode: 'move', ox: px - sel.x, oy: py - sel.y };
-    else drag = { mode: 'corner', ax: px, ay: py, fresh: true };
+    else {
+      // A click without a drag takes the window under the pointer, a drag draws freely.
+      const hit = hitAt(e, px, py);
+      if (snapping(e)) { const p = Snap.snapPoint(px, py, edges, tolPx()); px = p.x; py = p.y; }
+      drag = { mode: 'corner', ax: px, ay: py, fresh: true, cx: e.clientX, cy: e.clientY, hit, moved: false };
+    }
   };
   box.onpointermove = e => {
-    if (!drag) return;
-    const [px, py] = pt(e);
-    if (drag.mode === 'move') sel = clampSel({ ...sel, x: px - drag.ox, y: py - drag.oy });
-    else { const r = fromCorner(drag.ax, drag.ay, px, py); if (r.w >= 4 && r.h >= 4) sel = r; }
+    lastMove = e;
+    if (!drag) return refreshHover(e);
+    if (drag.fresh && !drag.moved && Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) > 4) drag.moved = true;
+    if (drag.fresh && !drag.moved) return;
+    let [px, py] = pt(e), gx = null, gy = null;
+    if (drag.mode === 'move') {
+      sel = clampSel({ ...sel, x: px - drag.ox, y: py - drag.oy });
+      if (snapping(e)) { const m = Snap.snapMove(sel, edges, tolPx()); sel = clampSel(m.rect); gx = m.gx; gy = m.gy; }
+    } else {
+      if (snapping(e)) { const p = Snap.snapPoint(px, py, edges, tolPx()); px = p.x; py = p.y; gx = p.gx; gy = p.gy; }
+      const r = fromCorner(drag.ax, drag.ay, px, py);
+      if (r.w >= 4 && r.h >= 4) sel = r;
+    }
+    showGuides(gx, gy);
     paint();
   };
-  box.onpointerup = () => { if (sel) sel = clampSel(sel); drag = null; paint(); };
+  box.onpointerup = () => {
+    if (drag?.fresh && !drag.moved && drag.hit) sel = clampSel(drag.hit.rect);
+    if (sel) sel = clampSel(sel);
+    drag = null; showGuides(null, null); paint();
+    if (lastMove) refreshHover(lastMove);
+  };
+  box.onpointerleave = () => { lastMove = null; if (!drag) showHover(null); };
+  // Alt toggles snapping live, even while the pointer is still.
+  const onKey = e => {
+    if (!$('pk-draw') || $('pk-draw') !== box) return document.removeEventListener('keydown', onKey), document.removeEventListener('keyup', onKey);
+    if (e.key === 'Alt' && lastMove && !drag) refreshHover({ target: lastMove.target, clientX: lastMove.clientX, clientY: lastMove.clientY, altKey: e.type === 'keydown' });
+  };
+  document.addEventListener('keydown', onKey); document.addEventListener('keyup', onKey);
+  $('pk-snap').onclick = () => { snapOn = !snapOn; $('pk-snap').setAttribute('aria-pressed', snapOn); if (!snapOn) showHover(null); };
   document.querySelectorAll('.pk-aspects [data-i]').forEach(b => (b.onclick = () => {
     aspect = PK_ASPECTS[+b.dataset.i][1];
     document.querySelectorAll('.pk-aspects [data-i]').forEach(x => x.setAttribute('aria-checked', x === b));

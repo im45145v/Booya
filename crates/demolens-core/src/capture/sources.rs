@@ -23,6 +23,8 @@ pub struct SourceInfo {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Stacking order among windows, 0 is frontmost. Displays use 0.
+    pub z: u32,
 }
 
 impl SourceInfo {
@@ -121,6 +123,28 @@ pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Parses the Windows window script output into window sources. Each line is
+/// `process<TAB>left<TAB>top<TAB>right<TAB>bottom<TAB>title`, frontmost first.
+/// Tiny, empty and off screen windows are skipped.
+pub fn parse_win_lines(text: &str) -> Vec<SourceInfo> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.trim_end_matches('\r').splitn(6, '\t').collect();
+        if f.len() < 6 {
+            continue;
+        }
+        let (Ok(l), Ok(t), Ok(r), Ok(b)) = (f[1].trim().parse::<i32>(), f[2].trim().parse::<i32>(), f[3].trim().parse::<i32>(), f[4].trim().parse::<i32>()) else { continue };
+        let title = f[5].trim();
+        let (w, h) = (r - l, b - t);
+        if title.is_empty() || w < 120 || h < 80 || r <= 0 || b <= 0 {
+            continue;
+        }
+        let z = out.len() as u32;
+        out.push(SourceInfo { kind: "window".into(), id: title.to_string(), title: title.to_string(), app: f[0].trim().to_string(), bundle: String::new(), x: l, y: t, w: w as u32, h: h as u32, z });
+    }
+    out
+}
+
 /// Sorts a picker list: displays first, then windows by app and title.
 pub fn sort_sources(v: &mut [SourceInfo]) {
     v.sort_by(|a, b| {
@@ -133,7 +157,7 @@ mod tests {
     use super::*;
 
     fn win(app: &str, title: &str) -> SourceInfo {
-        SourceInfo { kind: "window".into(), id: "1".into(), title: title.into(), app: app.into(), bundle: String::new(), x: 0, y: 0, w: 800, h: 600 }
+        SourceInfo { kind: "window".into(), id: "1".into(), title: title.into(), app: app.into(), bundle: String::new(), x: 0, y: 0, w: 800, h: 600, z: 0 }
     }
 
     #[test]
@@ -142,6 +166,15 @@ mod tests {
         sort_sources(&mut v);
         let names: Vec<_> = v.iter().map(|s| format!("{}:{}", s.app, s.title)).collect();
         assert_eq!(names, [":Screen 1", "Notes:a", "Notes:z", "Safari:b"]);
+    }
+
+    #[test]
+    fn windows_script_lines_become_stacked_windows() {
+        let text = "chrome\t100\t50\t1380\t850\tInbox - Chrome\r\nExplorer\t10\t10\t60\t40\tTiny\nnotepad\t-5\t0\t600\t400\tnotes.txt - Notepad\nbroken line\ncode\t0\t0\t900\t700\t\n";
+        let v = parse_win_lines(text);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert_eq!((v[0].app.as_str(), v[0].x, v[0].y, v[0].w, v[0].h, v[0].z), ("chrome", 100, 50, 1280, 800, 0));
+        assert_eq!((v[1].title.as_str(), v[1].x, v[1].w, v[1].z), ("notes.txt - Notepad", -5, 605, 1));
     }
 
     #[test]

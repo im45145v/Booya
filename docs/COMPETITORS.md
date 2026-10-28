@@ -43,7 +43,7 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 7. **Honest diagnostics.** `demolens doctor` and `demolens verify` tell you what is wrong with permissions, audio level and sync instead of leaving you guessing.
 8. **Audio that is audible.** Two-pass loudness to -16 LUFS on export and in the editor, a mic level meter before you record, and a quiet-mic warning.
 
-## Where 0.3.1 stands against that list
+## Where 0.3.2 stands against that list
 
 | Idea | Status |
 |---|---|
@@ -53,7 +53,7 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 | Instant share | Signed link to your own S3 or R2 for videos and interactive demos; no hosted viewer |
 | Zoom polish | Dead zone camera that holds still and follows only at the edge, anticipates the action, steadiness slider, three zoom styles; no loupe or tilt |
 | Intro and outro, callouts, watermark, background photos | Done; 0.3.1 adds arrows, boxes, ellipses and highlights, and twelve wallpapers |
-| Visual window and area picker | Done in 0.3.1: live previews, app icons, search, drag to select with aspect presets (macOS parts untested on hardware) |
+| Visual window and area picker | Done in 0.3.1: live previews, app icons, search, drag to select with aspect presets. 0.3.2 adds hover to snap (highlight a window, click to take its frame) and snap to edges while dragging. macOS parts untested on hardware |
 | macOS key track | Written (Input Monitoring poller), not yet run on a real Mac |
 | Multi-clip projects | Not done |
 | Script cleanup and voice retakes | Not done (needs a local TTS model) |
