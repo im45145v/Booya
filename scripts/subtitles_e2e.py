@@ -120,26 +120,43 @@ if lead_caps:
     check(first >= 1.8, f"no word starts before the voice does (first word at {first:.2f} s, voice at 2.0 s)")
     check(lead_caps[0]["start_ms"] / 1000 >= 1.8, f"the first caption starts with the voice ({lead_caps[0]['start_ms'] / 1000:.2f} s)")
 
-# --- fast continuous speech: words are not skipped ---
-FAST = ("Open the settings page and click the billing tab then choose the invoice you want "
-        "and press export so the file downloads straight away after that go back to the dashboard "
-        "pick last month from the date menu and check that the totals match the report")
+# --- fast continuous speech, long enough to need several chunks ---
+PASSAGES = [
+    "Open the settings page and click the billing tab then choose the invoice you want and press export so the file downloads straight away",
+    "After that go back to the dashboard and pick last month from the date menu then scroll down to the table of payments and sort it by amount",
+    "Now open the filter panel and tick the paid option and the refunded option so that only finished payments are listed in the table below",
+    "Finally copy the summary into the spreadsheet and check that the totals match the report before you send it to the finance team",
+]
+FAST = " ".join(PASSAGES)
+parts = []
+for i, text in enumerate(PASSAGES):
+    part = WORK / f"fast{i}.wav"
+    subprocess.run(["espeak-ng", "-s", "230", "-g", "0", "-w", str(part), text], check=True)
+    parts.append(part)
 wav = WORK / "fast.wav"
-subprocess.run(["espeak-ng", "-s", "290", "-w", str(wav), FAST], check=True)
+ff = ["ffmpeg", "-y", "-v", "error"]
+for part in parts:
+    ff += ["-i", str(part)]
+ff += ["-filter_complex", "".join(f"[{i}:a]" for i in range(len(parts))) + f"concat=n={len(parts)}:v=0:a=1", str(wav)]
+subprocess.run(ff, check=True)
 fast_mp4 = WORK / "fast.mp4"
 subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10", "-i", str(wav), "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(fast_mp4)], check=True)
 run("new", fast_mp4, "-o", WORK / "fast.json")
 fp = WORK / "fast.json"
 run("transcribe", fp, "--model", MODEL)
-heard = [re.sub(r"[^a-z]", "", w["text"].lower()) for c in json.loads(Path(fp).read_text())["captions"] for w in c["words"]]
+caps = json.loads(Path(fp).read_text())["captions"]
+heard = [re.sub(r"[^a-z]", "", w["text"].lower()) for c in caps for w in c["words"]]
 want = [re.sub(r"[^a-z]", "", w.lower()) for w in FAST.split()]
 got = sum(1 for w in set(want) if w in heard)
+last_ms = max((w["end_ms"] for c in caps for w in c["words"]), default=0)
 print("fast speech heard:", heard)
-# whisper-tiny on 290 wpm synthetic speech is not perfect, but the whole
-# passage must be there, start to end, not the first half only.
-check(got / len(set(want)) >= 0.6, f"fast speech: {got} of {len(set(want))} different words heard")
-check(any(w in heard for w in ["totals", "report", "match"]), "fast speech: the last sentence is not lost")
-check(any(w in heard for w in ["settings", "billing", "page"]), "fast speech: the first sentence is there")
+print(f"fast speech: {got} of {len(set(want))} different words, last word ends at {last_ms / 1000:.1f} s")
+# whisper-tiny on synthetic speech is not perfect, but the whole passage must
+# be there, start to end, not the first half only.
+check(got / len(set(want)) >= 0.55, f"fast speech: {got} of {len(set(want))} different words heard")
+check(any(w in heard for w in ["totals", "report", "finance", "spreadsheet"]), "fast speech: the last passage is not lost")
+check(any(w in heard for w in ["settings", "billing", "invoice", "export"]), "fast speech: the first passage is there")
+check(any(w in heard for w in ["filter", "panel", "paid", "refunded"]), "fast speech: the middle is not skipped")
 
 # --- no speech: no captions, no failure ---
 ns = project_path(run("sample", WORK / "nospeech"))

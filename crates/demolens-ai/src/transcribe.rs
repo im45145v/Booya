@@ -181,11 +181,21 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     if !holes.is_empty() {
         let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
         if let Ok(found) = run_ranges(&audio, model, language, &prompt, &ranges) {
-            for ((a, b), ws) in holes.iter().zip(found) {
+            for (((a, b), (from, _)), ws) in holes.iter().zip(&ranges).zip(found) {
+                // Whisper's times are from the start of the stretch it was given.
+                let off = *from as f64 * 1000.0 / 16_000.0;
                 if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
-                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again {:?}", ws.iter().map(|w| (w.text.as_str(), w.start_ms.round())).collect::<Vec<_>>());
+                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again {:?}", ws.iter().map(|w| (w.text.as_str(), (w.start_ms + off).round())).collect::<Vec<_>>());
                 }
-                let mut ws: Vec<CaptionWord> = ws.into_iter().filter(|w| w.start_ms >= a - 100.0 && w.start_ms < *b && !demolens_core::captions::is_nonspeech(&w.text)).collect();
+                let mut ws: Vec<CaptionWord> = ws
+                    .into_iter()
+                    .map(|mut w| {
+                        w.start_ms += off;
+                        w.end_ms += off;
+                        w
+                    })
+                    .filter(|w| w.start_ms >= a - 100.0 && w.start_ms < *b && !demolens_core::captions::is_nonspeech(&w.text))
+                    .collect();
                 if ws.len() >= 2 && !only_hallucination(&ws) {
                     words.append(&mut ws);
                 }
