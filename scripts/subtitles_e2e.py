@@ -107,6 +107,40 @@ check(abs(find(cues, "invoice")[0] - inv[0]) < 0.01, "captions before the cut di
 total = sum((c["src_end_ms"] - c["src_start_ms"]) / c["speed"] for c in proj["clips"]) / 1000
 check(cues[-1][1] <= total + 0.05, "no caption runs past the end of the shortened video")
 
+# --- speech that starts 2 s in: no caption before the voice ---
+lead = WORK / "lead.mp4"
+subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(Path(json.loads(Path(sp).read_text())["source"])), "-af", "adelay=2000:all=1", "-c:v", "copy", str(lead)], check=True)
+run("new", lead, "-o", WORK / "lead.json")
+lp = WORK / "lead.json"
+run("transcribe", lp, "--model", MODEL)
+lead_caps = json.loads(Path(lp).read_text())["captions"]
+check(len(lead_caps) >= 1, "speech after two seconds of silence is captioned")
+if lead_caps:
+    first = min(w["start_ms"] for c in lead_caps for w in c["words"]) / 1000
+    check(first >= 1.8, f"no word starts before the voice does (first word at {first:.2f} s, voice at 2.0 s)")
+    check(lead_caps[0]["start_ms"] / 1000 >= 1.8, f"the first caption starts with the voice ({lead_caps[0]['start_ms'] / 1000:.2f} s)")
+
+# --- fast continuous speech: words are not skipped ---
+FAST = ("Open the settings page and click the billing tab then choose the invoice you want "
+        "and press export so the file downloads straight away after that go back to the dashboard "
+        "pick last month from the date menu and check that the totals match the report")
+wav = WORK / "fast.wav"
+subprocess.run(["espeak-ng", "-s", "290", "-w", str(wav), FAST], check=True)
+fast_mp4 = WORK / "fast.mp4"
+subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10", "-i", str(wav), "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(fast_mp4)], check=True)
+run("new", fast_mp4, "-o", WORK / "fast.json")
+fp = WORK / "fast.json"
+run("transcribe", fp, "--model", MODEL)
+heard = [re.sub(r"[^a-z]", "", w["text"].lower()) for c in json.loads(Path(fp).read_text())["captions"] for w in c["words"]]
+want = [re.sub(r"[^a-z]", "", w.lower()) for w in FAST.split()]
+got = sum(1 for w in set(want) if w in heard)
+print("fast speech heard:", heard)
+# whisper-tiny on 290 wpm synthetic speech is not perfect, but the whole
+# passage must be there, start to end, not the first half only.
+check(got / len(set(want)) >= 0.6, f"fast speech: {got} of {len(set(want))} different words heard")
+check(any(w in heard for w in ["totals", "report", "match"]), "fast speech: the last sentence is not lost")
+check(any(w in heard for w in ["settings", "billing", "page"]), "fast speech: the first sentence is there")
+
 # --- no speech: no captions, no failure ---
 ns = project_path(run("sample", WORK / "nospeech"))
 out = run("transcribe", ns, "--model", MODEL)
