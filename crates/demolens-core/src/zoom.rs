@@ -46,9 +46,17 @@ pub struct ZoomConfig {
     /// Segments closer than this are bridged into one, so the camera pans
     /// instead of zooming out and back in.
     pub bridge_gap_ms: f64,
-    /// A zoom needs at least this many separate clicks (or a typing burst or a
-    /// marker). One stray click is not worth moving the camera for.
-    pub min_clicks: usize,
+    /// What a group of events has to score to be worth a zoom (see
+    /// `collect_activity`). Lower means more zooms.
+    pub threshold: f64,
+    /// At most one zoom per this long: of two closer ones the better one stays.
+    pub spacing_ms: f64,
+    /// A next event this close on screen (share of the screen diagonal)
+    /// keeps the zoom and pans to it.
+    pub near_share: f64,
+    /// The cursor staying about this long where it arrived counts as interest.
+    pub dwell_ms: f64,
+    pub intensity: Intensity,
     /// Share of the zoomed frame kept clear around the clicked points, so
     /// nothing a viewer is meant to look at sits on the edge.
     pub bleed: f64,
@@ -59,25 +67,70 @@ pub struct ZoomConfig {
 impl Default for ZoomConfig {
     fn default() -> Self {
         Self {
-            merge_gap_ms: 3500.0,
-            lead_in_ms: 1100.0,
-            hold_ms: 1800.0,
-            min_duration_ms: 3900.0,
-            click_scale: 1.5,
-            typing_scale: 1.45,
+            merge_gap_ms: 3000.0,
+            lead_in_ms: 600.0,
+            hold_ms: 2500.0,
+            min_duration_ms: 900.0 + 900.0 + 2500.0 + 100.0,
+            click_scale: 1.6,
+            typing_scale: 1.5,
             typing_gap_ms: 1200.0,
-            typing_min_keys: 4,
-            ease_in_ms: 1000.0,
-            ease_out_ms: 1000.0,
-            bridge_gap_ms: 1500.0,
-            min_clicks: 2,
+            typing_min_keys: 3,
+            ease_in_ms: 900.0,
+            ease_out_ms: 900.0,
+            bridge_gap_ms: 1800.0,
+            threshold: 0.55,
+            spacing_ms: 4500.0,
+            near_share: 0.25,
+            dwell_ms: 1000.0,
+            intensity: Intensity::Normal,
             bleed: 0.17,
             max_scale: 2.0,
         }
     }
 }
 
+/// How eagerly auto zoom moves the camera.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Intensity {
+    /// Only clear moments: typing, a marker, or several aimed clicks together.
+    Subtle,
+    #[default]
+    Normal,
+    /// Every aimed or unaimed click, and shorter gaps between zooms.
+    Lively,
+}
+
+impl Intensity {
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "subtle" => Self::Subtle,
+            "lively" => Self::Lively,
+            _ => Self::Normal,
+        }
+    }
+}
+
 impl ZoomConfig {
+    /// The rules for one intensity. Normal is the default; Subtle is stricter
+    /// and Lively is looser.
+    pub fn with_intensity(mut self, i: Intensity) -> Self {
+        let (threshold, spacing, near, bridge, hold, dwell, level) = match i {
+            Intensity::Subtle => (0.8, 5500.0, 0.2, 2200.0, 2000.0, 1500.0, 1.5),
+            Intensity::Normal => (0.55, 4500.0, 0.25, 1800.0, 2500.0, 1000.0, 1.6),
+            Intensity::Lively => (0.35, 3500.0, 0.3, 1500.0, 3000.0, 800.0, 1.8),
+        };
+        self.intensity = i;
+        self.threshold = threshold;
+        self.spacing_ms = spacing;
+        self.near_share = near;
+        self.bridge_gap_ms = bridge;
+        self.dwell_ms = dwell;
+        self.hold_ms = hold;
+        self.min_duration_ms = self.ease_in_ms + self.ease_out_ms + self.hold_ms + 100.0;
+        self.with_level(level)
+    }
+
     /// Total of ease in, a hold and ease out: the shortest sensible segment.
     pub fn with_speed(mut self, ease_in_ms: f64, ease_out_ms: f64) -> Self {
         self.ease_in_ms = ease_in_ms.clamp(150.0, 3000.0);
@@ -102,15 +155,16 @@ impl ZoomConfig {
     }
 }
 
+/// One thing that may deserve a zoom, with how much it deserves it (0..1).
 #[derive(Debug, Clone, Copy)]
 struct Activity {
     t: f64,
     x: f64,
     y: f64,
     scale: f64,
+    /// 0 for keys after the first of a burst: they extend a zoom, not start one.
+    score: f64,
     typing: bool,
-    /// A click or tap, as opposed to typing or a marker.
-    click: bool,
 }
 
 /// The deepest zoom at which every point stays at least `bleed` of the zoomed
@@ -139,23 +193,108 @@ pub fn bleed_scale(points: &[(f64, f64)], w: f64, h: f64, bleed: f64, base: f64)
     s.max(1.0)
 }
 
-/// Build zoom segments from clicks and typing bursts.
-pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig) -> Vec<ZoomSegment> {
-    let track = CursorTrack::new(log);
-    let mut acts: Vec<Activity> = log
-        .clicks()
-        .map(|(t, x, y)| Activity { t, x, y, scale: cfg.click_scale, typing: false, click: true })
+/// Keys that switch tab or window. What follows them is navigation.
+fn is_navigation_shortcut(key: &str, mods: &[String]) -> bool {
+    let strong = mods.iter().any(|m| matches!(m.to_ascii_lowercase().as_str(), "ctrl" | "alt" | "meta" | "cmd" | "win" | "super" | "command" | "option"));
+    strong && matches!(key.to_ascii_lowercase().as_str(), "tab" | "`" | "~" | "pageup" | "pagedown" | "t" | "w" | "n" | "left" | "right" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+}
+
+/// Cursor position over time where a long silence means "it stayed put" (the
+/// log only holds moves, so a gap is a still cursor), not a slow glide.
+struct Held {
+    s: Vec<(f64, f64, f64)>,
+}
+
+impl Held {
+    fn new(log: &EventLog) -> Self {
+        Self { s: log.cursor_samples() }
+    }
+    fn at(&self, t: f64) -> Option<(f64, f64)> {
+        let s = &self.s;
+        if s.is_empty() {
+            return None;
+        }
+        let i = s.partition_point(|p| p.0 <= t);
+        if i == 0 {
+            return Some((s[0].1, s[0].2));
+        }
+        let a = s[i - 1];
+        if i >= s.len() || s[i].0 - a.0 > 250.0 {
+            return Some((a.1, a.2));
+        }
+        let b = s[i];
+        let k = (t - a.0) / (b.0 - a.0).max(1e-6);
+        Some((a.1 + (b.1 - a.1) * k, a.2 + (b.2 - a.2) * k))
+    }
+}
+
+/// Score what happened and decide where the camera should go.
+///
+/// A zoom is worth it when the viewer has something small to look at:
+///  * a **click** that was aimed (the cursor settled before it): 0.75, an
+///    unsettled one 0.4. Clicks in the menu bar, tab strip, Dock or taskbar,
+///    drags, a click right after a big cursor jump, the second click of a
+///    double click and clicks just after a tab or window switch are
+///    navigation and score nothing,
+///  * the **start of typing**: 0.8,
+///  * the cursor **dwelling** about a second where it arrived: 0.6,
+///  * a **marker**: 1.0.
+/// Events that follow each other and are close on screen (within a quarter of
+/// it) are one group; a group zooms when its best score plus 0.15 for every
+/// further event reaches the intensity's threshold.
+fn collect_activity(log: &EventLog, track: &Held, duration_ms: f64, cfg: &ZoomConfig) -> Vec<Activity> {
+    use crate::events::{EventKind, MouseButton};
+    let (fw, fh) = (log.header.width as f64, log.header.height as f64);
+    let diag = fw.hypot(fh).max(1.0);
+    let dist = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
+    let mut acts: Vec<Activity> = Vec::new();
+
+    // Tab and window switches: what follows is not worth a zoom.
+    let nav_until: Vec<(f64, f64)> = log.keys().filter(|(_, k, m)| is_navigation_shortcut(k, m)).map(|(t, _, _)| (t, t + 1200.0)).collect();
+    let after_nav = |t: f64| nav_until.iter().any(|&(a, b)| t >= a && t <= b);
+    let navigation_area = |x: f64, y: f64| y < fh * 0.05 || y > fh * 0.94 || x < fw * 0.02 || x > fw * 0.98;
+
+    let releases: Vec<(f64, f64, f64, MouseButton)> = log
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Release { x, y, button } => Some((e.t, x, y, button)),
+            _ => None,
+        })
         .collect();
+
+    let mut last_click = f64::MIN;
+    for e in &log.events {
+        let EventKind::Click { x, y, button } = e.kind else { continue };
+        let t = e.t;
+        let quick_repeat = t - last_click < 350.0;
+        last_click = t;
+        if button == MouseButton::Right || button == MouseButton::Middle || quick_repeat {
+            continue;
+        }
+        if navigation_area(x, y) || after_nav(t) {
+            continue;
+        }
+        // A drag: the button stays down while the cursor travels.
+        let dragged = releases.iter().find(|r| r.0 >= t && r.3 == button).is_some_and(|r| r.0 - t > 400.0 && dist((r.1, r.2), (x, y)) > diag * 0.03);
+        if dragged {
+            continue;
+        }
+        let at = |dt: f64| track.at(t - dt).unwrap_or((x, y));
+        // Straight after a big jump of the cursor: the viewer is still finding it.
+        if dist(at(250.0), (x, y)) > diag * 0.4 {
+            continue;
+        }
+        let aimed = [300.0, 200.0, 100.0].iter().all(|&dt| dist(at(dt), (x, y)) <= diag * 0.012);
+        let score = if button == MouseButton::Touch || aimed { 0.75 } else { 0.4 };
+        acts.push(Activity { t, x, y, scale: cfg.click_scale, score, typing: false });
+    }
     // Markers are deliberate: zoom to where the cursor was when it was dropped.
-    acts.extend(log.marks().map(|(t, x, y)| Activity { t, x, y, scale: cfg.click_scale, typing: false, click: false }));
+    acts.extend(log.marks().map(|(t, x, y)| Activity { t, x, y, scale: cfg.click_scale, score: 1.0, typing: false }));
 
     // Typing bursts: runs of key presses with small gaps. Shortcuts (keys with
     // modifiers other than Shift) are not typing and do not zoom on their own.
-    let keys: Vec<f64> = log
-        .keys()
-        .filter(|(_, _, m)| m.iter().all(|m| m.eq_ignore_ascii_case("shift")))
-        .map(|(t, _, _)| t)
-        .collect();
+    let keys: Vec<f64> = log.keys().filter(|(_, _, m)| m.iter().all(|m| m.eq_ignore_ascii_case("shift"))).map(|(t, _, _)| t).collect();
     let mut i = 0;
     while i < keys.len() {
         let mut j = i;
@@ -163,27 +302,87 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
             j += 1;
         }
         if j - i + 1 >= cfg.typing_min_keys {
-            let fallback = (log.header.width as f64 / 2.0, log.header.height as f64 / 2.0);
-            for &t in &keys[i..=j] {
-                let (x, y) = track.raw_at(t).unwrap_or(fallback);
-                acts.push(Activity { t, x, y, scale: cfg.typing_scale, typing: true, click: false });
+            let fallback = (fw / 2.0, fh / 2.0);
+            for (n, &t) in keys[i..=j].iter().enumerate() {
+                let (x, y) = track.at(t).unwrap_or(fallback);
+                acts.push(Activity { t, x, y, scale: cfg.typing_scale, score: if n == 0 { 0.8 } else { 0.0 }, typing: true });
             }
         }
         i = j + 1;
     }
-    acts.sort_by(|a, b| a.t.total_cmp(&b.t));
 
-    // Group activity.
+    // Dwell: the cursor arrived somewhere and stayed there about a second.
+    if !track.s.is_empty() && cfg.dwell_ms > 0.0 {
+        let end = if duration_ms > 0.0 { duration_ms } else { f64::MAX };
+        let r = diag * 0.035;
+        let mut anchor = track.at(0.0).unwrap_or((0.0, 0.0));
+        let mut since = 0.0;
+        let mut done = false;
+        let mut t = 0.0;
+        let step = 100.0;
+        let last_sample = track.s.last().map(|s| s.0).unwrap_or(0.0);
+        let stop = end.min(last_sample + cfg.dwell_ms * 3.0);
+        while t <= stop {
+            let p = track.at(t).unwrap_or(anchor);
+            if dist(p, anchor) > r {
+                anchor = p;
+                since = t;
+                done = false;
+            } else if !done && t - since >= cfg.dwell_ms {
+                done = true;
+                // It arrived from somewhere (not parked from the start) ...
+                let came = (1..=15).any(|k| track.at((since - k as f64 * 100.0).max(0.0)).is_some_and(|q| dist(q, anchor) > diag * 0.08));
+                // ... on something other than the screen edge, with no click or typing of its own.
+                let busy = acts.iter().any(|a| a.score > 0.0 && a.t >= since - 300.0 && a.t <= t + 1500.0);
+                if came && !busy && !navigation_area(anchor.0, anchor.1) && !after_nav(t) {
+                    acts.push(Activity { t, x: anchor.0, y: anchor.1, scale: cfg.click_scale, score: 0.6, typing: false });
+                }
+            }
+            t += step;
+        }
+    }
+    acts.sort_by(|a, b| a.t.total_cmp(&b.t));
+    acts
+}
+
+/// Score of a group: the best event plus a little for every further one.
+fn group_score(g: &[Activity]) -> f64 {
+    let n = g.iter().filter(|a| a.score > 0.0).count();
+    let best = g.iter().map(|a| a.score).fold(0.0, f64::max);
+    if n == 0 {
+        0.0
+    } else {
+        best + 0.15 * (n - 1) as f64
+    }
+}
+
+/// Build zoom segments from clicks, typing, dwelling and markers.
+pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig) -> Vec<ZoomSegment> {
+    let track = Held::new(log);
+    let (fw, fh) = (log.header.width as f64, log.header.height as f64);
+    let acts = collect_activity(log, &track, duration_ms, cfg);
+    let near = |a: &Activity, b: &Activity| ((a.x - b.x) / fw.max(1.0)).hypot((a.y - b.y) / fh.max(1.0)) <= cfg.near_share;
+
+    // Group what follows closely. Staying zoomed and panning is for events that
+    // are close on screen; a far one only joins when it comes straight after
+    // (inside the bridge gap), so the camera goes there directly instead of
+    // zooming out and in again.
     let mut groups: Vec<Vec<Activity>> = Vec::new();
     for a in acts {
         match groups.last_mut() {
-            Some(g) if a.t - g.last().unwrap().t <= cfg.merge_gap_ms => g.push(a),
-            _ => groups.push(vec![a]),
+            Some(g) => {
+                let l = *g.last().unwrap();
+                let gap = a.t - l.t;
+                if gap <= cfg.bridge_gap_ms || (gap <= cfg.merge_gap_ms && near(&l, &a)) {
+                    g.push(a)
+                } else {
+                    groups.push(vec![a])
+                }
+            }
+            None => groups.push(vec![a]),
         }
     }
 
-    let mut segs: Vec<ZoomSegment> = Vec::new();
-    let (fw, fh) = (log.header.width as f64, log.header.height as f64);
     // Activity that is close in time but far apart on the screen cannot share
     // one view with a margin round it: split it where the view stops fitting.
     let mut split: Vec<Vec<Activity>> = Vec::new();
@@ -201,19 +400,11 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
             split.push(cur);
         }
     }
+
+    let mut segs: Vec<(ZoomSegment, f64)> = Vec::new();
     for g in split {
-        // Separate clicks (a double click is one), typing and markers decide
-        // whether this is worth a zoom at all.
-        let mut clicks = 0;
-        let mut last_click = f64::MIN;
-        for a in g.iter().filter(|a| a.click) {
-            if a.t - last_click >= 350.0 {
-                clicks += 1;
-            }
-            last_click = a.t;
-        }
-        let deliberate = g.iter().any(|a| a.typing || !a.click);
-        if !deliberate && clicks < cfg.min_clicks {
+        let score = group_score(&g);
+        if score < cfg.threshold {
             continue;
         }
         let first = g[0].t;
@@ -242,21 +433,17 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
             continue; // spread over the whole screen: staying wide shows it better
         }
         let typing = g.iter().all(|a| a.typing);
-        segs.push(ZoomSegment {
-            start_ms: start,
-            end_ms: end,
-            scale,
-            follow_cursor: true,
-            focus,
-            reason: if typing { "typing".into() } else { "click".into() },
-        });
+        segs.push((
+            ZoomSegment { start_ms: start, end_ms: end, scale, follow_cursor: true, focus, reason: if typing { "typing".into() } else { "click".into() } },
+            score,
+        ));
     }
 
-    // Lead-in can make neighbours overlap, and a zoom out followed at once by a
-    // zoom in looks like a bounce; merge both so the camera pans instead.
-    let mut merged: Vec<ZoomSegment> = Vec::new();
-    for s in segs {
-        if let Some(p) = merged.last_mut() {
+    // The lead-in can make neighbours overlap, and a zoom out followed at once
+    // by a zoom in looks like a bounce; merge both so the camera pans instead.
+    let mut merged: Vec<(ZoomSegment, f64)> = Vec::new();
+    for (s, sc) in segs {
+        if let Some((p, psc)) = merged.last_mut() {
             if s.start_ms <= p.end_ms + cfg.bridge_gap_ms {
                 p.end_ms = p.end_ms.max(s.end_ms);
                 p.scale = p.scale.max(s.scale);
@@ -264,12 +451,36 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
                 if p.reason != s.reason {
                     p.reason = "click".into();
                 }
+                *psc = psc.max(sc);
                 continue;
             }
         }
-        merged.push(s);
+        merged.push((s, sc));
     }
-    merged
+    // Never more than one zoom in `spacing_ms`: of two that are too close,
+    // the one that scored higher stays.
+    let mut kept: Vec<(ZoomSegment, f64)> = Vec::new();
+    for (s, sc) in merged {
+        match kept.last_mut() {
+            Some((p, psc)) if s.start_ms < p.start_ms + cfg.spacing_ms => {
+                if sc > *psc {
+                    *p = s;
+                    *psc = sc;
+                }
+            }
+            _ => kept.push((s, sc)),
+        }
+    }
+    kept.into_iter().map(|(s, _)| s).collect()
+}
+
+/// Critically damped spring response from 0 to 1: it leaves at once, gathers
+/// speed gently and settles softly with no overshoot. `t` is 0..1 of the move.
+pub fn spring(t: f64) -> f64 {
+    const K: f64 = 4.0;
+    let t = t.clamp(0.0, 1.0);
+    let f = |x: f64| 1.0 - (1.0 + K * x) * (-K * x).exp();
+    f(t) / f(1.0)
 }
 
 /// Smooth ease in/out (smootherstep). Its fastest moment is about 1.9 times
@@ -384,8 +595,8 @@ pub fn camera_at_mapped(t: f64, segments: &[ZoomSegment], track: Option<&CursorT
         ein *= f;
         eout *= f;
     }
-    let k_in = ease_in_out((t - s.start_ms) / ein);
-    let k_out = ease_in_out((s.end_ms - t) / eout);
+    let k_in = spring((t - s.start_ms) / ein);
+    let k_out = spring((s.end_ms - t) / eout);
     let k = k_in.min(k_out);
     let scale = s.scale.max(1.0).powf(k);
 
@@ -463,35 +674,137 @@ mod tests {
         assert_eq!(s.reason, "click");
     }
 
+    fn rel(t: f64, x: f64, y: f64) -> Event {
+        Event { t, kind: EventKind::Release { x, y, button: MouseButton::Left } }
+    }
+    /// A straight glide from a to b ending at `t_end`, one sample every 50 ms.
+    fn glide(t_end: f64, a: (f64, f64), b: (f64, f64), ms: f64) -> Vec<Event> {
+        let n = (ms / 50.0) as usize;
+        (0..=n).map(|i| mv(t_end - ms + i as f64 * 50.0, a.0 + (b.0 - a.0) * i as f64 / n as f64, a.1 + (b.1 - a.1) * i as f64 / n as f64)).collect()
+    }
+    fn zoomed(events: Vec<Event>, cfg: &ZoomConfig) -> usize {
+        generate_zoom_segments(&log_with(events), 3_800.0, cfg).len()
+    }
+
     #[test]
-    fn a_single_stray_click_or_a_double_click_does_not_zoom() {
+    fn a_single_aimed_click_zooms_with_a_short_lead_in() {
         let cfg = ZoomConfig::default();
-        assert!(generate_zoom_segments(&log_with(vec![click(3000.0, 900.0, 500.0)]), 10_000.0, &cfg).is_empty());
-        // A double click is one click.
-        assert!(generate_zoom_segments(&log_with(vec![click(3000.0, 900.0, 500.0), click(3150.0, 900.0, 500.0)]), 10_000.0, &cfg).is_empty());
-        // Two clicks a few seconds apart on their own are two stray clicks.
-        assert!(generate_zoom_segments(&log_with(vec![click(1000.0, 900.0, 500.0), click(9000.0, 900.0, 500.0)]), 20_000.0, &cfg).is_empty());
+        let segs = generate_zoom_segments(&log_with(vec![click(3000.0, 900.0, 500.0)]), 10_000.0, &cfg);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        assert_eq!(segs[0].start_ms, 3000.0 - cfg.lead_in_ms);
+        assert!(cfg.lead_in_ms >= 300.0 && cfg.lead_in_ms <= 700.0);
+        assert_eq!(segs[0].end_ms, segs[0].start_ms + cfg.min_duration_ms);
+        // A fast double click is one click.
+        assert_eq!(generate_zoom_segments(&log_with(vec![click(3000.0, 900.0, 500.0), click(3150.0, 900.0, 500.0)]), 10_000.0, &cfg).len(), 1);
+    }
+
+    #[test]
+    fn navigation_is_not_zoomed_on() {
+        let cfg = ZoomConfig::default();
+        let one = |e: Vec<Event>| zoomed(e, &cfg);
+        // The Dock or taskbar, the menu bar and the tab strip.
+        assert_eq!(one(vec![click(3000.0, 900.0, 1070.0)]), 0);
+        assert_eq!(one(vec![click(3000.0, 900.0, 12.0)]), 0);
+        // A right click opens a menu: not a target.
+        assert_eq!(one(vec![Event { t: 3000.0, kind: EventKind::Click { x: 900.0, y: 500.0, button: MouseButton::Right } }]), 0);
+        // A drag: the button stays down while the cursor travels.
+        assert_eq!(one(vec![click(1000.0, 600.0, 500.0), rel(1900.0, 1200.0, 700.0)]), 0);
+        // Just after Cmd+Tab or Ctrl+Tab.
+        assert_eq!(one(vec![key(2800.0, "Tab", &["Meta"]), click(3000.0, 900.0, 500.0)]), 0);
+        // Right after a big cursor jump.
+        let mut jump = glide(3000.0, (100.0, 100.0), (1800.0, 900.0), 150.0);
+        jump.push(click(3000.0, 1800.0, 900.0));
+        assert_eq!(one(jump), 0);
+        // The same click on a small target does zoom.
+        assert_eq!(one(vec![click(3000.0, 900.0, 500.0)]), 1);
+    }
+
+    #[test]
+    fn intensity_changes_how_selective_it_is() {
+        // A click the cursor was still moving into: not aimed.
+        let mut hurried = glide(3000.0, (200.0, 200.0), (900.0, 500.0), 400.0);
+        hurried.push(click(3000.0, 900.0, 500.0));
+        let at = |i| zoomed(hurried.clone(), &ZoomConfig::default().with_intensity(i));
+        assert_eq!(at(Intensity::Subtle), 0);
+        assert_eq!(at(Intensity::Normal), 0);
+        assert_eq!(at(Intensity::Lively), 1);
+        // An aimed click: Normal and Lively yes, Subtle needs a second event.
+        let aimed = vec![click(3000.0, 900.0, 500.0)];
+        let at2 = |i| zoomed(aimed.clone(), &ZoomConfig::default().with_intensity(i));
+        assert_eq!((at2(Intensity::Subtle), at2(Intensity::Normal), at2(Intensity::Lively)), (0, 1, 1));
+        let two = vec![click(1500.0, 900.0, 500.0), click(2500.0, 940.0, 520.0)];
+        assert_eq!(zoomed(two, &ZoomConfig::default().with_intensity(Intensity::Subtle)), 1);
+        // Typing is clear enough for every intensity.
+        let typing = vec![mv(0.0, 800.0, 600.0), key(1000.0, "H", &[]), key(1150.0, "I", &[]), key(1300.0, "!", &[])];
+        assert_eq!(zoomed(typing, &ZoomConfig::default().with_intensity(Intensity::Subtle)), 1);
+        assert!(ZoomConfig::default().with_intensity(Intensity::Lively).click_scale > ZoomConfig::default().with_intensity(Intensity::Subtle).click_scale);
+    }
+
+    #[test]
+    fn a_cursor_that_rests_where_it_arrived_zooms() {
+        let mut ev = glide(1000.0, (200.0, 200.0), (900.0, 500.0), 600.0);
+        ev.push(mv(3000.0, 903.0, 502.0));
+        let segs = generate_zoom_segments(&log_with(ev.clone()), 12_000.0, &ZoomConfig::default());
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        assert!(segs[0].start_ms > 1000.0, "the zoom follows the dwell, it does not lead it");
+        assert_eq!(generate_zoom_segments(&log_with(ev), 12_000.0, &ZoomConfig::default().with_intensity(Intensity::Subtle)).len(), 0);
+        // A cursor parked from the start is not interest.
+        assert!(generate_zoom_segments(&log_with(vec![mv(0.0, 900.0, 500.0), mv(6000.0, 901.0, 500.0)]), 12_000.0, &ZoomConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn a_cluster_is_one_zoom_and_a_gap_between_zooms_is_kept() {
+        let cfg = ZoomConfig::default();
+        // Three clicks two seconds apart, close on screen: one zoom that pans.
+        let near = vec![click(1000.0, 800.0, 400.0), click(3000.0, 1000.0, 500.0), click(5000.0, 1100.0, 450.0)];
+        let segs = generate_zoom_segments(&log_with(near), 30_000.0, &cfg);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        assert!(segs[0].follow_cursor);
+        // Two aimed clicks far apart in time: two zooms with room between.
+        let mut far = vec![click(1000.0, 800.0, 400.0)];
+        far.extend(glide(13_000.0, (800.0, 400.0), (1100.0, 450.0), 400.0));
+        far.push(click(14_000.0, 1100.0, 450.0));
+        let segs = generate_zoom_segments(&log_with(far.clone()), 30_000.0, &cfg);
+        assert_eq!(segs.len(), 2);
+        assert!(segs[1].start_ms - segs[0].end_ms >= cfg.bridge_gap_ms);
+        // Never more than one zoom per `spacing_ms`.
+        let packed = ZoomConfig { spacing_ms: 20_000.0, ..ZoomConfig::default() };
+        assert_eq!(generate_zoom_segments(&log_with(far), 30_000.0, &packed).len(), 1);
+    }
+
+    #[test]
+    fn spring_easing_settles_without_overshoot_and_starts_gently() {
+        assert_eq!(spring(0.0), 0.0);
+        assert!((spring(1.0) - 1.0).abs() < 1e-12);
+        let mut prev = 0.0;
+        for i in 1..=100 {
+            let v = spring(i as f64 / 100.0);
+            assert!(v >= prev && v <= 1.0 + 1e-12, "{v}");
+            prev = v;
+        }
+        // Leaves quickly (more than smootherstep at 30%), arrives softly.
+        assert!(spring(0.3) > ease_in_out(0.3));
+        assert!(spring(0.99) - spring(0.95) < 0.02);
     }
 
     #[test]
     fn the_default_zoom_is_gentle_and_never_deeper_than_two_times() {
         let c = ZoomConfig::default();
-        assert!(c.click_scale <= 1.55 && c.click_scale >= 1.4, "{}", c.click_scale);
+        assert!(c.click_scale <= 1.8 && c.click_scale >= 1.5, "{}", c.click_scale);
         assert_eq!(c.with_level(9.0).click_scale, 2.0);
     }
 
     #[test]
     fn clicks_spread_over_the_screen_zoom_less_so_they_keep_a_margin() {
-        // Two clicks 1300 px apart on a 1920 wide screen: the view must be at
-        // least 1300 / 0.66 = 1970 px wide, so no zoom fits at all.
+        // 800 px apart leaves room for a zoom with a margin on each side.
         let cfg = ZoomConfig::default();
-        let wide = generate_zoom_segments(&log_with(vec![click(1000.0, 300.0, 500.0), click(1800.0, 1600.0, 520.0)]), 10_000.0, &cfg);
-        assert!(wide.is_empty(), "{wide:?}");
-        // 800 px apart leaves room for 1.5x with a margin on each side.
-        let ok = generate_zoom_segments(&log_with(vec![click(1000.0, 560.0, 500.0), click(1800.0, 1360.0, 520.0)]), 10_000.0, &cfg);
-        assert_eq!(ok.len(), 1);
-        let s = ok[0].scale;
-        assert!(s >= 1.12 && s <= 1.5, "{s}");
+        let mut ev = glide(1800.0, (560.0, 500.0), (1360.0, 520.0), 800.0);
+        ev.insert(0, click(1000.0, 560.0, 500.0));
+        ev.push(click(1800.0, 1360.0, 520.0));
+        let ok = generate_zoom_segments(&log_with(ev), 10_000.0, &cfg);
+        assert!(!ok.is_empty());
+        let s = ok.iter().map(|s| s.scale).fold(f64::MAX, f64::min);
+        assert!(s >= 1.12 && s < cfg.click_scale, "{s}");
         let view_w = 1920.0 / s;
         let margin = (view_w - 800.0) / 2.0 / view_w;
         assert!(margin >= cfg.bleed - 0.01, "margin {margin}");
@@ -560,7 +873,7 @@ mod tests {
             20_000.0,
             &cfg,
         );
-        assert_eq!(segs.len(), 2);
+        assert_eq!(segs.len(), 2, "{segs:?}");
         assert_eq!(segs[0].focus, (200.0, 100.0));
         assert!(segs[0].end_ms < segs[1].start_ms);
     }
@@ -635,7 +948,7 @@ mod tests {
         // Full zoom is held for at least 1.5 s.
         assert!(s.end_ms - s.start_ms - c.ease_in_ms - c.ease_out_ms >= 1500.0);
         // Anticipation: the camera arrives before the click.
-        assert!(5000.0 - s.start_ms > c.ease_in_ms);
+        assert!(5000.0 - s.start_ms >= 300.0 && 5000.0 - s.start_ms <= 700.0);
     }
 
     #[test]

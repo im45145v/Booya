@@ -48,3 +48,48 @@ Take them out as a file: **Auto edit > Tools > Export subtitles** (SRT or VTT). 
 - The wording of the key overlay labels.
 - Fonts and colours of callouts and cards.
 - Per shape labels.
+
+## Auto zoom: when it zooms
+
+Auto zoom is selective. It scores what happened and only moves the camera when the viewer has something small to look at. Every zoom it makes is a normal segment on the timeline: drag it, resize it, change its scale or delete it.
+
+**What scores**
+
+| Moment | Score |
+| --- | --- |
+| A marker you dropped | 1.0 |
+| Typing starts (3 or more keys with under 1.2 s between them) | 0.8 |
+| A click where the cursor had settled first (an aimed click) | 0.75 |
+| The cursor arrives somewhere and rests about 1 s | 0.6 |
+| A click while the cursor was still moving | 0.4 |
+
+Events that follow each other (within 3 s and within a quarter of the screen, or within 1.8 s wherever they are) form one group. A group zooms when its best score plus 0.15 per extra event reaches the threshold of the chosen intensity.
+
+**What never zooms**
+
+- Clicks in the menu bar, the tab strip, the Dock or the taskbar, and at the screen edges.
+- Right and middle clicks, and drags.
+- Clicks within 1.2 s after a tab or window switch (Cmd or Ctrl plus Tab, T, W, N, a digit, Page Up, Page Down, the arrows or the backtick key).
+- A click straight after the cursor jumped across the screen.
+- The second click of a quick double click (under 0.35 s).
+- Shortcuts. They do not start a zoom on their own.
+
+**Staying in, panning and zooming out**
+
+- If the next event is within a quarter of the screen (about 18 percent for Subtle, 30 percent for Lively), the camera stays zoomed and pans to it.
+- If the next event is far away but comes soon (under 1.8 s), the camera goes straight there. It does not zoom out and in again.
+- After 2 to 3 s without activity (the Zoom hold slider) it eases out.
+- Zooms start about 0.6 s before the event, are at least 4.4 s long and are never closer than 4.5 s start to start (Normal). The better one stays when two collide.
+
+**Intensity**
+
+| | Subtle | Normal | Lively |
+| --- | --- | --- | --- |
+| Needs a score of | 0.8 | 0.55 | 0.35 |
+| Level | 1.5x | 1.6x | 1.8x |
+| One zoom per at least | 5.5 s | 4.5 s | 3.5 s |
+| Dwell time | 1.5 s | 1 s | 0.8 s |
+
+Subtle zooms on typing, markers and clusters of clicks. Normal also zooms on a single aimed click and on a cursor that rests. Lively also zooms on hurried clicks. The depth is never more than 2x and always keeps a margin round what was clicked. The camera uses a spring curve: it leaves at once, eases to a stop and never overshoots.
+
+**Limits.** "Small target" is judged by the cursor settling before a click, because the event log has no information about what is under the cursor. Scroll events are not logged, so scrolling cannot be skipped by rule, but it moves no clicks and so makes no zoom.

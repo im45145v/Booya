@@ -500,3 +500,4 @@ body.resizing, body.resizing * { cursor: inherit !important; }
 body.resizing.v, body.resizing.v * { cursor: col-resize !important; }
 body.resizing.h, body.resizing.h * { cursor: row-resize !important; }
 body.resizing #preview, body.resizing .timeline-wrap { pointer-events: none; }
+.pane .pill, .pane .badge { flex: none; overflow-wrap: normal; white-space: nowrap; }

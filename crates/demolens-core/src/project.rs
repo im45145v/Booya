@@ -534,19 +534,21 @@ pub struct ZoomConfigSer {
     pub hold_ms: f64,
     /// Clicks closer than this share one zoom instead of making a new one. Added in 0.5.0.
     pub merge_gap_ms: f64,
+    /// "subtle", "normal" or "lively": how selective auto zoom is. Added in 0.5.2.
+    pub intensity: crate::zoom::Intensity,
 }
 
 impl Default for ZoomConfigSer {
     fn default() -> Self {
         let c = ZoomConfig::default();
-        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.8, hold_ms: c.hold_ms, merge_gap_ms: c.merge_gap_ms }
+        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.8, hold_ms: c.hold_ms, merge_gap_ms: c.merge_gap_ms, intensity: c.intensity }
     }
 }
 
 impl ZoomConfigSer {
     /// The generator config that matches these settings.
     pub fn to_config(&self) -> ZoomConfig {
-        ZoomConfig::default().with_level(self.level).with_speed(self.ease_in_ms, self.ease_out_ms).with_timing(self.hold_ms, self.merge_gap_ms)
+        ZoomConfig::default().with_intensity(self.intensity).with_level(self.level).with_speed(self.ease_in_ms, self.ease_out_ms).with_timing(self.hold_ms, self.merge_gap_ms)
     }
 }
 

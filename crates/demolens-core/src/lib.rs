@@ -29,7 +29,7 @@ pub mod zoom;
 
 pub use events::{Event, EventKind, EventLog};
 pub use project::Project;
-pub use zoom::{generate_zoom_segments, ZoomConfig, ZoomSegment};
+pub use zoom::{generate_zoom_segments, Intensity, ZoomConfig, ZoomSegment};
 
 /// Create a project for a recording: probe the video, load the event log if
 /// present and generate auto zoom segments.

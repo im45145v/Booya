@@ -99,7 +99,7 @@ function syncPanel() {
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
-  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 1800; $('zc-merge').value = zc.merge_gap_ms ?? 3500;
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 2500; $('zc-merge').value = zc.merge_gap_ms ?? 3000; $('zc-style').value = zc.intensity || 'normal';
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
@@ -126,7 +126,7 @@ function readPanel() {
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
     project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
   { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
-  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value, hold_ms: +$('zc-hold').value, merge_gap_ms: +$('zc-merge').value });
+  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value, hold_ms: +$('zc-hold').value, merge_gap_ms: +$('zc-merge').value, intensity: $('zc-style').value || 'normal' });
   outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
@@ -321,8 +321,9 @@ $('zoom-focus').onclick = async () => {
 $('zoom-del').onclick = () => { if (project && tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); checkpoint(); status('Zoom deleted.', 'success'); } else status('Select a zoom on the timeline first.', 'info'); };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
-const ZOOM_STYLES = { subtle: { level: 1.3, ease: 1200, steady: 0.9 }, normal: { level: 1.5, ease: 1000, steady: 0.8 }, strong: { level: 1.9, ease: 900, steady: 0.65 } };
-$('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-ease').value = z.ease; $('zc-steady').value = z.steady; readPanel(); outputs(); status('Zoom style set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
+// Mirrors ZoomConfig::with_intensity in crates/demolens-core/src/zoom.rs.
+const ZOOM_STYLES = { subtle: { level: 1.5, hold: 2000, ease: 1000 }, normal: { level: 1.6, hold: 2500, ease: 900 }, lively: { level: 1.8, hold: 3000, ease: 800 } };
+$('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-hold').value = z.hold; $('zc-ease').value = z.ease; readPanel(); outputs(); status('Zoom intensity set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
   try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
 };
