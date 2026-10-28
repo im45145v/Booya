@@ -40,6 +40,17 @@ pub enum EventKind {
         #[serde(default)]
         modifiers: Vec<String>,
     },
+    /// The set of modifier keys held changed. `held` lists every modifier
+    /// down right now ("Ctrl", "Alt", "Shift", "Meta", "Fn"); empty means all
+    /// were released. This is how modifier-only presses (holding Option) and
+    /// mouse+modifier combos (Cmd-click) are shown.
+    Mods {
+        #[serde(default)]
+        held: Vec<String>,
+    },
+    /// A mouse button was released at (x, y). With the matching `Click` it
+    /// tells a click from a drag.
+    Release { x: f64, y: f64, button: MouseButton },
     /// The presenter dropped a marker (a global shortcut) with the cursor at
     /// (x, y). It is a deliberate "zoom here" point.
     Mark { x: f64, y: f64 },
@@ -66,6 +77,11 @@ pub struct EventLogHeader {
     /// Display scale factor (physical / logical pixels).
     #[serde(default = "one")]
     pub scale: f64,
+    /// OS the recording was made on ("macos", "windows", "linux"), so key
+    /// labels use that keyboard's names wherever the project is exported.
+    /// Empty in older logs.
+    #[serde(default)]
+    pub platform: String,
 }
 
 fn one() -> f64 {
@@ -83,11 +99,11 @@ pub struct EventLog {
 pub fn scale_coords(events: &mut [Event], k: f64) {
     for e in events.iter_mut() {
         match &mut e.kind {
-            EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Mark { x, y } => {
+            EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Release { x, y, .. } | EventKind::Mark { x, y } => {
                 *x *= k;
                 *y *= k;
             }
-            EventKind::Key { .. } => {}
+            EventKind::Key { .. } | EventKind::Mods { .. } => {}
         }
     }
 }
@@ -95,7 +111,7 @@ pub fn scale_coords(events: &mut [Event], k: f64) {
 impl EventLog {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            header: EventLogHeader { demolens_events: EVENTS_VERSION, width, height, origin_x: 0, origin_y: 0, scale: 1.0 },
+            header: EventLogHeader { demolens_events: EVENTS_VERSION, width, height, origin_x: 0, origin_y: 0, scale: 1.0, platform: std::env::consts::OS.to_string() },
             events: Vec::new(),
         }
     }

@@ -135,11 +135,19 @@ pub struct KeyOverlay {
     pub shortcuts_only: bool,
     /// How long a label stays on screen, ms.
     pub hold_ms: f64,
+    /// Show Mac symbols (⌘ ⌥ ⇧ ⌃) instead of words. Applies to recordings
+    /// made on a Mac only; a new project starts with symbols on a Mac.
+    #[serde(default = "default_symbols")]
+    pub symbols: bool,
+}
+
+fn default_symbols() -> bool {
+    cfg!(target_os = "macos")
 }
 
 impl Default for KeyOverlay {
     fn default() -> Self {
-        Self { enabled: true, shortcuts_only: true, hold_ms: 1200.0 }
+        Self { enabled: true, shortcuts_only: true, hold_ms: 1200.0, symbols: default_symbols() }
     }
 }
 

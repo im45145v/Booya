@@ -69,7 +69,8 @@ pub fn classify(key: &str, modifiers: &[String]) -> String {
         }
         return if shortcut { c.to_uppercase().collect() } else { crate::events::PRINTABLE.into() };
     }
-    key.to_string()
+    // Named keys keep one spelling whatever source they came from.
+    crate::keylabels::canonical_key(key)
 }
 
 struct Shared {
@@ -274,52 +275,124 @@ mod keyhook {
             for line in std::io::BufReader::new(out).lines() {
                 let Ok(line) = line else { break };
                 let now = Instant::now();
-                let mut parts = line.splitn(2, '\t');
-                let key = parts.next().unwrap_or_default().to_string();
-                let modifiers: Vec<String> = parts.next().unwrap_or_default().split(',').filter(|m| !m.is_empty()).map(String::from).collect();
-                if key.is_empty() {
-                    continue;
+                let mut parts = line.splitn(3, '\t');
+                let tag = parts.next().unwrap_or_default();
+                let list = |s: Option<&str>| -> Vec<String> { s.unwrap_or_default().split(',').filter(|m| !m.is_empty()).map(String::from).collect() };
+                match tag {
+                    // `M<TAB>mods`: the set of held modifiers changed.
+                    "M" => {
+                        let held = list(parts.next());
+                        shared.lock().unwrap().push(now, EventKind::Mods { held });
+                    }
+                    // `K<TAB>key<TAB>mods`: a key was pressed.
+                    "K" => {
+                        let key = parts.next().unwrap_or_default().to_string();
+                        let modifiers = list(parts.next());
+                        if key.is_empty() {
+                            continue;
+                        }
+                        // Classify again on this side: the helper is our own
+                        // binary, but the log must never hold a character.
+                        let key = classify(&key, &modifiers);
+                        shared.lock().unwrap().push(now, EventKind::Key { key, modifiers });
+                    }
+                    _ => {}
                 }
-                // Classify again on this side: the helper is our own binary,
-                // but the log must never hold a character either way.
-                let key = classify(&key, &modifiers);
-                shared.lock().unwrap().push(now, EventKind::Key { key, modifiers });
             }
         });
         Some(child)
     }
 
-    fn key_label(k: Key, name: Option<String>) -> String {
-        match k {
+    /// Media and extra keys the rdev enum has no name for, by OS key code.
+    pub fn unknown_key_name(code: u32) -> Option<String> {
+        #[cfg(windows)]
+        {
+            // Windows virtual-key codes.
+            return Some(match code {
+                0xAD => "Mute".into(),
+                0xAE => "VolumeDown".into(),
+                0xAF => "VolumeUp".into(),
+                0xB0 => "NextTrack".into(),
+                0xB1 => "PrevTrack".into(),
+                0xB2 => "MediaStop".into(),
+                0xB3 => "PlayPause".into(),
+                0x7C..=0x87 => format!("F{}", code - 0x7C + 13),
+                _ => return None,
+            });
+        }
+        #[cfg(not(windows))]
+        {
+            // X11 key codes (evdev code + 8).
+            Some(match code {
+                121 => "Mute".into(),
+                122 => "VolumeDown".into(),
+                123 => "VolumeUp".into(),
+                171 => "NextTrack".into(),
+                172 => "PlayPause".into(),
+                173 => "PrevTrack".into(),
+                174 => "MediaStop".into(),
+                232 => "BrightnessDown".into(),
+                233 => "BrightnessUp".into(),
+                191..=202 => format!("F{}", code - 191 + 13),
+                _ => return None,
+            })
+        }
+    }
+
+    /// The name of a non-modifier key, or None for keys we do not log.
+    pub fn key_label(k: Key, name: Option<String>) -> Option<String> {
+        Some(match k {
             Key::Return | Key::KpReturn => "Enter".into(),
             Key::Space => "Space".into(),
             Key::Backspace => "Backspace".into(),
             Key::Tab => "Tab".into(),
             Key::Escape => "Esc".into(),
-            Key::Delete => "Delete".into(),
+            Key::Delete | Key::KpDelete => "Delete".into(),
             Key::UpArrow => "Up".into(),
             Key::DownArrow => "Down".into(),
             Key::LeftArrow => "Left".into(),
             Key::RightArrow => "Right".into(),
+            Key::Home => "Home".into(),
+            Key::End => "End".into(),
+            Key::PageUp => "PageUp".into(),
+            Key::PageDown => "PageDown".into(),
+            Key::Insert => "Insert".into(),
+            Key::CapsLock => "CapsLock".into(),
+            Key::NumLock => "NumLock".into(),
+            Key::ScrollLock => "ScrollLock".into(),
+            Key::PrintScreen => "PrintScreen".into(),
+            Key::Pause => "Pause".into(),
+            Key::Unknown(code) => return unknown_key_name(code),
             _ => match name {
                 Some(n) if !n.trim().is_empty() && !n.chars().any(|c| c.is_control()) => n,
                 _ => format!("{k:?}"),
             },
-        }
+        })
     }
 
-    fn modifier(k: Key) -> Option<&'static str> {
+    /// The modifier a key is, if it is one. AltGr is left out: on Windows it
+    /// is sent as Ctrl+Alt and would read as a shortcut while typing.
+    pub fn modifier(k: Key) -> Option<&'static str> {
         match k {
             Key::ControlLeft | Key::ControlRight => Some("Ctrl"),
             Key::ShiftLeft | Key::ShiftRight => Some("Shift"),
-            Key::Alt | Key::AltGr => Some("Alt"),
+            Key::Alt => Some("Alt"),
             Key::MetaLeft | Key::MetaRight => Some("Meta"),
+            Key::Function => Some("Fn"),
             _ => None,
         }
     }
 
+    fn emit(line: &str) {
+        let mut out = std::io::stdout().lock();
+        if writeln!(out, "{line}").and_then(|_| out.flush()).is_err() {
+            std::process::exit(0);
+        }
+    }
+
     /// The helper process: classify every key press and write one line per
-    /// key to stdout. Exits as soon as the parent closes stdin or dies.
+    /// key (`K`) or modifier change (`M`) to stdout. Exits as soon as the
+    /// parent closes stdin or dies.
     pub fn run() {
         std::thread::spawn(|| {
             let mut sink = String::new();
@@ -332,21 +405,24 @@ mod keyhook {
         let res = listen(move |ev| match ev.event_type {
             EventType::KeyPress(k) => {
                 if let Some(m) = modifier(k) {
+                    // Holding a modifier repeats the press; only a change counts.
                     if !mods.contains(&m) {
                         mods.push(m);
+                        emit(&format!("M\t{}", mods.join(",")));
                     }
                     return;
                 }
+                let Some(label) = key_label(k, ev.name.clone()) else { return };
                 let modifiers: Vec<String> = mods.iter().map(|m| m.to_string()).collect();
-                let key = classify(&key_label(k, ev.name.clone()), &modifiers);
-                let mut out = std::io::stdout().lock();
-                if writeln!(out, "{key}\t{}", modifiers.join(",")).and_then(|_| out.flush()).is_err() {
-                    std::process::exit(0);
-                }
+                let key = classify(&label, &modifiers);
+                emit(&format!("K\t{key}\t{}", modifiers.join(",")));
             }
             EventType::KeyRelease(k) => {
                 if let Some(m) = modifier(k) {
-                    mods.retain(|x| *x != m);
+                    if mods.contains(&m) {
+                        mods.retain(|x| *x != m);
+                        emit(&format!("M\t{}", mods.join(",")));
+                    }
                 }
             }
             _ => {}
@@ -388,6 +464,8 @@ mod poll {
                 for (i, b) in [MouseButton::Left, MouseButton::Right, MouseButton::Middle].into_iter().enumerate() {
                     if buttons[i] && !down[i] {
                         evs.push(EventKind::Click { x: pos.0, y: pos.1, button: b });
+                    } else if !buttons[i] && down[i] {
+                        evs.push(EventKind::Release { x: pos.0, y: pos.1, button: b });
                     }
                     down[i] = buttons[i];
                 }
@@ -615,6 +693,11 @@ pub mod mackeys {
             36 | 76 => "Enter", 37 => "l", 38 => "j", 39 => "'", 40 => "k", 41 => ";", 42 => "\\", 43 => ",", 44 => "/",
             45 => "n", 46 => "m", 47 => ".", 48 => "Tab", 49 => "Space", 50 => "`", 51 => "Backspace", 53 => "Esc",
             117 => "Delete", 123 => "Left", 124 => "Right", 125 => "Down", 126 => "Up",
+            115 => "Home", 119 => "End", 116 => "PageUp", 121 => "PageDown", 114 => "Insert",
+            72 => "VolumeUp", 73 => "VolumeDown", 74 => "Mute",
+            105 => "F13", 107 => "F14", 113 => "F15", 106 => "F16", 64 => "F17", 79 => "F18", 80 => "F19", 90 => "F20",
+            65 => ".", 67 => "*", 69 => "+", 75 => "/", 78 => "-", 81 => "=",
+            82 => "0", 83 => "1", 84 => "2", 85 => "3", 86 => "4", 87 => "5", 88 => "6", 89 => "7", 91 => "8", 92 => "9",
             122 => "F1", 120 => "F2", 99 => "F3", 118 => "F4", 96 => "F5", 97 => "F6", 98 => "F7", 100 => "F8",
             101 => "F9", 109 => "F10", 103 => "F11", 111 => "F12",
             _ => return None,
@@ -632,11 +715,15 @@ pub mod mackeys {
         m
     }
 
-    /// Codes worth polling.
-    pub const CODES: [u16; 62] = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-        46, 47, 48, 49, 50, 51, 53, 76, 117, 123, 124, 125, 126, 122, 120, 99, 118,
-    ];
+    /// The Fn / Globe key. It is a modifier, so it has no name above.
+    pub const FN_CODE: u16 = 63;
+    /// Caps Lock is a toggle: its flag changes each time it is pressed.
+    pub const CAPS_FLAG: u64 = 0x10000;
+
+    /// Codes worth polling: every code that has a name.
+    pub fn codes() -> Vec<u16> {
+        (0u16..128).filter(|c| name(*c).is_some()).collect()
+    }
 }
 
 /// Polls the key state on macOS. Only runs while key logging is on and
@@ -652,17 +739,32 @@ mod mac_keys {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        // F5 to F12 are added here so the base table stays one sorted list.
-        let mut codes: Vec<u16> = mackeys::CODES.to_vec();
-        codes.extend([96u16, 97, 98, 100, 101, 109, 103, 111]);
+        let codes = mackeys::codes();
         let h = std::thread::spawn(move || {
             let mut down = std::collections::HashSet::<u16>::new();
+            let first = mac::flags();
+            let mut prev_held: Vec<String> = Vec::new();
+            let mut prev_caps = first & mackeys::CAPS_FLAG != 0;
             while !flag.load(Ordering::SeqCst) {
                 if !shared.lock().unwrap().active {
                     break;
                 }
                 let now = Instant::now();
-                let mods = mackeys::modifiers(mac::flags());
+                let flags = mac::flags();
+                let mut mods = mackeys::modifiers(flags);
+                // Fn is read as a key: the Fn flag is also set by arrow keys.
+                if mac::key_down(mackeys::FN_CODE) {
+                    mods.insert(0, "Fn".to_string());
+                }
+                if mods != prev_held {
+                    shared.lock().unwrap().push(now, crate::events::EventKind::Mods { held: mods.clone() });
+                    prev_held = mods.clone();
+                }
+                let caps = flags & mackeys::CAPS_FLAG != 0;
+                if caps != prev_caps {
+                    prev_caps = caps;
+                    shared.lock().unwrap().push(now, crate::events::EventKind::Key { key: "CapsLock".into(), modifiers: Vec::new() });
+                }
                 for &c in &codes {
                     let d = mac::key_down(c);
                     if d && down.insert(c) {
@@ -695,9 +797,17 @@ mod tests {
         // Cmd+S is a shortcut, plain s is just "typing".
         assert_eq!(classify("s", &mackeys::modifiers(0x100000)), "S");
         assert_eq!(classify("s", &[]), PRINTABLE);
-        for c in mackeys::CODES {
-            assert!(mackeys::name(c).is_some(), "code {c} has no name");
+        let codes = mackeys::codes();
+        assert!(codes.len() > 100, "every named key is polled, got {}", codes.len());
+        for c in [53u16, 122, 111, 105, 115, 119, 116, 121, 117, 51, 48, 49, 36, 123, 124, 125, 126, 72, 73, 74] {
+            assert!(codes.contains(&c), "code {c} is not polled");
         }
+        assert_eq!(mackeys::name(111), Some("F12"));
+        assert_eq!(mackeys::name(105), Some("F13"));
+        assert_eq!(mackeys::name(115), Some("Home"));
+        assert_eq!(mackeys::name(121), Some("PageDown"));
+        assert_eq!(mackeys::name(74), Some("Mute"));
+        assert_eq!(mackeys::name(mackeys::FN_CODE), None, "Fn is read as a modifier");
     }
 
     #[test]
@@ -708,6 +818,11 @@ mod tests {
         assert_eq!(classify("s", &["Ctrl".into()]), "S");
         assert_eq!(classify("KeyS", &["Ctrl".into()]), "S");
         assert_eq!(classify("Enter", &[]), "Enter");
+        assert_eq!(classify("Escape", &[]), "Esc");
+        assert_eq!(classify("UpArrow", &[]), "Up");
+        assert_eq!(classify("F5", &[]), "F5");
+        assert_eq!(classify("VolumeUp", &[]), "VolumeUp");
+        assert_eq!(classify("e", &["Fn".into()]), "E", "Fn counts as a modifier");
         assert_eq!(classify(" ", &[]), "Space");
         assert_eq!(KeyLogging::default(), KeyLogging::Off);
         assert_eq!(KeyLogging::parse("on"), Some(KeyLogging::On));

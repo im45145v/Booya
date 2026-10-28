@@ -219,62 +219,12 @@ pub struct KeyLabel {
     pub text: String,
 }
 
-fn is_modifier_combo(mods: &[String]) -> bool {
-    mods.iter().any(|m| !m.eq_ignore_ascii_case("shift"))
-}
-
-/// Turn key events into overlay labels. Typing is grouped into one growing
-/// label; shortcuts like Ctrl+S get their own label.
-/// How a modifier is named on this computer's keyboard.
-fn modifier_label(m: &str) -> String {
-    match (m, cfg!(target_os = "macos"), cfg!(target_os = "windows")) {
-        ("Meta", true, _) => "Cmd".into(),
-        ("Alt", true, _) => "Option".into(),
-        ("Meta", _, true) => "Win".into(),
-        ("Meta", _, _) => "Super".into(),
-        _ => m.to_string(),
-    }
-}
-
-pub fn build_key_labels(log: &EventLog, hold_ms: f64, shortcuts_only: bool) -> Vec<KeyLabel> {
-    let mut out: Vec<KeyLabel> = Vec::new();
-    let mut typing_open = false;
-    for (t, key, mods) in log.keys() {
-        if is_modifier_combo(mods) {
-            let mut parts: Vec<String> = mods.iter().map(|m| modifier_label(m)).collect();
-            parts.push(key.to_string());
-            out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: parts.join(" + ") });
-            typing_open = false;
-            continue;
-        }
-        if shortcuts_only {
-            continue;
-        }
-        // The log holds no characters (only that a printable key was
-        // pressed), so typing shows as one "Typing..." label.
-        let typing = key == crate::events::PRINTABLE || key.chars().count() == 1 || key.eq_ignore_ascii_case("space");
-        if typing {
-            if let Some(last) = out.last_mut() {
-                if typing_open && t - (last.end_ms - hold_ms) < 1200.0 {
-                    last.end_ms = t + hold_ms;
-                    continue;
-                }
-            }
-            out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: TYPING.into() });
-            typing_open = true;
-        } else {
-            out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: key.to_string() });
-            typing_open = false;
-        }
-    }
-    // Earlier labels end when the next one starts.
-    for i in 1..out.len() {
-        let next = out[i].start_ms;
-        if out[i - 1].end_ms > next {
-            out[i - 1].end_ms = next;
-        }
-    }
-    out
+/// Turn the event log into the labels the keystroke overlay shows.
+pub fn build_key_labels(log: &EventLog, k: &crate::project::KeyOverlay) -> Vec<KeyLabel> {
+    crate::keylabels::build_key_labels(
+        log,
+        &crate::keylabels::LabelOptions { hold_ms: k.hold_ms, shortcuts_only: k.shortcuts_only, symbols: k.symbols },
+    )
 }
 
 const ARROW: [(f64, f64); 7] = [(0.0, 0.0), (0.0, 17.0), (4.2, 13.2), (7.0, 19.5), (9.6, 18.4), (6.9, 12.2), (12.2, 12.2)];
@@ -438,7 +388,7 @@ impl Renderer {
         let track = log.map(CursorTrack::new).filter(|t| !t.is_empty());
         let clicks = log.map(|l| l.clicks().collect()).unwrap_or_default();
         let labels = match log {
-            Some(l) if project.keys.enabled => build_key_labels(l, project.keys.hold_ms, project.keys.shortcuts_only),
+            Some(l) if project.keys.enabled => build_key_labels(l, &project.keys),
             _ => Vec::new(),
         };
         let background = Self::paint_background(&project.style.background, out_w, out_h, bg_image);
@@ -1009,17 +959,20 @@ mod tests {
     #[test]
     fn key_labels_group_typing_and_split_shortcuts() {
         let mut log = EventLog::new(100, 100);
+        log.header.platform = "linux".into();
         let k = |t: f64, key: &str, m: &[&str]| Event {
             t,
             kind: EventKind::Key { key: key.into(), modifiers: m.iter().map(|s| s.to_string()).collect() },
         };
         log.events = vec![k(0.0, "h", &[]), k(100.0, "i", &[]), k(500.0, "S", &["Ctrl"]), k(3000.0, "Enter", &[])];
-        let labels = build_key_labels(&log, 1000.0, false);
+        let mut ko = crate::project::KeyOverlay { enabled: true, shortcuts_only: false, hold_ms: 1000.0, symbols: false };
+        let labels = build_key_labels(&log, &ko);
         let texts: Vec<_> = labels.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, vec!["Typing...", "Ctrl + S", "Enter"]);
         assert_eq!(labels[0].end_ms, 500.0);
-        let only = build_key_labels(&log, 1000.0, true);
-        assert_eq!(only.len(), 1);
+        ko.shortcuts_only = true;
+        let only = build_key_labels(&log, &ko);
+        assert_eq!(only.len(), 2, "typing is hidden, the shortcut and the Enter key stay");
     }
 
     #[test]

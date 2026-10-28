@@ -88,7 +88,7 @@ function syncPanel() {
     $('gl-hi').value = g.highlight ?? 0.7; $('gl-radius').value = g.radius ?? 0.04; $('gl-inset').value = g.inset ?? 0.022; $('gl-over').checked = g.overlays ?? true; $('gl-opts').classList.toggle('off', !g.enabled); }
   const c = project.cursor;
   $('cur-visible').checked = c.visible; $('cur-size').value = c.size; $('cur-smooth').value = c.smoothing_ms; $('cur-ripple').checked = c.click_ripples;
-  $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only;
+  $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only; $('keys-sym').checked = project.keys.symbols !== false;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
   if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = w.layout || 'bubble'; $('cam-mirror').checked = !!w.mirror; }
@@ -119,7 +119,7 @@ function readPanel() {
   s.glass = { ...(s.glass || {}), enabled: $('gl-on').checked, blur: +$('gl-blur').value, tint: rgb($('gl-tint').value), tint_opacity: +$('gl-tint-op').value, highlight: +$('gl-hi').value, radius: +$('gl-radius').value, inset: +$('gl-inset').value, overlays: $('gl-over').checked };
   $('gl-opts').classList.toggle('off', !s.glass.enabled);
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
-  Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
+  Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked, symbols: $('keys-sym').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
   if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value, mirror: $('cam-mirror').checked });
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });

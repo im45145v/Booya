@@ -78,14 +78,14 @@ function shFinish() {
   // Keep lists in step with timeline edits and project swaps.
   const ss = syncSelection; syncSelection = function () { ss(); if (project) { renderShapes(); renderCallouts(); renderBlurList(); } };
   const sp = syncPanel; syncPanel = function () { sp(); loadKeyTrack(); renderShapes(); };
-  ['keys-on', 'keys-short'].forEach(id => $(id).addEventListener('change', () => setTimeout(loadKeyTrack, 0)));
+  ['keys-on', 'keys-short', 'keys-sym'].forEach(id => $(id).addEventListener('change', () => setTimeout(loadKeyTrack, 0)));
 })();
 
 // ---------- Keystroke lane ----------
 let keyTrackSig = '';
 async function loadKeyTrack() {
   if (!project) return;
-  const sig = JSON.stringify([project.events, project.keys.shortcuts_only, project.keys.hold_ms]);
+  const sig = JSON.stringify([project.events, project.keys.shortcuts_only, project.keys.symbols, project.keys.hold_ms]);
   if (sig === keyTrackSig) return;
   keyTrackSig = sig;
   try { tl.keyTrack = project.events ? await invoke('key_track', { project }) : []; } catch { tl.keyTrack = []; }

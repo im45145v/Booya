@@ -149,7 +149,7 @@ fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
 fn key_track(project: Project) -> R<Vec<demolens_core::render::KeyLabel>> {
     let Some(ev) = &project.events else { return Ok(vec![]) };
     let log = EventLog::load(ev).map_err(e)?;
-    Ok(demolens_core::render::build_key_labels(&log, project.keys.hold_ms, project.keys.shortcuts_only))
+    Ok(demolens_core::render::build_key_labels(&log, &project.keys))
 }
 
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
