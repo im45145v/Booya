@@ -783,10 +783,13 @@ impl Renderer {
                 let fade_out = ((lab.end_ms - src_t) / 200.0).clamp(0.0, 1.0) as f32;
                 let a = fade_in.min(fade_out);
                 let px = (short * 0.034).max(12.0) as f32;
-                let tw = text::measure(&text, px) as f64;
+                // One pill per key: each modifier, the key, and the repeat count.
+                let parts = crate::keylabels::pills(&text);
                 let th = text::line_height(px) as f64;
                 let (padx, pady) = (px as f64 * 0.8, px as f64 * 0.45);
-                let bw = tw + padx * 2.0;
+                let gap = px as f64 * 0.3;
+                let widths: Vec<f64> = parts.iter().map(|t| (text::measure(t, px) as f64 + padx * 2.0).max(th + pady * 2.0)).collect();
+                let bw = widths.iter().sum::<f64>() + gap * (parts.len().saturating_sub(1)) as f64;
                 let bh = th + pady * 2.0;
                 let bx = (self.out_w as f64 - bw) / 2.0;
                 // Bottom centre, above captions when both are visible...
@@ -803,8 +806,16 @@ impl Renderer {
                     cursor || click
                 };
                 let by = if hits(bottom) && !hits(top) { top } else { bottom };
-                self.plate(&mut out, bx, by, bw, bh, bh * 0.3, [15.0, 15.0, 18.0], 0.82, a);
-                text::draw(&mut out, (bx + padx) as f32, (by + pady) as f32, px, &text, [250.0, 250.0, 250.0], a);
+                let mut x = bx;
+                for (i, (part, w)) in parts.iter().zip(&widths).enumerate() {
+                    // The key itself is a little lighter than the modifiers around it.
+                    let last_key = i + 1 == parts.len() || (i + 2 == parts.len() && parts[i + 1].starts_with(crate::keylabels::COUNT_MARK));
+                    let rgb = if parts.len() > 1 && last_key { [48.0, 48.0, 56.0] } else { [15.0, 15.0, 18.0] };
+                    self.plate(&mut out, x, by, *w, bh, bh * 0.3, rgb, 0.86, a);
+                    let tw = text::measure(part, px) as f64;
+                    text::draw(&mut out, (x + (w - tw) / 2.0) as f32, (by + pady) as f32, px, part, [250.0, 250.0, 250.0], a);
+                    x += w + gap;
+                }
             }
         }
 
@@ -1003,6 +1014,53 @@ mod tests {
         ko.shortcuts_only = true;
         let only = build_key_labels(&log, &ko);
         assert_eq!(only.len(), 2, "typing is hidden, the shortcut and the Enter key stay");
+    }
+
+    /// A shortcut is drawn as one pill per key, with a gap between them.
+    #[test]
+    fn shortcut_overlay_draws_one_pill_per_key() {
+        let rows_with_runs = |keys: Vec<(&str, Vec<&str>)>| -> Vec<usize> {
+            let mut log = EventLog::new(64, 36);
+            log.header.platform = "linux".into();
+            for (i, (k, m)) in keys.iter().enumerate() {
+                log.events.push(Event { t: 100.0 + i as f64 * 50.0, kind: EventKind::Key { key: k.to_string(), modifiers: m.iter().map(|s| s.to_string()).collect() } });
+            }
+            let mut p = Project::new("x".into(), None, 64, 36, 5000.0);
+            p.style.background = Background::Solid { color: [140, 140, 140] };
+            p.style.shadow = 0.0;
+            p.keys = crate::project::KeyOverlay { enabled: true, shortcuts_only: true, hold_ms: 1500.0, symbols: false };
+            let r = Renderer::new(p, Some(&log), 640, 360, None);
+            let mut src = Frame::new(64, 36);
+            src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[140, 140, 140, 255]));
+            let f = r.render(&src, 600.0);
+            let mut counts = Vec::new();
+            for y in 250..360usize {
+                let mut runs = 0;
+                let mut in_run = false;
+                let mut len = 0;
+                for x in 0..640usize {
+                    let dark = f.data[(y * 640 + x) * 4] < 90;
+                    if dark {
+                        len += 1;
+                        if !in_run && len >= 3 {
+                            in_run = true;
+                            runs += 1;
+                        }
+                    } else {
+                        in_run = false;
+                        len = 0;
+                    }
+                }
+                counts.push(runs);
+            }
+            counts
+        };
+        let combo = rows_with_runs(vec![("W", vec!["Meta"])]);
+        assert!(combo.iter().any(|&n| n == 2), "Super and W are two pills: {combo:?}");
+        let three = rows_with_runs(vec![("S", vec!["Ctrl", "Shift"])]);
+        assert!(three.iter().any(|&n| n == 3), "Ctrl, Shift and S are three pills: {three:?}");
+        let one = rows_with_runs(vec![("Esc", vec![])]);
+        assert!(one.iter().any(|&n| n == 1), "{one:?}");
     }
 
     /// What is burned into the picture and what the SRT says must be the same

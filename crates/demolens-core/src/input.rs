@@ -4,15 +4,16 @@
 //!   macOS, XQueryPointer on X11, GetCursorPos on Windows). Polling needs no
 //!   global hook and no special permission, and stops when recording stops.
 //! * **Keys** are logged only when the user opts in (`KeyLogging::On`), and
-//!   never as characters: printable keys become the class
-//!   [`crate::events::PRINTABLE`]; only named keys (Enter, Tab, arrows) and
-//!   shortcuts with Ctrl/Alt/Meta keep their name. On Linux and Windows the
+//!   never as characters, except as part of a shortcut: a printable key
+//!   typed with Ctrl/Alt/Meta held keeps its name (Cmd+W is stored as W),
+//!   and without one becomes the class [`crate::events::PRINTABLE`]. Named
+//!   keys (Enter, Tab, arrows) keep their name. On Linux and Windows the
 //!   global keyboard hook (rdev) runs in a short lived child process
 //!   (`<exe> --demolens-keyhook`) that classifies keys before they leave it,
 //!   and is killed when recording stops or pauses, so no hook outlives a
-//!   recording. macOS has no hook at all: a poller reads the key state
-//!   through CoreGraphics (needs Input Monitoring, nothing else), and only
-//!   while recording with key logging on.
+//!   recording. macOS uses a listen-only CGEventTap (needs Input Monitoring,
+//!   nothing else), with a key state poller as fallback, and only while
+//!   recording with key logging on.
 
 use crate::capture::Region;
 use crate::events::Event;
@@ -27,7 +28,8 @@ pub enum KeyLogging {
     /// No key events, and no keyboard hook is installed. The default.
     #[default]
     Off,
-    /// Shortcuts, named keys and the *timing* of typing (no characters).
+    /// Shortcuts (with their key), named keys and the *timing* of typing (no
+    /// characters outside shortcuts).
     On,
 }
 
@@ -59,7 +61,7 @@ pub fn key_permission_missing(prompt: bool) -> bool {
 /// Reduce one key press to what auto zoom and the shortcut overlay need.
 /// A printable key without Ctrl/Alt/Meta becomes [`crate::events::PRINTABLE`].
 pub fn classify(key: &str, modifiers: &[String]) -> String {
-    let shortcut = modifiers.iter().any(|m| !m.eq_ignore_ascii_case("shift"));
+    let shortcut = crate::keycombo::makes_shortcut(modifiers);
     let key = key.strip_prefix("Key").filter(|k| k.len() == 1).unwrap_or(key);
     let key = key.strip_prefix("Num").filter(|k| k.len() == 1 && k.chars().all(|c| c.is_ascii_digit())).unwrap_or(key);
     if key.chars().count() == 1 {
@@ -392,8 +394,32 @@ mod keyhook {
             Key::Unknown(code) => return unknown_key_name(code),
             _ => match name {
                 Some(n) if !n.trim().is_empty() && !n.chars().any(|c| c.is_control()) => n,
-                _ => format!("{k:?}"),
+                _ => match symbol(k) {
+                    Some(sym) => sym.into(),
+                    None => format!("{k:?}"),
+                },
             },
+        })
+    }
+
+    /// The character printed on a punctuation or keypad key, for shortcuts
+    /// (Ctrl+, or Win+= have no text of their own in the hook).
+    fn symbol(k: Key) -> Option<&'static str> {
+        Some(match k {
+            Key::Minus | Key::KpMinus => "-",
+            Key::Equal => "=",
+            Key::Comma => ",",
+            Key::Dot => ".",
+            Key::Slash | Key::KpDivide => "/",
+            Key::BackSlash | Key::IntlBackslash => "\\",
+            Key::LeftBracket => "[",
+            Key::RightBracket => "]",
+            Key::Quote => "'",
+            Key::SemiColon => ";",
+            Key::BackQuote => "`",
+            Key::KpPlus => "+",
+            Key::KpMultiply => "*",
+            _ => return None,
         })
     }
 
@@ -428,31 +454,39 @@ mod keyhook {
             }
             std::process::exit(0);
         });
-        let mut mods: Vec<&'static str> = Vec::new();
-        let res = listen(move |ev| match ev.event_type {
-            EventType::KeyPress(k) => {
-                if let Some(m) = modifier(k) {
-                    // Holding a modifier repeats the press; only a change counts.
-                    if !mods.contains(&m) {
-                        mods.push(m);
-                        emit(&format!("M\t{}", mods.join(",")));
+        let start = std::time::Instant::now();
+        let mut combo = crate::keycombo::ComboBuilder::new();
+        let res = listen(move |ev| {
+            let now_ms = start.elapsed().as_secs_f64() * 1000.0;
+            match ev.event_type {
+                EventType::KeyPress(k) => {
+                    if let Some(m) = modifier(k) {
+                        // Holding a modifier repeats the press; only a change counts.
+                        if let Some(crate::events::EventKind::Mods { held }) = combo.modifier_down(m) {
+                            emit(&format!("M\t{}", held.join(",")));
+                        }
+                        return;
                     }
-                    return;
-                }
-                let Some(label) = key_label(k, ev.name.clone()) else { return };
-                let modifiers: Vec<String> = mods.iter().map(|m| m.to_string()).collect();
-                let key = classify(&label, &modifiers);
-                emit(&format!("K\t{key}\t{}", modifiers.join(",")));
-            }
-            EventType::KeyRelease(k) => {
-                if let Some(m) = modifier(k) {
-                    if mods.contains(&m) {
-                        mods.retain(|x| *x != m);
-                        emit(&format!("M\t{}", mods.join(",")));
+                    // With a real modifier held, name the physical key: the
+                    // text a hook reports changes with Shift or a layout.
+                    let name = if crate::keycombo::makes_shortcut(combo.held()) { None } else { ev.name.clone() };
+                    let Some(label) = key_label(k, name) else { return };
+                    let id = format!("{k:?}");
+                    if let Some(crate::events::EventKind::Key { key, modifiers }) = combo.key_down(&id, &label, false, None, now_ms) {
+                        emit(&format!("K\t{key}\t{}", modifiers.join(",")));
                     }
                 }
+                EventType::KeyRelease(k) => {
+                    if let Some(m) = modifier(k) {
+                        if let Some(crate::events::EventKind::Mods { held }) = combo.modifier_up(m) {
+                            emit(&format!("M\t{}", held.join(",")));
+                        }
+                    } else {
+                        combo.key_up(&format!("{k:?}"));
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         });
         if let Err(e) = res {
             eprintln!("demolens: keyboard hook unavailable: {e:?}");
@@ -753,6 +787,181 @@ pub mod mackeys {
     }
 }
 
+/// A listen-only CGEventTap for the keyboard (macOS). It sees every key down,
+/// key up and modifier change with the modifier flags *of that very event*,
+/// so the second key of Cmd+W is always paired with the Cmd that was held,
+/// even when Cmd comes up first. It needs Input Monitoring; without it the
+/// tap cannot be created and `mac_keys` falls back to polling.
+#[cfg(target_os = "macos")]
+mod mac_tap {
+    use super::*;
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    type TapCallback = extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void) -> *mut c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(tap: u32, place: u32, options: u32, events_of_interest: u64, callback: TapCallback, user: *mut c_void) -> *mut c_void;
+        fn CGEventTapEnable(tap: *mut c_void, enable: bool);
+        fn CGEventGetIntegerValueField(event: *mut c_void, field: u32) -> i64;
+        fn CGEventGetFlags(event: *mut c_void) -> u64;
+        fn CGEventKeyboardGetUnicodeString(event: *mut c_void, max: usize, actual: *mut usize, buf: *mut u16);
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopCommonModes: *const c_void;
+        static kCFRunLoopDefaultMode: *const c_void;
+        fn CFMachPortCreateRunLoopSource(alloc: *const c_void, port: *mut c_void, order: isize) -> *mut c_void;
+        fn CFRunLoopGetCurrent() -> *mut c_void;
+        fn CFRunLoopAddSource(rl: *mut c_void, source: *mut c_void, mode: *const c_void);
+        fn CFRunLoopRemoveSource(rl: *mut c_void, source: *mut c_void, mode: *const c_void);
+        fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, return_after_source: bool) -> i32;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const KEY_DOWN: u32 = 10;
+    const KEY_UP: u32 = 11;
+    const FLAGS_CHANGED: u32 = 12;
+    const TAP_DISABLED_TIMEOUT: u32 = 0xFFFF_FFFE;
+    const TAP_DISABLED_USER: u32 = 0xFFFF_FFFF;
+    const FIELD_KEYCODE: u32 = 9;
+    const FIELD_AUTOREPEAT: u32 = 8;
+    const CAPS_LOCK_CODE: i64 = 57;
+    const SHIFT: u64 = 0x20000;
+    const OPTION: u64 = 0x80000;
+
+    struct State {
+        shared: Arc<Mutex<Shared>>,
+        combo: crate::keycombo::ComboBuilder,
+        tap: *mut c_void,
+        start: Instant,
+        fn_down: bool,
+    }
+
+    /// The name of a key for the label: a named key by its name, a letter or
+    /// symbol by what it types without Option (so Cmd+W is W on any layout
+    /// that can type it), and the US position as the last resort.
+    fn key_name(code: u16, event: *mut c_void, flags: u64) -> Option<String> {
+        let table = mackeys::name(code);
+        if let Some(n) = table {
+            if n.chars().count() > 1 {
+                return Some(n.to_string());
+            }
+        }
+        // Shift changes the character (4 becomes $); the label wants the key.
+        if flags & (SHIFT | OPTION) == 0 {
+            let mut buf = [0u16; 4];
+            let mut n = 0usize;
+            unsafe { CGEventKeyboardGetUnicodeString(event, 4, &mut n, buf.as_mut_ptr()) };
+            if n == 1 {
+                if let Some(c) = char::from_u32(buf[0] as u32).filter(|c| c.is_ascii_graphic()) {
+                    return Some(c.to_string());
+                }
+            }
+        }
+        table.map(|n| n.to_string())
+    }
+
+    extern "C" fn callback(_proxy: *mut c_void, ty: u32, event: *mut c_void, user: *mut c_void) -> *mut c_void {
+        if user.is_null() {
+            return event;
+        }
+        let st = unsafe { &mut *(user as *mut State) };
+        if ty == TAP_DISABLED_TIMEOUT || ty == TAP_DISABLED_USER {
+            // The system switches a slow tap off. Switch it back on.
+            if !st.tap.is_null() {
+                unsafe { CGEventTapEnable(st.tap, true) };
+            }
+            return event;
+        }
+        let now = Instant::now();
+        let now_ms = st.start.elapsed().as_secs_f64() * 1000.0;
+        let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) };
+        let flags = unsafe { CGEventGetFlags(event) };
+        let mut push = |kind: crate::events::EventKind| {
+            if let Ok(mut g) = st.shared.lock() {
+                g.push(now, kind);
+            }
+        };
+        let mut mods = mackeys::modifiers(flags);
+        match ty {
+            FLAGS_CHANGED => {
+                if code == mackeys::FN_CODE as i64 {
+                    st.fn_down = !st.fn_down;
+                }
+                if st.fn_down {
+                    mods.insert(0, "Fn".to_string());
+                }
+                if code == CAPS_LOCK_CODE {
+                    push(crate::events::EventKind::Key { key: "CapsLock".into(), modifiers: Vec::new() });
+                }
+                if let Some(ev) = st.combo.set_mods(&mods) {
+                    push(ev);
+                }
+            }
+            KEY_DOWN => {
+                if st.fn_down {
+                    mods.insert(0, "Fn".to_string());
+                }
+                // Flags of this event win over what was tracked.
+                let repeat = unsafe { CGEventGetIntegerValueField(event, FIELD_AUTOREPEAT) } != 0;
+                if let Some(name) = key_name(code as u16, event, flags) {
+                    if let Some(ev) = st.combo.key_down(&code.to_string(), &name, repeat, Some(&mods), now_ms) {
+                        push(ev);
+                    }
+                }
+            }
+            KEY_UP => st.combo.key_up(&code.to_string()),
+            _ => {}
+        }
+        event
+    }
+
+    /// Runs the tap on this thread until `stop` is set or recording ends.
+    /// Returns false when the tap could not be created (no permission).
+    pub fn run(shared: &Arc<Mutex<Shared>>, stop: &AtomicBool) -> bool {
+        let state = Box::into_raw(Box::new(State {
+            shared: shared.clone(),
+            combo: crate::keycombo::ComboBuilder::new(),
+            tap: std::ptr::null_mut(),
+            start: Instant::now(),
+            fn_down: false,
+        }));
+        // kCGHIDEventTap, head insert, listen only; key down, up and flags.
+        let mask: u64 = (1 << KEY_DOWN) | (1 << KEY_UP) | (1 << FLAGS_CHANGED);
+        let tap = unsafe { CGEventTapCreate(0, 0, 1, mask, callback, state as *mut c_void) };
+        if tap.is_null() {
+            drop(unsafe { Box::from_raw(state) });
+            return false;
+        }
+        unsafe { (*state).tap = tap };
+        let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0) };
+        if source.is_null() {
+            unsafe { CFRelease(tap) };
+            drop(unsafe { Box::from_raw(state) });
+            return false;
+        }
+        unsafe {
+            let rl = CFRunLoopGetCurrent();
+            CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            while !stop.load(Ordering::SeqCst) {
+                if !shared.lock().map(|g| g.active).unwrap_or(false) {
+                    break;
+                }
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+            }
+            CGEventTapEnable(tap, false);
+            CFRunLoopRemoveSource(rl, source, kCFRunLoopCommonModes);
+            CFRelease(source);
+            CFRelease(tap);
+            drop(Box::from_raw(state));
+        }
+        true
+    }
+}
+
 /// Polls the key state on macOS. Only runs while key logging is on and
 /// recording is active; it records key *classes* (see [`classify`]).
 #[cfg(target_os = "macos")]
@@ -768,6 +977,12 @@ mod mac_keys {
         let flag = stop.clone();
         let codes = mackeys::codes();
         let h = std::thread::spawn(move || {
+            // The event tap sees the flags of each key press. Polling is the
+            // fallback when the tap cannot be created.
+            if mac_tap::run(&shared, &flag) {
+                return;
+            }
+            eprintln!("demolens: could not start the key event tap, polling the key state instead");
             let mut down = std::collections::HashSet::<u16>::new();
             let first = mac::flags();
             let mut prev_held: Vec<String> = Vec::new();
@@ -849,7 +1064,10 @@ mod tests {
         assert_eq!(classify("UpArrow", &[]), "Up");
         assert_eq!(classify("F5", &[]), "F5");
         assert_eq!(classify("VolumeUp", &[]), "VolumeUp");
-        assert_eq!(classify("e", &["Fn".into()]), "E", "Fn counts as a modifier");
+        assert_eq!(classify("e", &["Fn".into()]), PRINTABLE, "Fn alone is not a shortcut");
+        assert_eq!(classify("e", &["Alt".into()]), "E");
+        assert_eq!(classify("e", &["Win".into()]), "E");
+        assert_eq!(classify("e", &["Super".into()]), "E");
         assert_eq!(classify(" ", &[]), "Space");
         assert_eq!(KeyLogging::default(), KeyLogging::Off);
         assert_eq!(KeyLogging::parse("on"), Some(KeyLogging::On));

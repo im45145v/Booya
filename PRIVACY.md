@@ -10,7 +10,7 @@ Nothing. The maintainer does not receive any data from the app. There is no acco
 
 ## What the app stores on your computer
 - Screen recordings, and microphone, system audio or webcam only if you turn them on for a recording.
-- An event log (`*.events.jsonl`) with cursor positions and clicks. If you turn on key capture for a recording, it also stores which shortcuts and named keys you pressed and when you typed, never the characters you typed.
+- An event log (`*.events.jsonl`) with cursor positions and clicks. If you turn on key capture for a recording, it also stores which shortcuts and named keys you pressed and when you typed. A letter, digit or symbol is stored only when it is part of a shortcut, meaning Ctrl, Alt (Option), Cmd or Win (Super) was held with it (for example Cmd+W or Ctrl+T). Plain typing, with or without Shift, is stored only as "typing" with no letters, so what you wrote is never recorded.
 - Projects, transcripts, captions, a transcript cache and generated docs you create.
 - Settings, and the cloud provider choices with the date you turned each one on.
 - API keys and storage secrets, only in your operating system keychain.

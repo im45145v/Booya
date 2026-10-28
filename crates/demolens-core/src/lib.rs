@@ -10,6 +10,7 @@ pub mod activity;
 pub mod audio;
 pub mod text;
 pub mod input;
+pub mod keycombo;
 pub mod keylabels;
 pub mod preset;
 pub mod project;

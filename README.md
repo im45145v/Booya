@@ -58,7 +58,7 @@ If you record developer tools, your screen is full of tokens, emails and custome
 ## Features
 
 - **Recording**: full screen, a single window or an area, with microphone and system audio where the OS allows it (see the capture table below).
-- **Event log**: while recording, cursor moves and clicks are written to a timestamped `*.events.jsonl` file next to the video. Key capture is off by default; when you turn it on, only shortcut names and the timing of typing are kept, never the characters.
+- **Event log**: while recording, cursor moves and clicks are written to a timestamped `*.events.jsonl` file next to the video. Key capture is off by default; when you turn it on, only shortcuts (the full combo, for example Cmd+W), named keys and the timing of typing are kept. A letter is stored only when Ctrl, Alt/Option, Cmd or Win is held with it; plain typing is kept as "typing" with no letters.
 - **Recording pill**: a small always on top control with a timer, a marker button, pause, stop and discard. It is not in the video. Paused parts are cut.
 - **Shortcuts you can change**: Settings > Shortcuts lists every recording action (start or stop, pause, record an area, a window or the full screen, restart the take, discard, drop a marker, toggle the microphone, webcam and key display). Click a row, press the new keys, and it checks for clashes with your other shortcuts and with other apps. Reset one row or all of them. The keys you set show in the tooltips, the menu and the tray menu.
 - **Markers**: press the marker shortcut (or the flag button on the pill) during a recording and the editor adds a zoom to the cursor at that moment.
@@ -183,7 +183,7 @@ These integrations are tested against mocked HTTP servers. They follow each prov
 
 DemoLens runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
 
-- **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press and when you type, not the characters you type. Cursor moves and clicks are logged for auto zoom. The recording pill is visible while recording.
+- **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press (the full combo) and when you type, but not the characters you type: letters are stored only as part of a Ctrl/Alt/Option/Cmd/Win shortcut. Cursor moves and clicks are logged for auto zoom. The recording pill is visible while recording.
 - **Where it goes:** `Videos/DemoLens/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
 - **Network use:** only when you download models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `DEMOLENS_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
 - **Auto blur helps but is not perfect.** Always watch your export before sharing.
@@ -197,7 +197,7 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in, class-only poller that needs Input Monitoring (0.3.0, not yet tested on a real Mac) |
+| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | TODO: SCStream audio (or a loopback device such as BlackHole) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | dshow (set `DEMOLENS_MIC`) | TODO: WASAPI loopback | rdev |
 
 Native GPU capture on Windows (Windows.Graphics.Capture) and system audio on macOS are stubbed with clear TODOs in `crates/demolens-core/src/capture/`.

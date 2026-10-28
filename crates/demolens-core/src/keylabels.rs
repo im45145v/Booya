@@ -233,17 +233,20 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
 
     // Pass 1: keys.
     let mut typing_open = false;
+    let mut run: Option<(String, u32)> = None;
     let mut last_typed = f64::NEG_INFINITY;
     for e in &log.events {
         let EventKind::Key { key, modifiers } = &e.kind else { continue };
         let t = e.t;
         let key = canonical_key(key);
         let mods = ordered_mods(modifiers);
-        let non_shift = mods.iter().any(|m| *m != "Shift");
-        let shifted_named = mods.contains(&"Shift") && is_special(&key);
-        if non_shift || shifted_named {
+        // Ctrl, Alt and Cmd/Win make a shortcut. Shift and Fn only join a
+        // named key (Shift+Tab, fn+Delete); with a letter they are typing.
+        let strong = mods.iter().any(|m| *m != "Shift" && *m != "Fn");
+        let weak_named = !mods.is_empty() && is_special(&key);
+        if strong || weak_named {
             let ms: Vec<String> = mods.iter().map(|m| m.to_string()).collect();
-            push_label(&mut out, t, hold, combo_text(&ms, &key, p, sym));
+            push_label(&mut out, &mut run, t, hold, combo_text(&ms, &key, p, sym));
             typing_open = false;
             continue;
         }
@@ -256,6 +259,7 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
             if o.shortcuts_only {
                 continue;
             }
+            run = None;
             // The log holds no characters, so typing shows as one label.
             if let Some(last) = out.last_mut() {
                 if typing_open && t - (last.end_ms - hold) < TYPING_GAP_MS {
@@ -266,7 +270,7 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
             out.push(KeyLabel { start_ms: t, end_ms: t + hold, text: crate::render::TYPING.into() });
             typing_open = true;
         } else {
-            push_label(&mut out, t, hold, key_text(&key, p, sym));
+            push_label(&mut out, &mut run, t, hold, key_text(&key, p, sym));
             typing_open = false;
         }
     }
@@ -379,15 +383,55 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
     out
 }
 
-fn push_label(out: &mut Vec<KeyLabel>, t: f64, hold: f64, text: String) {
-    if let Some(last) = out.last_mut() {
-        // The same key pressed again before its label is gone extends it.
-        if last.text == text && t < last.end_ms {
+/// Add a label. The same combo pressed again while its label is still up
+/// extends it and counts: `Cmd Z x3`.
+fn push_label(out: &mut Vec<KeyLabel>, run: &mut Option<(String, u32)>, t: f64, hold: f64, text: String) {
+    if let (Some(last), Some((base, n))) = (out.last_mut(), run.as_mut()) {
+        if *base == text && t < last.end_ms {
+            *n += 1;
+            last.text = format!("{base} {COUNT_MARK}{n}");
             last.end_ms = t + hold;
             return;
         }
     }
+    *run = Some((text.clone(), 1));
     out.push(KeyLabel { start_ms: t, end_ms: t + hold, text });
+}
+
+/// Starts the repeat counter at the end of a label (`⌘ Z ×3`).
+pub const COUNT_MARK: char = '\u{00D7}';
+
+/// A label as separate pills: each modifier and the key on its own, and the
+/// repeat counter apart. `⌘ ⇧ 4` is three pills, `Ctrl + T` two.
+pub fn pills(text: &str) -> Vec<String> {
+    let (body, count) = match text.rsplit_once(' ') {
+        Some((b, c)) if c.starts_with(COUNT_MARK) && c.len() > COUNT_MARK.len_utf8() && c[COUNT_MARK.len_utf8()..].chars().all(|d| d.is_ascii_digit()) => (b, Some(c)),
+        _ => (text, None),
+    };
+    let mut parts: Vec<String> = if body == crate::render::TYPING {
+        vec![body.to_string()]
+    } else if body.contains(" + ") {
+        body.split(" + ").map(String::from).collect()
+    } else if body.chars().next().is_some_and(|c| "\u{2318}\u{2325}\u{21E7}\u{2303}".contains(c)) {
+        // Mac symbols: leading modifier glyphs are one pill each; the rest is the key.
+        let mut v: Vec<String> = Vec::new();
+        let mut rest = body;
+        while let Some(c) = rest.chars().next().filter(|c| "\u{2318}\u{2325}\u{21E7}\u{2303}".contains(*c)) {
+            v.push(c.to_string());
+            rest = rest[c.len_utf8()..].trim_start();
+        }
+        if !rest.is_empty() {
+            v.push(rest.to_string());
+        }
+        v
+    } else {
+        vec![body.to_string()]
+    };
+    parts.retain(|p| !p.is_empty());
+    if let Some(c) = count {
+        parts.push(c.to_string());
+    }
+    parts
 }
 
 #[cfg(test)]
@@ -514,5 +558,70 @@ mod tests {
         for (a, b) in [("Escape", "Esc"), ("Return", "Enter"), ("UpArrow", "Up"), ("PageDown", "PageDown"), ("Function", "Fn"), ("MediaPlayPause", "PlayPause")] {
             assert_eq!(canonical_key(a), b, "{a}");
         }
+    }
+
+    #[test]
+    fn a_repeated_combo_counts_instead_of_flickering() {
+        let evs = vec![(0.0, mods(&["Meta"])), (100.0, key("Z", &["Meta"])), (600.0, key("Z", &["Meta"])), (1100.0, key("Z", &["Meta"])), (1300.0, mods(&[]))];
+        assert_eq!(texts(&log("macos", evs.clone()), &opts(true, true)), vec!["\u{2318} Z \u{00D7}3"]);
+        assert_eq!(texts(&log("windows", evs), &opts(true, true)), vec!["Win + Z \u{00D7}3"]);
+        // After the label is gone the same combo starts again at one.
+        let evs = vec![(100.0, key("Z", &["Meta"])), (5000.0, key("Z", &["Meta"]))];
+        assert_eq!(texts(&log("macos", evs), &opts(true, true)), vec!["\u{2318} Z", "\u{2318} Z"]);
+        // A different key in between starts a new count.
+        let evs = vec![(100.0, key("Z", &["Ctrl"])), (300.0, key("Y", &["Ctrl"])), (500.0, key("Z", &["Ctrl"]))];
+        assert_eq!(texts(&log("linux", evs), &opts(true, true)), vec!["Ctrl + Z", "Ctrl + Y", "Ctrl + Z"]);
+    }
+
+    #[test]
+    fn the_whole_shortcut_shows_on_every_platform() {
+        let cases = [
+            ("macos", "W", vec!["Meta"], "\u{2318} W"),
+            ("macos", "4", vec!["Meta", "Shift"], "\u{21E7} \u{2318} 4"),
+            ("windows", "T", vec!["Ctrl"], "Ctrl + T"),
+            ("windows", "E", vec!["Meta"], "Win + E"),
+            ("windows", "Tab", vec!["Alt"], "Alt + Tab"),
+            ("linux", "F4", vec!["Alt"], "Alt + F4"),
+            ("linux", "Left", vec!["Meta"], "Super + Left"),
+        ];
+        for (plat, k, m, want) in cases {
+            let l = log(plat, vec![(100.0, mods(&m)), (200.0, key(k, &m)), (900.0, mods(&[]))]);
+            assert_eq!(texts(&l, &opts(true, true)), vec![want.to_string()], "{plat} {k}");
+        }
+    }
+
+    #[test]
+    fn a_modifier_released_before_the_key_still_shows_the_combo() {
+        let l = log("macos", vec![(0.0, mods(&["Meta"])), (100.0, key("W", &["Meta"])), (130.0, mods(&[])), (180.0, key("printable", &[]))]);
+        let t = texts(&l, &opts(true, true));
+        assert_eq!(t[0], "\u{2318} W");
+        assert!(!t.iter().any(|x| x == "Command"), "no lone modifier label next to the combo: {t:?}");
+    }
+
+    #[test]
+    fn modifier_alone_is_still_shown_alone() {
+        let l = log("macos", vec![(0.0, mods(&["Meta"])), (800.0, mods(&[]))]);
+        assert_eq!(texts(&l, &opts(true, true)), vec!["\u{2318} Command"]);
+    }
+
+    #[test]
+    fn fn_and_shift_with_a_letter_are_typing() {
+        let l = log("macos", vec![(0.0, key("printable", &["Fn"])), (100.0, key("printable", &["Shift"]))]);
+        assert_eq!(texts(&l, &opts(true, false)), vec!["Typing..."]);
+        assert!(texts(&l, &opts(true, true)).is_empty());
+    }
+
+    #[test]
+    fn labels_split_into_pills() {
+        assert_eq!(pills("\u{21E7} \u{2318} 4"), vec!["\u{21E7}", "\u{2318}", "4"]);
+        assert_eq!(pills("\u{2318} W"), vec!["\u{2318}", "W"]);
+        assert_eq!(pills("\u{2318} Z \u{00D7}3"), vec!["\u{2318}", "Z", "\u{00D7}3"]);
+        assert_eq!(pills("Ctrl + Shift + S"), vec!["Ctrl", "Shift", "S"]);
+        assert_eq!(pills("Win + E \u{00D7}12"), vec!["Win", "E", "\u{00D7}12"]);
+        assert_eq!(pills("Alt + Tab"), vec!["Alt", "Tab"]);
+        assert_eq!(pills("Typing..."), vec!["Typing..."]);
+        assert_eq!(pills("Esc"), vec!["Esc"]);
+        assert_eq!(pills("\u{2318} Click"), vec!["\u{2318}", "Click"]);
+        assert_eq!(pills("Right click"), vec!["Right click"]);
     }
 }
