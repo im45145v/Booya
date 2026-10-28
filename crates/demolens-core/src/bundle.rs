@@ -117,7 +117,16 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
 
 fn relative(p: &Path, dir: &Path) -> PathBuf {
     match p.strip_prefix(dir) {
-        Ok(r) => r.components().filter(|c| matches!(c, Component::Normal(_))).collect(),
+        // Always forward slashes, so a bundle made on Windows opens on a Mac and back.
+        Ok(r) => PathBuf::from(
+            r.components()
+                .filter_map(|c| match c {
+                    Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
         Err(_) => p.to_path_buf(),
     }
 }
