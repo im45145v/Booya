@@ -53,6 +53,7 @@
   <div class="brand"><img src="logo.svg" alt="" width="24" height="24"><span>DemoLens</span></div>
   <div class="tb-group">
     <button id="open-btn" class="btn ghost" title="Open a video or project (Ctrl+O)"><svg class="ico"><use href="#i-open"/></svg><span>Open</span></button>
+    <button id="proj-btn" class="btn ghost needs-project" title="Project: save as, duplicate, open a project folder, import a clip" aria-haspopup="dialog"><svg class="ico"><use href="#i-open"/></svg><span>Project</span></button>
     <button id="save-btn" class="btn ghost needs-project" title="Save project (Ctrl+S). Shift+click or Ctrl+Shift+S to save as."><svg class="ico"><use href="#i-save"/></svg><span>Save</span></button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="undo-btn" class="btn icon ghost" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg class="ico"><use href="#i-undo"/></svg></button>
@@ -101,7 +102,9 @@
             <button id="w-sample" class="btn primary lg"><svg class="ico"><use href="#i-sample"/></svg><span>Try the sample</span></button>
             <button id="w-record" class="btn lg"><svg class="ico"><use href="#i-record"/></svg><span>Record screen</span></button>
             <button id="w-open" class="btn lg"><svg class="ico"><use href="#i-open"/></svg><span>Open video</span></button>
+            <button id="w-open-folder" class="btn lg"><svg class="ico"><use href="#i-open"/></svg><span>Open project folder</span></button>
           </div>
+          <div id="w-recent" class="recent-projects" hidden></div>
           <ol class="steps">
             <li><b>1</b><span>Record or open a video</span></li>
             <li><b>2</b><span>Run <em>Auto edit</em></span></li>
@@ -119,6 +122,8 @@
       <span class="tb-sep"></span>
       <button id="split" class="btn ghost" title="Split clip at the playhead (S)"><svg class="ico"><use href="#i-scissors"/></svg><span>Split</span></button>
       <button id="add-zoom" class="btn ghost" title="Add a zoom at the playhead (Z)"><svg class="ico"><use href="#i-zoom"/></svg><span>Zoom</span></button>
+      <button id="rec-here" class="btn ghost" title="Record a new take and put it in at the playhead"><svg class="ico"><use href="#i-record"/></svg><span>Record here</span></button>
+      <button id="rec-over" class="btn ghost" title="Record again over the selected clip"><svg class="ico"><use href="#i-record"/></svg><span>Re-record clip</span></button>
       <button id="del-sel" class="btn ghost" title="Delete the selected zoom or clip (Delete)"><svg class="ico"><use href="#i-trash"/></svg><span>Delete</span></button>
       <span class="grow"></span>
       <span class="muted small">Timeline</span>
@@ -358,6 +363,7 @@
   <script src="annotate.js"></script>
   <script src="captions-edit.js"></script>
   <script src="updater.js"></script>
+  <script src="projects.js"></script>
   <script src="transcript.js"></script>
 </body>
 </html>

@@ -119,6 +119,15 @@ fn e<E: std::fmt::Display>(err: E) -> String {
 
 #[tauri::command]
 fn open_recording(video: String, events: Option<String>) -> R<Project> {
+    // A recording folder with an autosaved edit opens that edit.
+    let v = PathBuf::from(&video);
+    if let Some(dir) = v.parent().filter(|d| demolens_core::bundle::is_bundle(d)) {
+        if let Ok(o) = demolens_core::bundle::open(dir) {
+            if o.project.source == v && o.missing.is_empty() {
+                return Ok(o.project);
+            }
+        }
+    }
     new_project(&PathBuf::from(video), events.filter(|s| !s.is_empty()).map(PathBuf::from).as_deref()).map_err(e)
 }
 
@@ -135,6 +144,183 @@ fn load_project(app: tauri::AppHandle, path: String) -> R<Project> {
 fn save_project(app: tauri::AppHandle, path: String, project: Project) -> R<()> {
     let p = check_write(&app, &path, &["json"])?;
     project.save(&p).map_err(e)
+}
+
+// ---------- Project folders, recent projects, autosave ----------
+
+#[derive(serde::Serialize)]
+struct OpenedProject {
+    project: Project,
+    /// The path to save back to: the project folder, or the loose .json file.
+    path: String,
+    missing: Vec<demolens_core::bundle::Missing>,
+    /// Edits autosaved after the last Save, when the app closed before saving.
+    recovered: Option<Project>,
+}
+
+const AUTOSAVE: &str = "project.autosave.json";
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct RecentProject {
+    path: String,
+    opened: u64,
+}
+
+fn recent_projects_path(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("recent-projects.json")
+}
+
+fn read_recent(app: &tauri::AppHandle) -> Vec<RecentProject> {
+    std::fs::read_to_string(recent_projects_path(app)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn touch_recent(app: &tauri::AppHandle, path: &str) {
+    let mut list = read_recent(app);
+    list.retain(|r| r.path != path);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    list.insert(0, RecentProject { path: path.to_string(), opened: now });
+    list.truncate(12);
+    let f = recent_projects_path(app);
+    if let Some(d) = f.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(f, serde_json::to_string(&list).unwrap_or_default());
+}
+
+/// The recent projects that are still there, newest first.
+#[tauri::command]
+fn recent_projects(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    read_recent(&app)
+        .into_iter()
+        .map(|r| {
+            let p = PathBuf::from(&r.path);
+            let exists = p.exists();
+            let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| r.path.clone());
+            let folder = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+            serde_json::json!({ "path": r.path, "name": name, "folder": folder, "opened": r.opened, "exists": exists })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn forget_recent(app: tauri::AppHandle, path: String) {
+    let mut list = read_recent(&app);
+    list.retain(|r| r.path != path);
+    let _ = std::fs::write(recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default());
+}
+
+/// Open a project folder, its project.json, or an older loose project file.
+#[tauri::command]
+async fn open_project(app: tauri::AppHandle, path: String) -> R<OpenedProject> {
+    blocking(move || {
+        let p = PathBuf::from(&path);
+        let o = demolens_core::bundle::open(&p).map_err(e)?;
+        let target = demolens_core::bundle::bundle_dir_of(&p).unwrap_or(p);
+        grant(&app, &target);
+        let path = target.to_string_lossy().to_string();
+        touch_recent(&app, &path);
+        // Unsaved edits left by a crash or a quit are offered back, only if newer than the save.
+        let recovered = demolens_core::bundle::bundle_dir_of(&target).and_then(|d| {
+            let (a, m) = (d.join(AUTOSAVE), d.join(demolens_core::bundle::MANIFEST));
+            let newer = std::fs::metadata(&a).and_then(|x| x.modified()).ok()? > std::fs::metadata(&m).and_then(|x| x.modified()).ok()?;
+            let r = demolens_core::bundle::open(&a).ok().filter(|r| newer && r.project != o.project)?;
+            Some(r.project)
+        });
+        Ok(OpenedProject { project: o.project, path, missing: o.missing, recovered })
+    })
+    .await
+}
+
+/// Choose a project folder to open.
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> R<Option<String>> {
+    let a2 = app.clone();
+    blocking(move || {
+        let Some(fp) = a2.dialog().file().blocking_pick_folder() else { return Ok(None) };
+        let p = fp.into_path().map_err(e)?;
+        grant(&a2, &p);
+        Ok(Some(p.to_string_lossy().to_string()))
+    })
+    .await
+}
+
+/// Save the project as a folder (media copied in). Returns the project with
+/// its paths now inside the folder.
+#[tauri::command]
+async fn save_project_bundle(app: tauri::AppHandle, path: String, project: Project) -> R<Project> {
+    let p = check_write(&app, &path, &["demolens"])?;
+    let a2 = app.clone();
+    blocking(move || {
+        let saved = demolens_core::bundle::save_bundle(&project, &p).map_err(e)?;
+        let _ = std::fs::remove_file(p.join(AUTOSAVE));
+        grant(&a2, &p);
+        touch_recent(&a2, &p.to_string_lossy());
+        Ok(saved)
+    })
+    .await
+}
+
+/// Write a second copy of the project as a new folder and keep editing the first.
+#[tauri::command]
+async fn duplicate_project(app: tauri::AppHandle, path: String, project: Project) -> R<String> {
+    let p = check_write(&app, &path, &["demolens"])?;
+    let a2 = app.clone();
+    blocking(move || {
+        demolens_core::bundle::save_bundle(&project, &p).map_err(e)?;
+        touch_recent(&a2, &p.to_string_lossy());
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+}
+
+/// Save quietly in the background. A project the user already saved goes
+/// back to its own place; a fresh recording is saved in its recording folder,
+/// so closing the app never loses the edit. Returns where it saved, if it did.
+#[tauri::command]
+async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: Project) -> R<Option<String>> {
+    blocking(move || {
+        if let Some(path) = path {
+            let p = PathBuf::from(&path);
+            if !app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+                return Ok(None);
+            }
+            // The user's own project is never overwritten in the background:
+            // the edits go beside it, and are offered back if the app dies.
+            if !demolens_core::bundle::is_bundle(&p) {
+                return Ok(None);
+            }
+            project.save(&p.join(AUTOSAVE)).map_err(e)?;
+            return Ok(Some(path));
+        }
+        let root = recordings_dir(&app)?.canonicalize().map_err(e)?;
+        let Some(dir) = project.source.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(None) };
+        if dir.parent() != Some(root.as_path()) || !dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("recording-")) {
+            return Ok(None);
+        }
+        demolens_core::bundle::save_bundle(&project, &dir).map_err(e)?;
+        Ok(Some(dir.to_string_lossy().to_string()))
+    })
+    .await
+}
+
+/// Throw away the autosaved edits of a project folder (the user chose not to restore them).
+#[tauri::command]
+fn discard_autosave(app: tauri::AppHandle, path: String) {
+    let p = PathBuf::from(path);
+    if app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+        let _ = std::fs::remove_file(p.join(AUTOSAVE));
+    }
+}
+
+/// Point a missing file of a project at where it is now. The folder it was
+/// found in is searched for the other missing files too.
+#[tauri::command]
+fn relocate_media(mut project: Project, field: String, path: String) -> R<serde_json::Value> {
+    let to = PathBuf::from(path);
+    demolens_core::bundle::relocate(&mut project, &field, &to).map_err(e)?;
+    demolens_core::bundle::relocate_siblings(&mut project, &to);
+    let missing = demolens_core::bundle::missing(&project);
+    Ok(serde_json::json!({ "project": project, "missing": missing }))
 }
 
 #[tauri::command]
@@ -396,8 +582,19 @@ async fn discard_recording(app: tauri::AppHandle) -> R<()> {
     r
 }
 
+/// Where a new take goes when it is recorded into an existing project.
+#[derive(serde::Deserialize)]
+struct InsertAt {
+    project: Project,
+    at_ms: f64,
+    /// Set to record over [at_ms, until_ms) instead of inserting.
+    until_ms: Option<f64>,
+}
+
+/// Stop the recording. Without `insert` the take opens as a new project; with
+/// it, the take is spliced into that project and the result is returned.
 #[tauri::command]
-async fn stop_recording(app: tauri::AppHandle) -> R<Project> {
+async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Project> {
     let s = {
         let state = app.state::<AppState>();
         let mut slot = state.recording.lock().unwrap();
@@ -415,12 +612,37 @@ async fn stop_recording(app: tauri::AppHandle) -> R<Project> {
     blocking(move || {
         let rec = s.stop().map_err(e)?;
         // The 720p editing proxy is built in the background while the editor opens.
-        let src = rec.video.clone();
-        let a3 = app2.clone();
+        let proxy_of = |src: PathBuf| {
+            let a3 = app2.clone();
+            std::thread::spawn(move || {
+                let _ = build_proxy(&a3, &src);
+            });
+        };
+        match insert {
+            None => {
+                proxy_of(rec.video.clone());
+                new_project(&rec.video, Some(&rec.events)).map_err(e)
+            }
+            Some(ins) => {
+                let r = demolens_core::splice::splice_take(&ins.project, &rec.video, Some(&rec.events), ins.at_ms, ins.until_ms).map_err(e)?;
+                proxy_of(r.video.clone());
+                Ok(r.project)
+            }
+        }
+    })
+    .await
+}
+
+/// Put a video file from disk into a project at `at_ms` (or over [at_ms, until_ms)).
+#[tauri::command]
+async fn import_clip(app: tauri::AppHandle, project: Project, path: String, at_ms: f64, until_ms: Option<f64>) -> R<Project> {
+    blocking(move || {
+        let r = demolens_core::splice::splice_take(&project, &PathBuf::from(path), None, at_ms, until_ms).map_err(e)?;
+        let src = r.video.clone();
         std::thread::spawn(move || {
-            let _ = build_proxy(&a3, &src);
+            let _ = build_proxy(&app, &src);
         });
-        new_project(&rec.video, Some(&rec.events)).map_err(e)
+        Ok(r.project)
     })
     .await
 }
@@ -1418,8 +1640,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build()?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("open", "Open...", Some("Cmd+O"))?)
+        .item(&item("open-folder", "Open Project Folder...", None)?)
+        .separator()
         .item(&item("save", "Save", Some("Cmd+S"))?)
         .item(&item("save-as", "Save As...", Some("Shift+Cmd+S"))?)
+        .item(&item("duplicate", "Duplicate Project...", None)?)
+        .separator()
+        .item(&item("import-clip", "Import Video Clip at Playhead...", None)?)
         .separator()
         .item(&item("export", "Export...", Some("Cmd+E"))?)
         .separator()
@@ -1802,7 +2029,7 @@ fn main() {
             open_recording,
             initial_project,
             load_project,
-            save_project,
+            save_project, open_project, pick_folder, save_project_bundle, duplicate_project, autosave_project, relocate_media, discard_autosave, recent_projects, forget_recent, import_clip,
             regenerate_zoom, key_track, check_update, install_update, input_monitoring_status, open_input_monitoring_settings,
             preview,
             export_interactive,

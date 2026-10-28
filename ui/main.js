@@ -45,7 +45,7 @@ function checkpoint() {
   hIdx = history.length - 1; updUndo();
 }
 const scheduleCheckpoint = () => { clearTimeout(cpTimer); cpTimer = setTimeout(checkpoint, 350); };
-function restore() { const t = tl.playhead; project = JSON.parse(history[hIdx]); tl.project = project; tl.playhead = Math.min(t, tl.outDur()); syncPanel(); tl.draw(); refresh(); updUndo(); }
+function restore() { const t = tl.playhead; const prevSrc = project?.source; project = JSON.parse(history[hIdx]); tl.project = project; if (project.source !== prevSrc) { tl.setProject(project); prepareProxy(); } tl.playhead = Math.min(t, tl.outDur()); syncPanel(); tl.draw(); refresh(); updUndo(); }
 function undo() { clearTimeout(cpTimer); checkpoint(); if (hIdx > 0) { hIdx--; restore(); status('Undone'); } }
 function redo() { if (hIdx < history.length - 1) { hIdx++; restore(); status('Redone'); } }
 function updTitle() {
@@ -316,7 +316,7 @@ async function openAny(path) {
     if (!path) path = await dialog.open({ multiple: false, filters: [{ name: 'Video or DemoLens project', extensions: [...VIDEO_EXT, 'json'] }] });
     if (!path) return;
     showBusy('Opening ' + baseName(path) + '...');
-    if (path.endsWith('.json')) setProject(await invoke('load_project', { path }), path);
+    if (path.endsWith('.json')) await openProjectPath(path);
     else {
       const events = path.replace(/\.[^.\\/]+$/, '.events.jsonl');
       let p; try { p = await invoke('open_recording', { video: path, events }); } catch { p = await invoke('open_recording', { video: path, events: null }); }
@@ -326,17 +326,22 @@ async function openAny(path) {
   } catch (e) { fail(e); }
   hideBusy();
 }
+const isLooseProject = p => /\.json$/i.test(p || '');
 async function save(as) {
   if (!project) return;
   try {
-    if (as || !projectPath) {
-      const p = await dialog.save({ defaultPath: projectPath || stem(project.source) + '.demolens.json', filters: [{ name: 'DemoLens project', extensions: ['json'] }] });
-      if (!p) return;
-      projectPath = p;
+    let target = projectPath;
+    if (as || !target || isLooseProject(target)) {
+      // Projects are folders ending in .demolens, with the recording copied in.
+      target = await dialog.save({ defaultPath: (!as && !isLooseProject(projectPath) && projectPath) || stem(project.source) + '.demolens', filters: [{ name: 'DemoLens project', extensions: ['demolens'] }] });
+      if (!target) return;
     }
     readPanel(); checkpoint();
-    await invoke('save_project', { path: projectPath, project });
-    saved = history[hIdx]; updTitle(); status('Saved ' + baseName(projectPath), 'success');
+    showBusy('Saving the project folder...');
+    try { await invoke('save_project_bundle', { path: target, project }); } finally { hideBusy(); }
+    projectPath = target;
+    saved = history[hIdx]; updTitle(); status('Saved ' + baseName(projectPath) + '. It is a folder with the recording inside, so you can move or copy it.', 'success');
+    if (typeof renderRecent === 'function') renderRecent();
   } catch (e) { fail(e); }
 }
 async function trySample() {
@@ -404,10 +409,15 @@ $('rec-btn').onclick = async () => {
       status(w.length ? 'Recording. ' + w.join(' ') : 'Recording. Press Stop or Ctrl+R when you are done.', w.length ? 'error' : 'busy');
     } else {
       setRecUi(false); meterStop(); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
-      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
+      const ins = typeof takeInsertArgs === 'function' ? takeInsertArgs() : null;
+      try {
+        const p = await invoke('stop_recording', { insert: ins });
+        if (ins) { applySplice(p, ins); } else setProject(p, null);
+      } finally { $('rec-btn').disabled = false; }
+      if (!ins) status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
       hideBusy();
     }
-  } catch (e) { setRecUi(false); hideBusy(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
+  } catch (e) { setRecUi(false); hideBusy(); if (typeof clearTakePlan === 'function') clearTakePlan(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
 };
 
 // ---------- Tabs ----------
@@ -683,6 +693,10 @@ function act(name) {
     case 'save': save(false); break;
     case 'save-as': save(true); break;
     case 'open': openAny(); break;
+    case 'open-folder': openProjectFolder(); break;
+    case 'duplicate': duplicateProject(); break;
+    case 'import-clip': importClip(); break;
+    case 'record-here': recordHere(); break;
     case 'export': doExport(); break;
     case 'settings': showSettings(); break;
     case 'shortcuts': showShortcuts(); break;

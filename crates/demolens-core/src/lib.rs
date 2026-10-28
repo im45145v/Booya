@@ -17,6 +17,8 @@ pub mod render;
 pub mod sample;
 pub mod shortcuts;
 pub mod storage;
+pub mod bundle;
+pub mod splice;
 pub mod syncprobe;
 pub mod zoom;
 

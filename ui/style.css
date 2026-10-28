@@ -434,3 +434,7 @@ html.glass-native[data-theme="light"] .toolbar, html.glass-native[data-theme="li
 .update-banner .grow { flex: 1; min-width: 8px; }
 .update-banner .bar { width: 120px; }
 .about-notes { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--fs-sm); background: rgba(128,128,128,.1); border-radius: 6px; padding: 8px; }
+
+.recent-projects { text-align: left; margin: 0 0 var(--sp-4); max-width: 520px; }
+.recent-projects .item { display: flex; align-items: center; gap: 8px; }
+.recent-projects .item small { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
