@@ -30,6 +30,9 @@ rdev = { version = "0.5", optional = true }
 x11 = { version = "2.21", features = ["xlib", "xinput"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
+# The microphone (and system audio loopback) are read in process through
+# WASAPI, with no device names passed to another program.
+cpal = "0.18"
 # Window listing, screen size, DPI awareness and touch input go through the
 # Win32 API directly, so nothing needs a PowerShell process.
 windows-sys = { version = "0.52", features = [

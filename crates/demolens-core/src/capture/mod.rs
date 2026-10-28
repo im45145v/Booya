@@ -26,6 +26,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub mod mics;
+pub mod mic;
+#[allow(dead_code)]
+mod audiosink;
+#[cfg(target_os = "windows")]
+mod wasapi;
 pub mod sources;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -145,7 +150,9 @@ pub struct RecordingSession {
     feed: Option<Box<dyn Send>>,
     webcam: Option<Child>,
     /// Separate microphone recorder (see `CapturePlan::mic_sidecar`).
-    mic: Option<Child>,
+    mic: Option<mic::MicRec>,
+    /// What the microphone did, once it has been stopped.
+    mic_verdict: Option<mic::MicState>,
     logger: InputLogger,
     started: Instant,
     stderr: Arc<Mutex<String>>,
@@ -162,6 +169,8 @@ pub struct Recording {
     pub video: PathBuf,
     pub events: PathBuf,
     pub duration: Duration,
+    /// Things to tell the user (a microphone that was silent or not joined).
+    pub warnings: Vec<String>,
 }
 
 /// How long ffmpeg may run without writing anything before we give up. On
@@ -381,8 +390,19 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let mut warnings = plan.warnings;
     // The microphone is recorded by its own ffmpeg, stamped with the same
     // clock as the screen, and joined to it when the recording stops.
+    let audio_log = opts.out_dir.join("audio.log");
     let mic = match plan.mic_sidecar.take() {
-        Some(input) => start_mic_sidecar(&input, epoch, &mic_file, &mut warnings),
+        Some(_) => {
+            let device = opts.mic_device.clone().or_else(|| std::env::var("DEMOLENS_MIC").ok().filter(|v| !v.trim().is_empty()));
+            match mic::MicRec::start(device.as_deref(), epoch, &mic_file, &audio_log) {
+                Ok(m) => Some(m),
+                Err(reason) => {
+                    mic::log_line(&audio_log, &format!("microphone could not start: {reason}"));
+                    warnings.push(format!("Mic not recorded: {reason}"));
+                    None
+                }
+            }
+        }
         None => None,
     };
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
@@ -396,38 +416,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
     }
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, mic, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
-}
-
-/// Records the microphone on its own, as uncompressed samples, so nothing
-/// that happens to the video encoder (a 4K frame backlog, a slow disk) can
-/// make it drop or repeat audio. Every packet is stamped with the wall clock
-/// since `epoch` (the start of the shared recording clock) so the start time
-/// of the first samples is known; no timestamp based resampling is applied,
-/// so every sample the device delivered ends up in the file.
-fn start_mic_sidecar(input: &[String], epoch: f64, out: &Path, warnings: &mut Vec<String>) -> Option<Child> {
-    let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
-    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
-    cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
-    cmd.args(input);
-    cmd.args(["-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut c = match cmd.spawn() {
-        Ok(c) => c,
-        Err(_) => {
-            warnings.push("Could not start the microphone recorder, so this recording has no sound.".into());
-            return None;
-        }
-    };
-    let err = drain_stderr(&mut c);
-    match wait_until_writing(&mut c, out, &err, FIRST_OUTPUT_TIMEOUT) {
-        Ok(()) => Some(c),
-        Err(e) => {
-            let why = if e.starts_with("TIMEOUT") { "it did not respond".to_string() } else { first_line(&e) };
-            warnings.push(format!("Could not open the microphone, so this recording has no sound ({why})."));
-            None
-        }
-    }
+    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -522,7 +511,7 @@ impl Drop for RecordingSession {
     /// A session dropped without `stop` (app quit, panic) must not leave
     /// ffmpeg recording the screen in the background.
     fn drop(&mut self) {
-        for c in std::iter::once(&mut self.child).chain(self.webcam.as_mut()).chain(self.mic.as_mut()) {
+        for c in std::iter::once(&mut self.child).chain(self.webcam.as_mut()) {
             if let Ok(None) = c.try_wait() {
                 let _ = c.kill();
                 let _ = c.wait();
@@ -559,6 +548,14 @@ impl RecordingSession {
         self.started.elapsed()
     }
 
+    /// Whether the microphone is delivering sound. Ask 1 to 2 seconds in.
+    pub fn mic_status(&mut self) -> mic::MicState {
+        match self.mic.as_mut() {
+            Some(m) => m.state(),
+            None => self.mic_verdict.clone().unwrap_or(mic::MicState::Off),
+        }
+    }
+
     /// Time spent paused so far.
     pub fn paused(&self) -> Duration {
         self.logger.paused_total()
@@ -572,8 +569,8 @@ impl RecordingSession {
         if let Some(c) = self.webcam.as_mut() {
             finish(c, false);
         }
-        if let Some(c) = self.mic.as_mut() {
-            finish(c, false);
+        if let Some(m) = self.mic.take() {
+            m.stop();
         }
         let _ = std::mem::replace(&mut self.logger, InputLogger::idle()).stop();
         if self.created {
@@ -592,8 +589,8 @@ impl RecordingSession {
         let fed = self.feed.take().is_some(); // stops the capture, closes ffmpeg's stdin
         // The microphone stops first, so the screen's flush does not leave it
         // running past the end of the video by much.
-        if let Some(c) = self.mic.as_mut() {
-            finish(c, false);
+        if let Some(m) = self.mic.take() {
+            self.mic_verdict = Some(m.stop());
         }
         let killed = finish(&mut self.child, fed);
         if let Some(c) = self.webcam.as_mut() {
@@ -614,11 +611,26 @@ impl RecordingSession {
         if killed {
             eprintln!("demolens: ffmpeg did not stop on q, it was killed");
         }
+        let audio_log = self.dir.join("audio.log");
+        let mut warnings: Vec<String> = Vec::new();
+        if let Some(w) = self.mic_verdict.as_ref().and_then(|v| v.message()) {
+            warnings.push(w);
+        }
         let remuxed = crate::finalize::remux_to_mp4_info(&self.video);
         let (video, video_start_s) = match remuxed {
-            Ok(r) => (r.path, r.video_start_s),
+            Ok(r) => {
+                for w in &r.warnings {
+                    mic::log_line(&audio_log, &format!("remux: {w}"));
+                }
+                warnings.extend(r.warnings);
+                (r.path, r.video_start_s)
+            }
             Err(e) => {
                 eprintln!("demolens: could not remux to MP4, keeping the MKV: {e:#}");
+                mic::log_line(&audio_log, &format!("remux failed, keeping the MKV: {e:#}"));
+                if self.dir.join("recording.mic.mkv").exists() {
+                    warnings.push(format!("Mic not recorded in the video: the recording could not be finished as MP4 ({}). The raw microphone file is kept in the project folder.", first_line(&format!("{e:#}"))));
+                }
                 (self.video.clone(), 0.0)
             }
         };
@@ -657,7 +669,7 @@ impl RecordingSession {
             let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&pauses)?);
         }
 
-        Ok(Recording { video, events: self.events.clone(), duration })
+        Ok(Recording { video, events: self.events.clone(), duration, warnings })
     }
 }
 

@@ -78,7 +78,8 @@ fn finish_transcript(p: &mut Project, mut words: Vec<demolens_core::project::Cap
     let samples = audio::decode_mono(&p.source, 16_000)?;
     captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0));
     // Captions never show before anyone speaks, whoever did the transcribing.
-    transcribe::anchor_to_voice(&mut words, &transcribe::voice_onsets(&samples, 16_000));
+    let tight = transcribe::voice_onsets(&samples, 16_000);
+    transcribe::fix_times(&mut words, &tight, &tight);
     p.captions = captions::words_to_captions(&words, 42, 900.0);
     Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: String::new() })
 }

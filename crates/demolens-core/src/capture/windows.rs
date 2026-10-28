@@ -35,18 +35,9 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
             Region { x: *x, y: *y, w: w & !1, h: h & !1 }
         }
     };
-    let mut mic_sidecar = None;
-    if o.mic {
-        // The chosen device, DEMOLENS_MIC, or the first one DirectShow lists
-        // (its real name, such as "Microphone Array (Realtek Audio)"). A made
-        // up default name would make ffmpeg fail to open the device.
-        // Recorded by its own ffmpeg and joined at the end (as on macOS), so
-        // a busy screen encoder can never starve or stretch the sound.
-        match super::mics::input_args(o.mic_device.as_deref()) {
-            Ok(a) => mic_sidecar = Some(a),
-            Err(e) => warnings.push(format!("No microphone: {e}")),
-        }
-    }
+    // The microphone is recorded in process through WASAPI (DirectShow is the
+    // fallback); see `capture::mic`. The marker only says "record one".
+    let mic_sidecar = if o.mic { Some(Vec::new()) } else { None };
     if o.system_audio {
         warnings.push("system audio on Windows needs WASAPI loopback (TODO)".into());
     }

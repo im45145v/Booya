@@ -35,7 +35,9 @@ pub fn words_to_captions(words: &[CaptionWord], max_chars: usize, max_gap_ms: f6
     // Keep captions on screen a little longer, without overlapping the next.
     for i in 0..out.len() {
         let next = out.get(i + 1).map(|c| c.start_ms).unwrap_or(f64::MAX);
-        out[i].end_ms = (out[i].end_ms + 400.0).min(next);
+        // A caption stays up for at least 0.6 s (less only when the next one starts sooner).
+        let want = (out[i].end_ms + 400.0).max(out[i].start_ms + 600.0);
+        out[i].end_ms = want.min(next).max(out[i].start_ms);
     }
     out
 }
@@ -200,6 +202,13 @@ pub fn plan_cuts(words: &[CaptionWord], silences: &[(f64, f64)], o: &AutoCutOpti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_caption_whose_words_were_squashed_still_gets_time_on_screen() {
+        let w = |a: f64, b: f64, t: &str| CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let c = words_to_captions(&[w(5000.0, 5001.0, "Thank"), w(5001.0, 5002.0, "you."), w(9000.0, 9400.0, "Next")], 42, 700.0);
+        assert!(c[0].end_ms - c[0].start_ms >= 600.0, "{:?}", c[0]);
+    }
 
     #[test]
     fn filler_detection_handles_variants() {

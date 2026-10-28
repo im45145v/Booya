@@ -80,6 +80,9 @@ pub struct Remuxed {
     /// video frame. The MP4's video starts at 0, so an event logged at `t`
     /// on that clock belongs at `t - video_start_s` in the video.
     pub video_start_s: f64,
+    /// Things the user should hear about (a microphone that could not be
+    /// joined, or only roughly).
+    pub warnings: Vec<String>,
 }
 
 pub fn remux_to_mp4(mkv: &Path) -> Result<PathBuf> {
@@ -103,13 +106,60 @@ pub fn mic_sidecar(mkv: &Path) -> PathBuf {
 /// not on the same timeline (start far outside the recording) is shifted to
 /// start with the video.
 pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
+    match remux_inner(mkv, Join::Aligned) {
+        Err(e) if has_sidecar(mkv) => {
+            // Never lose the voice silently: first try again without the
+            // fine alignment, then without the microphone (keeping its file).
+            eprintln!("demolens: joining the microphone failed: {e:#}");
+            match remux_inner(mkv, Join::Plain) {
+                Ok(mut r) => {
+                    r.warnings.push(format!("The microphone could not be lined up with the video exactly ({}), so it was added as it was recorded and may be a little off.", short(&e)));
+                    Ok(r)
+                }
+                Err(e2) => match remux_inner(mkv, Join::Skip) {
+                    Ok(mut r) => {
+                        r.warnings.push(format!("Mic not recorded in the video: it could not be joined ({}). The raw microphone file is kept at {}.", short(&e2), mic_sidecar(mkv).display()));
+                        Ok(r)
+                    }
+                    Err(_) => Err(e),
+                },
+            }
+        }
+        r => r,
+    }
+}
+
+fn short(e: &anyhow::Error) -> String {
+    let t = format!("{e:#}");
+    t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("unknown error").chars().take(160).collect()
+}
+
+fn has_sidecar(mkv: &Path) -> bool {
+    std::fs::metadata(mic_sidecar(mkv)).map(|m| m.len() > 4096).unwrap_or(false)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Join {
+    /// The microphone is lined up on the shared clock.
+    Aligned,
+    /// The microphone is resampled and added with no alignment.
+    Plain,
+    /// Video only; the microphone file stays where it is.
+    Skip,
+}
+
+fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
     let mp4 = mkv.with_extension("mp4");
     let tmp = mkv.with_extension("mp4.part");
     let _ = std::fs::remove_file(&tmp);
     let video = stream_times(mkv, "v:0");
     let side = mic_sidecar(mkv);
-    let has_side = std::fs::metadata(&side).map(|m| m.len() > 4096).unwrap_or(false);
+    let has_side = has_sidecar(mkv) && join != Join::Skip;
     let audio = if has_side { stream_times(&side, "a:0") } else { stream_times(mkv, "a:0") };
+    if has_side && audio.is_none() {
+        // Never drop the voice without saying so: the caller reports this.
+        bail!("the microphone file could not be read");
+    }
     let mut cmd = crate::proc::command(ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y"]);
     let mut video_start_s = 0.0;
@@ -123,7 +173,9 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
         // touched.
         let a_start = if (a.0 - v.0).abs() > 30.0 + v.1 { v.0 } else { a.0 };
         let mut f = audio_align_filter(v, (a_start, a.1)).unwrap_or_else(audio_plain_filter);
-        if a_start < v.0 && !f.contains("atrim") {
+        if join == Join::Plain {
+            f = audio_plain_filter();
+        } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
         align = Some(f);
@@ -177,8 +229,10 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
     }
     std::fs::rename(&tmp, &mp4)?;
     let _ = std::fs::remove_file(mkv);
-    let _ = std::fs::remove_file(&side);
-    Ok(Remuxed { path: mp4, video_start_s })
+    if join != Join::Skip {
+        let _ = std::fs::remove_file(&side);
+    }
+    Ok(Remuxed { path: mp4, video_start_s, warnings: Vec::new() })
 }
 
 /// How a recording's tracks line up. Used by `demolens verify`.
@@ -373,6 +427,45 @@ mod tests {
         assert!(rms(0.1, 0.7) < 0.001, "silence in front of the late microphone");
         assert!(rms(1.0, 2.8) > 0.05, "the sound is where it was recorded");
         assert!(crate::audio::dropouts(&x, 16_000, 5.0).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_microphone_file_that_cannot_be_joined_is_reported_and_kept() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-badmic");
+        let mkv = d.join("recording.mkv");
+        let ok = crate::proc::command(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"])
+            .arg(&mkv)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        // Big enough to look like a recording, but not audio.
+        std::fs::write(mic_sidecar(&mkv), vec![7u8; 20_000]).unwrap();
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        assert!(r.path.exists(), "the video still comes out");
+        assert!(r.warnings.iter().any(|w| w.starts_with("Mic not recorded")), "{:?}", r.warnings);
+        assert!(mic_sidecar(&mkv).exists(), "the raw microphone file is kept for recovery");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_plain_join_adds_the_microphone_without_alignment() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-plain");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"], &mkv));
+        assert!(run(&["-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=2", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        let r = remux_inner(&mkv, Join::Plain).unwrap();
+        let rep = sync_report(&r.path, None).unwrap();
+        assert_eq!(rep.audio_rate, Some(48_000));
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -707,7 +707,9 @@ impl Renderer {
         if !self.project.caption_style.burn_in {
             return None;
         }
-        self.project.captions.iter().find(|c| src_t >= c.start_ms && src_t < c.end_ms)
+        // The latest caption that has started wins, so one with odd times
+        // can never hide the ones after it.
+        self.project.captions.iter().filter(|c| src_t >= c.start_ms && src_t < c.end_ms).max_by(|a, b| a.start_ms.total_cmp(&b.start_ms))
     }
 
     fn draw_caption(&self, out: &mut Frame, c: &crate::project::Caption, src_t: f64) {
