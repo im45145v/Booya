@@ -57,22 +57,38 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         s("-video_size"), format!("{}x{}", region.w, region.h),
         s("-i"), format!("{display}+{},{}", region.x, region.y),
     ];
+    // A microphone on its own is recorded by its own ffmpeg (as on macOS) and
+    // joined at the end, so a busy video encoder can never starve it. With
+    // system audio as well, both stay in this ffmpeg and are mixed.
     let mut audio_inputs = 0;
-    if o.mic {
-        args.extend([s("-f"), s("pulse"), s("-i"), o.mic_device.clone().unwrap_or_else(|| s("default"))]);
+    let mut mic_sidecar = None;
+    let mic_dev = o.mic_device.clone().unwrap_or_else(|| s("default"));
+    if o.mic && !o.system_audio {
+        mic_sidecar = Some(vec![s("-f"), s("pulse"), s("-i"), mic_dev]);
         audio_inputs += 1;
-    }
-    if o.system_audio {
-        args.extend([s("-f"), s("pulse"), s("-i"), s("@DEFAULT_MONITOR@")]);
-        audio_inputs += 1;
-    }
-    if audio_inputs == 2 {
-        args.extend([s("-filter_complex"), s("[1:a][2:a]amix=inputs=2:duration=longest[a]"), s("-map"), s("0:v"), s("-map"), s("[a]")]);
+    } else {
+        if o.mic {
+            args.extend([s("-f"), s("pulse"), s("-i"), mic_dev]);
+            audio_inputs += 1;
+        }
+        if o.system_audio {
+            args.extend([s("-f"), s("pulse"), s("-i"), s("@DEFAULT_MONITOR@")]);
+            audio_inputs += 1;
+        }
+        if audio_inputs == 2 {
+            args.extend([s("-filter_complex"), s("[1:a][2:a]amix=inputs=2:duration=longest[a]"), s("-map"), s("0:v"), s("-map"), s("[a]")]);
+        }
     }
     if audio_inputs == 0 {
         warnings.push("recording without audio".into());
     }
-    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar: None })
+    if mic_sidecar.is_some() {
+        // Keep the screen's own (wall clock) timestamps, relative to the start
+        // of the recording, so the sound recorded on the side lands where it
+        // really happened relative to the first frame.
+        args.splice(0..0, [s("-copyts"), s("-itsoffset"), s(super::CLOCK_START)]);
+    }
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar })
 }
 
 /// Parses `xwininfo -root -tree` into window candidates (id, title, class, w, h, absolute x, y).

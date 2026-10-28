@@ -219,13 +219,20 @@ function syncSelection() {
 }
 
 // ---------- Preview and playback ----------
+let frameLatency = null; // smoothed round trip of a preview frame, ms
 async function refresh() {
   if (!project) return;
   if (!playing) scheduleCheckpoint();
   $('time').textContent = `${fmt(tl.playhead)} / ${fmt(tl.outDur())}`;
   if (pending) { again = true; return; }
   pending = true;
-  try { $('preview').src = await invoke('preview', { project, outMs: tl.playhead, shortSide: playing ? 360 : 540, playing }); }
+  try {
+    const asked = performance.now();
+    // While playing, ask for the frame the clock will have reached when this one is on screen.
+    const url = await invoke('preview', { project, outMs: AvSync.frameTime(tl.playhead, frameLatency, tl.outDur(), playing), shortSide: playing ? 360 : 540, playing });
+    if (playing) frameLatency = AvSync.nextLatency(frameLatency, performance.now() - asked);
+    $('preview').src = url;
+  }
   catch (e) { fail(e); }
   pending = false;
   if (again) { again = false; refresh(); }
@@ -236,6 +243,9 @@ function setPlaying(v) {
   if (v) playLoop();
 }
 async function playLoop() {
+  // The clock starts when the sound really does, so they begin together.
+  await audioStarted();
+  if (!playing) return;
   let last = performance.now();
   if (tl.playhead >= tl.outDur() - 50) tl.playhead = 0;
   while (playing) {
@@ -855,8 +865,20 @@ function syncAudio(start) {
   pa.playbackRate = Math.max(0.25, Math.min(4, clip?.speed || 1)); pa.preservesPitch = true;
   // Above 4x the browser cannot keep up with the sound, so it is skipped.
   if ((clip?.speed || 1) > 4) { pa.pause(); return; }
-  if (start || Math.abs(pa.currentTime - want) > 0.18) pa.currentTime = Math.max(0, want);
+  const speed = Math.max(0.25, Math.min(4, clip?.speed || 1));
+  const fix = start ? { seek: true, rate: speed } : AvSync.audioCorrection(want, pa.currentTime, speed);
+  if (fix.seek) pa.currentTime = Math.max(0, want);
+  pa.playbackRate = Math.max(0.0625, Math.min(4.25, fix.rate));
   if (pa.paused) pa.play().catch(() => { });
+}
+// Resolves once the sound is playing (or there is none, or it takes too long).
+function audioStarted() {
+  if (!proxyReady || !project || project.audio?.mute || (audioClip(tl.outToSrc(tl.playhead))?.speed || 1) > 4) return Promise.resolve();
+  return new Promise(res => {
+    const done = () => { pa.removeEventListener('playing', done); clearTimeout(t); res(); };
+    const t = setTimeout(done, 700);
+    pa.addEventListener('playing', done);
+  });
 }
 const _setPlaying = setPlaying;
 setPlaying = v => { _setPlaying(v); if (v) syncAudio(true); else pa.pause(); };

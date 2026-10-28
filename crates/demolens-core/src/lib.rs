@@ -17,6 +17,7 @@ pub mod render;
 pub mod sample;
 pub mod shortcuts;
 pub mod storage;
+pub mod syncprobe;
 pub mod zoom;
 
 pub use events::{Event, EventKind, EventLog};

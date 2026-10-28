@@ -24,6 +24,7 @@ USAGE:
   demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
                   measure decode, proxy and export speed on a synthetic recording of that size
   demolens verify <video> [events.jsonl]   A/V sync report for a finished recording
+  demolens syncprobe [--capture] [--json] | --flashes FILE  Measure sound vs picture through every stage (exit 1 if off)
   demolens new <video> [--events FILE] [-o project.json]
   demolens zoom <events.jsonl> --duration MS
   demolens preview <project.json> --at MS [-o frame.png] [--quality 720]
@@ -157,6 +158,50 @@ fn run() -> Result<()> {
                 }
             }
             println!("{}", serde_json::to_string_pretty(&list)?);
+            Ok(())
+        }
+        "syncprobe" => {
+            // Beep + flash through every stage that works on files, and (on
+            // Linux, with --capture) through a real screen capture. Exits 1
+            // when any stage moves the sound against the picture too far.
+            if let Some(f) = a.opt(&["--flashes"]) {
+                // Video only: how steady the flashes of a capture are.
+                let (n, period, worst) = demolens_core::syncprobe::flash_regularity(Path::new(&f))?;
+                println!("{n} flashes, mean period {period:.4} s (1.0000 is exact), worst deviation {worst:.0} ms");
+                if (period - 1.0).abs() > 0.01 || worst > 80.0 {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            let dir = a.opt(&["--dir"]).map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("demolens-syncprobe"));
+            let json = a.0.iter().any(|v| v == "--json");
+            let rows = demolens_core::syncprobe::run_file_stages(&dir)?;
+            let mut bad = rows.iter().any(|r| !r.ok);
+            #[allow(unused_mut)]
+            let mut cap = Vec::new();
+            #[cfg(target_os = "linux")]
+            if a.0.iter().any(|v| v == "--capture") {
+                let secs: u32 = a.opt(&["--seconds"]).and_then(|v| v.parse().ok()).unwrap_or(20);
+                cap = demolens_core::syncprobe::run_capture_linux(&dir.join("capture"), secs)?;
+                // The new method must not drift, and must not be worse than the previous one.
+                for r in &cap {
+                    match &r.result {
+                        Some(x) => bad |= x.drift_total_ms.abs() > demolens_core::syncprobe::BUDGET_DRIFT_TOTAL_MS || x.jitter_ms > demolens_core::syncprobe::BUDGET_JITTER_MS,
+                        None => bad |= r.method.contains("new"),
+                    }
+                }
+            }
+            if json {
+                println!("{}", serde_json::json!({ "stages": rows, "capture": cap }));
+            } else {
+                println!("{}", demolens_core::syncprobe::format_rows(&rows));
+                if !cap.is_empty() {
+                    println!("{}", demolens_core::syncprobe::format_capture(&cap));
+                }
+            }
+            if bad {
+                std::process::exit(1);
+            }
             Ok(())
         }
         "verify" => {

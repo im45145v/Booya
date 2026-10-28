@@ -26,12 +26,52 @@ jobs:
         run: node tests/js/shortcuts.test.js
       - name: Test caption editing
         run: node tests/js/captions-edit.test.js
+      - name: Test the editor preview clock
+        run: node tests/js/avsync.test.js
       - name: Test the updater manifest builder
         run: python3 scripts/test_make_latest_json.py
       - name: Test core and AI
         run: cargo test -p demolens-core -p demolens-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
+      - name: ffmpeg for the sync probe
+        shell: bash
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            if [ "$RUNNER_OS" = macOS ]; then brew install ffmpeg; else choco install ffmpeg -y --no-progress; echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"; fi
+          fi
+          ffmpeg -version | head -1
+      - name: Sound against picture, every stage that works on files
+        shell: bash
+        run: |
+          set +e
+          target/release/demolens syncprobe | tee sync.txt
+          code=${PIPESTATUS[0]}
+          { echo "### Sound vs picture on $RUNNER_OS"; echo; cat sync.txt; } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+      - name: Windows screen clock (gdigrab, video only)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $flash = {
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.Form
+            $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = 'Black'
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $t = New-Object System.Windows.Forms.Timer; $t.Interval = 10
+            $t.Add_Tick({ $ms = $sw.ElapsedMilliseconds; if ($ms -ge 1000 -and ($ms % 1000) -lt 100) { $f.BackColor = 'White' } else { $f.BackColor = 'Black' }; if ($ms -gt 17000) { $f.Close() } })
+            $t.Start(); [void]$f.ShowDialog()
+          }
+          $job = Start-Job -ScriptBlock $flash
+          Start-Sleep -Seconds 2
+          ffmpeg -v error -y -f gdigrab -framerate 30 -t 14 -i desktop -c:v libx264 -preset ultrafast gdi.mp4
+          Stop-Job $job; Remove-Job $job -Force
+          $r = & target/release/demolens.exe syncprobe --flashes gdi.mp4
+          $code = $LASTEXITCODE
+          "### Windows screen capture clock`n`n$r" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          $r
+          exit $code
       - name: Speed numbers (macOS, VideoToolbox)
         if: runner.os == 'macOS'
         continue-on-error: true
@@ -41,6 +81,42 @@ jobs:
           target/release/demolens bench --seconds 8 | tee bench.txt
           target/release/demolens bench --seconds 8 --json > bench.json
           echo '```' >> "$GITHUB_STEP_SUMMARY"; cat bench.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+  capture-sync:
+    # Real capture on Linux: Xvfb + x11grab for the screen, a PulseAudio null
+    # sink for the sound, through the same record and finish code the app uses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: capture-sync
+      - name: Deps
+        timeout-minutes: 15
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y ffmpeg xvfb x11-utils x11-xserver-utils pulseaudio pulseaudio-utils libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config cmake clang libclang-dev
+      - name: Build the CLI
+        run: cargo build --release -p demolens-cli
+      - name: Start a screen and a sound card
+        run: |
+          Xvfb :99 -screen 0 1280x720x24 &
+          sleep 2
+          pulseaudio --start --exit-idle-time=-1 || true
+          sleep 2
+          pactl load-module module-null-sink sink_name=probe_sink
+          pactl list short sinks
+      - name: Record a flashing, beeping screen
+        env:
+          DISPLAY: ":99"
+        run: |
+          set +e
+          target/release/demolens syncprobe --capture --seconds 20 | tee sync.txt
+          code=${PIPESTATUS[0]}
+          { echo "### Linux capture, sound vs picture"; echo; cat sync.txt; } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
   audit:
     runs-on: ubuntu-latest
     steps:

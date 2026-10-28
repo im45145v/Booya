@@ -611,10 +611,10 @@ impl RecordingSession {
                 (self.video.clone(), 0.0)
             }
         };
-        // On macOS every frame is stamped with the wall clock since ffmpeg
-        // started, and the MP4 starts its video at 0. Input events were logged
+        // Every frame is stamped with the wall clock since ffmpeg
+        // started (when the microphone is recorded on the side), and the MP4 starts its video at 0. Input events were logged
         // on that same clock, so they move earlier by the video's lead-in.
-        let shift_ms = if cfg!(target_os = "macos") && video_start_s > 0.15 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
+        let shift_ms = if video_start_s > 0.15 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
         let mut log = EventLog::new(self.region.w, self.region.h);
         log.header.origin_x = self.region.x;
         log.header.origin_y = self.region.y;

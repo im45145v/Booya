@@ -28,15 +28,24 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
             Region { x: *x, y: *y, w: w & !1, h: h & !1 }
         }
     };
+    let mut mic_sidecar = None;
     if o.mic {
         // TODO(windows): enumerate dshow devices and let the user pick.
         let dev = o.mic_device.clone().or_else(|| std::env::var("DEMOLENS_MIC").ok()).unwrap_or_else(|| "Microphone".into());
-        args.extend([s("-f"), s("dshow"), s("-i"), format!("audio={dev}")]);
+        // Recorded by its own ffmpeg and joined at the end (as on macOS), so
+        // a busy screen encoder can never starve or stretch the sound.
+        mic_sidecar = Some(vec![s("-f"), s("dshow"), s("-i"), format!("audio={dev}")]);
     }
     if o.system_audio {
         warnings.push("system audio on Windows needs WASAPI loopback (TODO)".into());
     }
-    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar: None })
+    if mic_sidecar.is_some() {
+        // Keep the screen's own (wall clock) timestamps, relative to the start
+        // of the recording, so the sound recorded on the side lands where it
+        // really happened relative to the first frame.
+        args.splice(0..0, [s("-copyts"), s("-itsoffset"), s(super::CLOCK_START)]);
+    }
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar })
 }
 
 /// PowerShell that lists visible top level windows front to back with their
