@@ -99,7 +99,7 @@ function syncPanel() {
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
-  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 1600; $('zc-merge').value = zc.merge_gap_ms ?? 3500;
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 1800; $('zc-merge').value = zc.merge_gap_ms ?? 3500;
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
@@ -286,7 +286,7 @@ function deleteSelected() {
 }
 function addZoom() {
   const at = tl.outToSrc(tl.playhead);
-  project.zoom.push({ start_ms: at, end_ms: Math.min(project.duration_ms, at + 2000), scale: project.zoom_config?.level || 1.7, follow_cursor: true, focus: [project.source_width / 2, project.source_height / 2], reason: 'manual' });
+  project.zoom.push({ start_ms: at, end_ms: Math.min(project.duration_ms, at + 2000), scale: Math.min(2, project.zoom_config?.level || 1.5), follow_cursor: true, focus: [project.source_width / 2, project.source_height / 2], reason: 'manual' });
   project.zoom.sort((a, b) => a.start_ms - b.start_ms);
   tl.selectedZoom = project.zoom.findIndex(z => z.start_ms === at);
   tl.draw(); syncSelection(); refresh(); status('Zoom added. Drag it on the timeline to adjust.');
@@ -297,9 +297,30 @@ $('del-clip').onclick = () => { if (project) { tl.selectedZoom = -1; deleteSelec
 $('add-zoom').onclick = () => project && addZoom();
 $('speed').onchange = () => { const c = project?.clips[tl.selectedClip]; if (c) { c.speed = +$('speed').value; tl.draw(); refresh(); } };
 $('zoom-scale').oninput = () => { const z = project?.zoom[tl.selectedZoom]; $('zoom-scale-out').textContent = (+$('zoom-scale').value).toFixed(1) + 'x'; if (z) { z.scale = +$('zoom-scale').value; tl.draw(); refresh(); } };
+// Pick the spot a zoom centres on by clicking a picture of the screen.
+function pickPoint(title, url, w, h, hint, at0) {
+  return new Promise(res => {
+    modal(title, `<p class="muted small">${esc(hint)}</p><div class="draw" id="draw"><img src="${url}" alt="" draggable="false" /><div class="rect pt" id="pt-mark" style="width:14px;height:14px;border-radius:50%;transform:translate(-50%,-50%);left:${(at0[0] / w) * 100}%;top:${(at0[1] / h) * 100}%"></div></div>
+      <div class="row end"><button class="btn ghost" id="pt-cancel">Cancel</button><button class="btn primary" id="pt-ok">Use this point</button></div>`);
+    const box = $('draw'); let pt = at0, done = false;
+    box.onpointerdown = e => { const b = box.getBoundingClientRect(); pt = [Math.round(Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * w), Math.round(Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)) * h)]; const m = $('pt-mark'); m.style.left = (pt[0] / w) * 100 + '%'; m.style.top = (pt[1] / h) * 100 + '%'; };
+    const fin = v => { if (done) return; done = true; $('modal').close(); res(v); };
+    $('pt-ok').onclick = () => fin(pt); $('pt-cancel').onclick = () => fin(null);
+    $('modal').addEventListener('close', () => fin(null), { once: true });
+  });
+}
+$('zoom-focus').onclick = async () => {
+  const z = project?.zoom[tl.selectedZoom]; if (!z) return status('Select a zoom on the timeline first.', 'info');
+  try {
+    const f = await invoke('raw_frame', { project, srcMs: Math.min(project.duration_ms, (z.start_ms + z.end_ms) / 2) });
+    const pt = await pickPoint('Where should this zoom look?', f.url, f.w, f.h, 'Click the spot to centre the zoom on. The picture is clamped so it never shows outside the screen.', z.focus);
+    if (pt) { z.focus = pt; z.follow_cursor = false; $('zoom-follow').checked = false; tl.draw(); refresh(); checkpoint(); status('Zoom focus set. "Follow the cursor" is off for this zoom.', 'success'); }
+  } catch (e) { fail(e); }
+};
+$('zoom-del').onclick = () => { if (project && tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); checkpoint(); status('Zoom deleted.', 'success'); } else status('Select a zoom on the timeline first.', 'info'); };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
-const ZOOM_STYLES = { subtle: { level: 1.4, ease: 1600, steady: 0.9 }, moderate: { level: 1.7, ease: 1200, steady: 0.8 }, intense: { level: 2.4, ease: 800, steady: 0.55 } };
+const ZOOM_STYLES = { subtle: { level: 1.3, ease: 1200, steady: 0.9 }, normal: { level: 1.5, ease: 1000, steady: 0.8 }, strong: { level: 1.9, ease: 900, steady: 0.65 } };
 $('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-ease').value = z.ease; $('zc-steady').value = z.steady; readPanel(); outputs(); status('Zoom style set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
   try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
@@ -538,7 +559,7 @@ window.__TAURI__.event.listen('ai-progress', e => {
 });
 
 $('ready-btn').onclick = () => aiTask('Running auto edit', async () => {
-  const r = await invoke('ai_demo_ready', { project, zoom: $('r-zoom').checked, captions: $('r-captions').checked, cut: $('r-cut').checked, blur: $('r-blur').checked, denoise: $('r-denoise').checked });
+  const r = await invoke('ai_demo_ready', { project, zoom: $('r-zoom').checked, captions: $('r-captions').checked, cut: $('r-cut').checked, cutPauses: $('r-pauses').checked, blur: $('r-blur').checked, denoise: $('r-denoise').checked });
   applyResult(r.project);
   const ic = { done: 'i-check', skipped: 'i-skip', failed: 'i-alert' };
   $('ready-report').innerHTML = r.report.steps.map(s => `<li class="${s.state}">${icon(ic[s.state])}<span><b>${esc(s.name)}</b><small>${esc(s.detail)}</small></span></li>`).join('') +
@@ -553,12 +574,33 @@ $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
   r.project.caption_style.burn_in = true; applyResult(r.project);
   status(r.report.words ? `Transcribed ${r.report.words} words (${r.report.fillers} filler words). Captions are burned in; switch that off in Style.` : 'Transcribed, but no speech was found. Is the microphone track silent? Check the level meter next time.', r.report.words ? 'success' : 'error');
 });
+// Auto cut proposes first. Nothing is removed until the red bands on the timeline have been reviewed.
+function clearProposal() { tl.proposed = null; $('cut-review').hidden = true; tl.draw(); }
+function showProposal(cuts, had) {
+  const total = cuts.reduce((a, c) => a + (c[1] - c[0]), 0), f = cuts.filter(c => c[2] === 'filler').length;
+  tl.proposed = cuts.map(c => [c[0], c[1]]);
+  $('cut-review-text').textContent = `${cuts.length} proposed cut${cuts.length === 1 ? '' : 's'} (${f} filler words, ${cuts.length - f} still pauses), ${fmt(total)} in all. Red bands on the timeline show them.`;
+  $('cut-review').hidden = false; tl.draw();
+  if (cuts[0]) { tl.playhead = Math.max(0, tl.srcToOut(cuts[0][0]) - 800); tl.draw(); refresh(); }
+}
+let proposal = null;
 $('ai-autocut').onclick = () => aiTask('Finding pauses and filler words', async () => {
-  const r = await invoke('ai_autocut', { project, fillers: $('cut-fillers').checked, silences: $('cut-silences').checked, minSilenceMs: +$('cut-min').value });
-  applyResult(r.project);
-  const n = r.report.cuts.length, f = r.report.cuts.filter(c => c[2] === 'filler').length;
-  status(`${n} cuts (${f} filler words, ${n - f} pauses). ${fmt(r.report.before_ms)} to ${fmt(r.report.after_ms)}.` + (!r.report.had_transcript && $('cut-fillers').checked ? ' Transcribe first to also cut filler words.' : ''), 'success');
+  const fillers = $('cut-fillers').checked, silences = $('cut-silences').checked;
+  const args = { fillers, silences, minSilenceMs: +$('cut-min').value };
+  const r = await invoke('ai_autocut', { project, ...args, apply: false });
+  if (!r.report.cuts.length) {
+    clearProposal(); proposal = null;
+    return status(silences ? 'Nothing to cut. Every quiet stretch has something happening on screen, so all of it is kept.' : 'No filler words found.' + (!r.report.had_transcript && fillers ? ' Transcribe first so filler words can be found.' : ''), 'info');
+  }
+  proposal = args; showProposal(r.report.cuts, r.report.had_transcript);
+  status('Review the red bands on the timeline, then press Apply cuts. Nothing has been removed yet.', 'info');
 });
+$('cut-apply').onclick = () => aiTask('Applying cuts', async () => {
+  const r = await invoke('ai_autocut', { project, ...proposal, apply: true });
+  clearProposal(); applyResult(r.project);
+  status(`Removed ${r.report.cuts.length} cut${r.report.cuts.length === 1 ? '' : 's'}: ${fmt(r.report.before_ms)} to ${fmt(r.report.after_ms)}. Press Ctrl+Z to put them back.`, 'success');
+});
+$('cut-discard').onclick = () => { clearProposal(); status('Proposed cuts discarded. The video is unchanged.', 'info'); };
 $('ai-redact').onclick = () => aiTask('Scanning for secrets', async () => {
   const r = await invoke('ai_redact', { project });
   applyResult(r.project);

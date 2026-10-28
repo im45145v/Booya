@@ -461,3 +461,8 @@ html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 }
 /* No hover on touch: show what hover would show, always. */
 @media (hover: none) { .pk-hover { display: none; } }
+
+/* Auto cut review bar above the timeline */
+.cut-review { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #e84d4d 12%, var(--surface)); font-size: var(--fs-sm); }
+.cut-review[hidden] { display: none; }
+.cut-review span { flex: 1; }

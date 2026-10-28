@@ -6,6 +6,7 @@ pub mod events;
 pub mod export;
 pub mod finalize;
 pub mod ffmpeg;
+pub mod activity;
 pub mod audio;
 pub mod text;
 pub mod input;

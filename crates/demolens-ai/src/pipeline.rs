@@ -65,21 +65,34 @@ pub struct CutReport {
 /// Plan (and unless `dry_run`, apply) cuts for filler words and long pauses.
 pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Result<CutReport> {
     let words: Vec<_> = p.captions.iter().flat_map(|c| c.words.clone()).collect();
+    let log = p.events.as_ref().and_then(|e| demolens_core::events::EventLog::load(e).ok());
+    // Quiet is only a candidate. A stretch is cut only when the microphone is
+    // quiet AND the pointer, keyboard and picture are all still: many demos are
+    // given in silence, and the sound alone says nothing about the screen.
     let silences = if o.cut_silences {
-        let samples = audio::decode_mono(&p.source, 16_000)?;
-        audio::detect_silences(&samples, 16_000, -38.0, o.min_silence_ms)
+        let info = demolens_core::ffmpeg::probe(&p.source)?;
+        let quiet = if info.has_audio {
+            let samples = audio::decode_mono(&p.source, 16_000)?;
+            audio::detect_silences(&samples, 16_000, -38.0, o.min_silence_ms)
+        } else {
+            vec![(0.0, p.duration_ms)]
+        };
+        let idle_opts = demolens_core::activity::IdleOptions { min_idle_ms: o.min_silence_ms.max(2500.0), ..Default::default() };
+        let idle = demolens_core::activity::idle_stretches(&p.source, log.as_ref(), p.duration_ms, &idle_opts)
+            .context("could not check the screen for activity, so no pauses were cut")?;
+        demolens_core::activity::intersect(&quiet, &idle)
     } else {
         Vec::new()
     };
     let mut planned = captions::plan_cuts(&words, &silences, o);
     // A quiet stretch is not dead air when the presenter is clicking or
     // typing in it: keep the on-screen action and only cut around it.
-    if let Some(log) = p.events.as_ref().and_then(|e| demolens_core::events::EventLog::load(e).ok()) {
+    if let Some(log) = log.as_ref() {
         let activity: Vec<f64> = log.clicks().map(|c| c.0).chain(log.keys().map(|k| k.0)).collect();
         planned = protect_activity(&planned, &activity, 400.0, 900.0, 300.0);
         // Also keep the cursor travelling to each click, so a cut never
         // makes the pointer jump straight onto the button.
-        planned = protect_ranges(&planned, &click_travel(&log), 300.0);
+        planned = protect_ranges(&planned, &click_travel(log), 300.0);
     }
     let cuts = planned
         .iter()
@@ -243,7 +256,10 @@ pub struct ReadyReport {
 pub struct ReadyOptions {
     pub zoom: bool,
     pub captions: bool,
+    /// Cut filler words (needs a transcript).
     pub cut: bool,
+    /// Also cut pauses where the screen is still too. Off unless asked for.
+    pub cut_silences: bool,
     pub blur: bool,
     pub denoise: bool,
     pub min_silence_ms: f64,
@@ -251,7 +267,7 @@ pub struct ReadyOptions {
 
 impl Default for ReadyOptions {
     fn default() -> Self {
-        Self { zoom: true, captions: true, cut: true, blur: true, denoise: true, min_silence_ms: 700.0 }
+        Self { zoom: true, captions: true, cut: true, cut_silences: false, blur: true, denoise: true, min_silence_ms: 700.0 }
     }
 }
 
@@ -296,15 +312,17 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
     }
 
     if o.cut {
-        progress(0.45, "Cutting filler words and long pauses...");
-        if !has_audio {
-            step("Auto cut", "skipped", "the video has no audio".into());
+        progress(0.45, "Cutting filler words...");
+        if !has_audio && !o.cut_silences {
+            step("Auto cut", "skipped", "the video has no audio, so there are no filler words to cut".into());
+        } else if !have_words && !o.cut_silences {
+            step("Auto cut", "skipped", "no transcript, so no filler words to cut. Pauses are left alone unless you ask for them".into());
         } else {
-            let co = AutoCutOptions { cut_fillers: have_words, cut_silences: true, min_silence_ms: o.min_silence_ms, ..Default::default() };
+            let co = AutoCutOptions { cut_fillers: have_words, cut_silences: o.cut_silences, min_silence_ms: o.min_silence_ms, ..Default::default() };
             match autocut_project(p, &co, false) {
                 Ok(r) => {
                     let f = r.cuts.iter().filter(|c| c.2 == "filler").count();
-                    step("Auto cut", "done", format!("{} filler words and {} pauses removed", f, r.cuts.len() - f));
+                    step("Auto cut", "done", format!("{} filler words and {} still pauses removed. Ctrl+Z undoes it", f, r.cuts.len() - f));
                 }
                 Err(err) => step("Auto cut", "failed", err.to_string()),
             }
@@ -351,4 +369,87 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
     }
     progress(1.0, "Done");
     ReadyReport { steps, before_ms, after_ms: p.output_duration_ms() }
+}
+
+/// The regression behind "my video was trimmed for no reason": a demo given
+/// in silence must keep every second where something happens.
+#[cfg(test)]
+mod silent_demo_tests {
+    use super::*;
+    use demolens_core::events::{Event, EventKind, EventLog, MouseButton};
+
+    /// A 14 s 640x360 video with a silent audio track. A box changes at the
+    /// given times (so the picture is "active" there); the pointer moves in
+    /// the given ranges and clicks at the given times.
+    fn demo(name: &str, flashes: &[f64], moving: &[(f64, f64)], clicks: &[f64]) -> Option<Project> {
+        let dir = std::env::temp_dir().join(format!("dl-silent-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let video = dir.join("demo.mp4");
+        let enable = flashes.iter().map(|t| format!("between(t,{t},{})", t + 0.4)).collect::<Vec<_>>().join("+");
+        let vf = if flashes.is_empty() { "null".to_string() } else { format!("drawbox=x=100:y=100:w=200:h=100:color=white:t=fill:enable='{enable}'") };
+        let ok = std::process::Command::new(demolens_core::ffmpeg::ffmpeg_bin()) // proc:allow
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=15:d=14", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-vf", &vf, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&video)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            return None;
+        }
+        let mut log = EventLog::new(640, 360);
+        for &(a, b) in moving {
+            let mut t = a;
+            while t < b {
+                log.events.push(Event { t, kind: EventKind::Move { x: 50.0 + (t / 20.0) % 400.0, y: 80.0 } });
+                t += 100.0;
+            }
+        }
+        for &t in clicks {
+            log.events.push(Event { t, kind: EventKind::Click { x: 100.0, y: 100.0, button: MouseButton::Left } });
+        }
+        log.events.sort_by(|a, b| a.t.total_cmp(&b.t));
+        let ev = dir.join("demo.events.jsonl");
+        log.save(&ev).ok()?;
+        demolens_core::new_project(&video, Some(&ev)).ok()
+    }
+
+    fn silences_only() -> AutoCutOptions {
+        AutoCutOptions { cut_fillers: false, cut_silences: true, min_silence_ms: 700.0, keep_ms: 180.0 }
+    }
+
+    #[test]
+    fn a_silent_demo_with_activity_all_the_way_loses_nothing() {
+        // Clicks about every 1.2 s with the pointer travelling in between, as in the report.
+        let clicks: Vec<f64> = (1..12).map(|i| i as f64 * 1200.0).collect();
+        let Some(mut p) = demo("busy", &[2.0, 5.0, 8.0, 11.0], &[(0.0, 13_000.0)], &clicks) else { return };
+        let r = autocut_project(&mut p, &silences_only(), false).unwrap();
+        assert!(r.cuts.is_empty(), "silent but busy: {:?}", r.cuts);
+        assert_eq!(p.clips.len(), 1);
+    }
+
+    #[test]
+    fn only_a_stretch_that_is_quiet_and_still_is_cut_and_with_padding() {
+        // Busy until 5 s, then nothing at all until the end.
+        let Some(mut p) = demo("tail", &[1.0, 3.0], &[(0.0, 5_000.0)], &[2_000.0, 4_800.0]) else { return };
+        let r = autocut_project(&mut p, &silences_only(), true).unwrap();
+        assert!(!r.cuts.is_empty(), "a long still and silent stretch is cut");
+        for &(s, e, _) in &r.cuts {
+            assert!(s >= 5_000.0 + 600.0, "padding after the last activity: {s}");
+            assert!(e <= 14_000.0);
+        }
+        // dry run changes nothing
+        assert_eq!(p.clips.len(), 1);
+    }
+
+    #[test]
+    fn something_changing_on_screen_without_any_input_is_not_cut() {
+        // No pointer, no keys: only a loading screen that keeps changing.
+        let Some(mut p) = demo("loading", &[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0], &[], &[]) else { return };
+        let r = autocut_project(&mut p, &silences_only(), true).unwrap();
+        for &(s, e, _) in &r.cuts {
+            for t in [1000.0, 3000.0, 5000.0, 7000.0, 9000.0, 11000.0, 13000.0] {
+                assert!(!(s < t + 400.0 && e > t), "cut {s}..{e} swallows a change at {t}");
+            }
+        }
+    }
 }

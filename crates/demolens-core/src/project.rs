@@ -611,6 +611,48 @@ impl Project {
         (len(&self.intro), len(&self.outro))
     }
 
+    /// Where source time `s` lands on the exported timeline. A time inside a
+    /// removed stretch lands on the seam where the cut was made.
+    pub fn src_to_out(&self, s: f64) -> f64 {
+        let mut acc = 0.0;
+        for c in &self.clips {
+            if s < c.src_start_ms {
+                return acc;
+            }
+            if s <= c.src_end_ms {
+                return acc + (s - c.src_start_ms) / c.speed.max(0.01);
+            }
+            acc += c.out_len();
+        }
+        acc
+    }
+
+    /// Source time shown at output time `o` (the end of the last clip past the end).
+    pub fn out_to_src(&self, o: f64) -> f64 {
+        let mut acc = 0.0;
+        for c in &self.clips {
+            let len = c.out_len();
+            if o <= acc + len {
+                return c.src_start_ms + (o - acc).max(0.0) * c.speed.max(0.01);
+            }
+            acc += len;
+        }
+        self.clips.last().map(|c| c.src_end_ms).unwrap_or(0.0)
+    }
+
+    /// The zoom segments on the exported timeline. Zoom is easing in and out
+    /// of what the viewer sees, so a cut in the middle of a zoom must not make
+    /// the camera jump: the part that is cut away simply is not there.
+    pub fn zoom_on_output(&self) -> Vec<ZoomSegment> {
+        self.zoom
+            .iter()
+            .filter_map(|z| {
+                let (a, b) = (self.src_to_out(z.start_ms), self.src_to_out(z.end_ms));
+                (b - a >= 300.0).then(|| ZoomSegment { start_ms: a, end_ms: b, ..z.clone() })
+            })
+            .collect()
+    }
+
     pub fn output_duration_ms(&self) -> f64 {
         self.clips.iter().map(Clip::out_len).sum()
     }

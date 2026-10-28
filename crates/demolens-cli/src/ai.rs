@@ -127,7 +127,7 @@ pub fn autocut_cmd(mut a: Args) -> Result<()> {
     let mut p = Project::load(&pp)?;
     let r = pipeline::autocut_project(&mut p, &o, dry)?;
     if o.cut_fillers && !r.had_transcript {
-        eprintln!("note: no transcript yet, so only silences are cut (run demolens transcribe first)");
+        eprintln!("note: no transcript yet, so there are no filler words to cut (run demolens transcribe first)");
     }
     for (s, e, what) in &r.cuts {
         println!("  cut {:>6.2}s to {:>6.2}s  ({what})", s / 1000.0, e / 1000.0);
@@ -209,6 +209,7 @@ pub fn ready_cmd(mut a: Args) -> Result<()> {
         zoom: !a.flag("--no-zoom"),
         captions: !a.flag("--no-captions"),
         cut: !a.flag("--no-cut"),
+        cut_silences: a.flag("--cut-pauses"),
         blur: !a.flag("--no-blur"),
         denoise: !a.flag("--no-denoise"),
         ..Default::default()

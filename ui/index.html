@@ -132,6 +132,7 @@
       <button id="tl-in" class="btn icon ghost" title="Zoom timeline in (+)" aria-label="Zoom timeline in"><svg class="ico"><use href="#i-plus"/></svg></button>
     </div>
     <div class="timeline-wrap">
+      <div id="cut-review" class="cut-review" hidden role="status"><span id="cut-review-text"></span><button class="btn sm primary" id="cut-apply">Apply cuts</button><button class="btn sm" id="cut-discard">Discard</button></div>
       <canvas id="timeline" tabindex="0" role="slider" aria-label="Timeline. Drag to scrub, drag zoom segments to move or resize them. Ctrl and scroll to zoom." aria-valuemin="0" aria-valuenow="0"></canvas>
       <div id="tl-empty" class="tl-empty">Your clips, zooms and words will show up here.</div>
     </div>
@@ -152,7 +153,8 @@
         <div class="checks">
           <label><input type="checkbox" id="r-zoom" checked /> Auto zoom on clicks and typing</label>
           <label><input type="checkbox" id="r-captions" checked /> Captions <span class="pill" id="pill-speech"></span></label>
-          <label><input type="checkbox" id="r-cut" checked /> Cut filler words and long pauses</label>
+          <label><input type="checkbox" id="r-cut" checked /> Cut filler words (um, uh)</label>
+          <label><input type="checkbox" id="r-pauses" /> Also cut quiet pauses, only where nothing moves on screen <span class="pill">off by default</span></label>
           <label><input type="checkbox" id="r-blur" checked /> Blur emails, keys, cards, IDs and passwords <span class="pill" id="pill-ocr"></span></label>
           <label><input type="checkbox" id="r-denoise" checked /> Remove background noise</label>
         </div>
@@ -171,10 +173,10 @@
       <h3 class="section">Tools</h3>
       <div class="tool-list">
         <button id="ai-transcribe" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Transcribe</b><small>Captions and word timings</small></span></button>
-        <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Remove fillers and pauses</small></span></button>
+        <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Review the cuts first, then apply</small></span></button>
         <div class="sub">
           <label><input type="checkbox" id="cut-fillers" checked /> Filler words (um, uh)</label>
-          <label><input type="checkbox" id="cut-silences" checked /> Pauses longer than
+          <label><input type="checkbox" id="cut-silences" /> Quiet pauses where nothing moves on screen, longer than
             <select id="cut-min" class="field sm" aria-label="Minimum pause length"><option value="500">0.5 s</option><option value="700" selected>0.7 s</option><option value="1200">1.2 s</option></select></label>
         </div>
         <button id="ai-redact" class="tool needs-project"><svg class="ico"><use href="#i-eye-off"/></svg><span><b>Blur secrets</b><small>Emails, keys, cards, Aadhaar, PAN, UPI, passwords</small></span></button>
@@ -264,11 +266,11 @@
       <label class="slider">Card length <input id="card-len" type="range" min="1" max="6" step="0.5" /><output id="card-len-out">2.5 s</output></label>
 
       <h3 class="section">Zoom</h3>
-      <label class="stack" title="Quick settings for how bold the zooms are. You can fine tune below.">Zoom style<select id="zc-style" class="field"><option value="">Custom</option><option value="subtle">Subtle (gentle, slow)</option><option value="moderate">Moderate (default)</option><option value="intense">Intense (close and quick)</option></select></label>
+      <label class="stack" title="How close the automatic zooms get. They never go past 2x and always keep a margin around what you clicked. Press Apply to auto zoom afterwards.">Zoom intensity<select id="zc-style" class="field"><option value="">Custom</option><option value="subtle">Subtle (1.3x, slow and calm)</option><option value="normal">Normal (1.5x, default)</option><option value="strong">Strong (up to 2x)</option></select></label>
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
-      <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="3" step="0.1" /><output id="zc-level-out">1.7x</output></label>
+      <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="2" step="0.05" /><output id="zc-level-out">1.5x</output></label>
       <label class="slider" title="High keeps the view still while the cursor roams and follows only when it nears the edge. Low follows every move.">Steadiness <input id="zc-steady" type="range" min="0" max="1" step="0.05" /><output id="zc-steady-out">65%</output></label>
-      <label class="slider" title="How long each zoom stays in after your last click or key press.">Zoom hold <input id="zc-hold" type="range" min="400" max="6000" step="100" /><output id="zc-hold-out">1.6 s</output></label>
+      <label class="slider" title="How long each zoom stays in after your last click or key press.">Zoom hold <input id="zc-hold" type="range" min="400" max="6000" step="100" /><output id="zc-hold-out">1.8 s</output></label>
       <label class="slider" title="Clicks closer together than this share one zoom. Raise it to get fewer, longer zooms. Lower it for a zoom per click.">Group clicks within <input id="zc-merge" type="range" min="500" max="8000" step="100" /><output id="zc-merge-out">3.5 s</output></label>
       <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-auto"/></svg><span>Apply to auto zoom</span></button></div>
 
@@ -292,8 +294,9 @@
 
       <h3 class="section">Zoom</h3>
       <p class="muted small" id="zoom-info">Select a zoom segment on the timeline. Drag it to move it, drag its edges to resize.</p>
-      <label class="slider">Scale <input id="zoom-scale" type="range" min="1.1" max="4" step="0.1" value="2" /><output id="zoom-scale-out">2.0x</output></label>
+      <label class="slider">Scale <input id="zoom-scale" type="range" min="1.1" max="2" step="0.05" value="1.5" /><output id="zoom-scale-out">2.0x</output></label>
       <label class="switch"><input type="checkbox" id="zoom-follow" checked /> Follow the cursor</label>
+      <div class="row"><button id="zoom-focus" class="btn needs-project" title="Pick the exact spot this zoom centres on by clicking a picture of the screen"><svg class="ico"><use href="#i-zoom"/></svg><span>Set focus point</span></button><button id="zoom-del" class="btn needs-project"><svg class="ico"><use href="#i-trash"/></svg><span>Delete zoom</span></button></div>
       <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-auto"/></svg><span>Regenerate auto zoom</span></button></div>
 
       <h3 class="section">Callouts</h3>

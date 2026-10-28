@@ -1195,10 +1195,11 @@ async fn ai_transcribe(app: tauri::AppHandle, mut project: Project, model: Optio
 }
 
 #[tauri::command]
-async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_silence_ms: f64) -> R<AiResult<pipeline::CutReport>> {
+async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_silence_ms: f64, apply: Option<bool>) -> R<AiResult<pipeline::CutReport>> {
     blocking(move || {
         let o = AutoCutOptions { cut_fillers: fillers, cut_silences: silences, min_silence_ms, ..Default::default() };
-        let report = pipeline::autocut_project(&mut project, &o, false).map_err(e)?;
+        // Without `apply` this only proposes: the editor shows the cuts for review first.
+        let report = pipeline::autocut_project(&mut project, &o, !apply.unwrap_or(false)).map_err(e)?;
         Ok(AiResult { project, report })
     })
     .await
@@ -1363,9 +1364,9 @@ async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
 }
 
 #[tauri::command]
-async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool) -> R<AiResult<pipeline::ReadyReport>> {
+async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool, cut_pauses: Option<bool>) -> R<AiResult<pipeline::ReadyReport>> {
     blocking(move || {
-        let o = pipeline::ReadyOptions { zoom, captions, cut, blur, denoise, ..Default::default() };
+        let o = pipeline::ReadyOptions { zoom, captions, cut, cut_silences: cut_pauses.unwrap_or(false), blur, denoise, ..Default::default() };
         let report = pipeline::demo_ready(&mut project, &o, |p, m| progress(&app, "ready", p, m));
         Ok(AiResult { project, report })
     })

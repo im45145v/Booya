@@ -137,7 +137,7 @@ pub struct AutoCutOptions {
 
 impl Default for AutoCutOptions {
     fn default() -> Self {
-        Self { cut_fillers: true, cut_silences: true, min_silence_ms: 700.0, keep_ms: 180.0 }
+        Self { cut_fillers: true, cut_silences: false, min_silence_ms: 700.0, keep_ms: 180.0 }
     }
 }
 
@@ -267,7 +267,7 @@ mod tests {
     fn fillers_and_silences_become_cuts() {
         assert!(is_filler("Um,") && is_filler("uh") && !is_filler("umbrella"));
         let words = vec![w(0.0, 400.0, "Okay"), w(500.0, 800.0, "um"), w(900.0, 1200.0, "next")];
-        let cuts = plan_cuts(&words, &[(2000.0, 4000.0), (5000.0, 5300.0)], &AutoCutOptions::default());
+        let cuts = plan_cuts(&words, &[(2000.0, 4000.0), (5000.0, 5300.0)], &AutoCutOptions { cut_silences: true, ..Default::default() });
         assert_eq!(cuts, vec![(460.0, 840.0), (2180.0, 3820.0)]);
     }
 }

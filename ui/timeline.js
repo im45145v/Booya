@@ -281,6 +281,15 @@ class Timeline {
       if (b - a > 40) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`Clip ${i + 1}${c.speed !== 1 ? '  ' + c.speed + 'x' : ''}`, a + 8, (ca + cb) / 2); }
       acc += len;
     });
+    // Proposed cuts waiting for review: red bands over the clips lane.
+    if (this.proposed && this.proposed.length) {
+      ctx.save(); ctx.fillStyle = 'rgba(232, 77, 77, .55)'; ctx.strokeStyle = '#e84d4d';
+      for (const [s0, e0] of this.proposed) {
+        const a = this.x(this.srcToOut(s0)), b = this.x(this.srcToOut(e0));
+        ctx.fillRect(a, ca - 2, Math.max(3, b - a), cb - ca + 4); ctx.strokeRect(a + .5, ca - 1.5, Math.max(3, b - a) - 1, cb - ca + 3);
+      }
+      ctx.restore();
+    }
     // Zoom segments
     const [za, zb] = this.L.zoom;
     this.project.zoom.forEach((z, i) => {

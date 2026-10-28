@@ -45,6 +45,7 @@ LOCAL AI (offline, models download once on first use):
   demolens transcribe <project.json> [--model whisper-base.en] [--lang en]
   demolens captions <project.json> [--burn on|off] [--size PX] [-o subs.srt|subs.vtt]
   demolens autocut <project.json> [--fillers] [--silences] [--min-silence MS] [--dry-run]
+                  --silences only cuts quiet stretches where the screen, pointer and keys are still too
   demolens redact <project.json> [--every MS] [--dry-run]
   demolens docs <project.json> [-o DIR] [--no-llm]
   demolens interactive <project.json> [-o demo.html] [--title T] [--cta-text T --cta-url URL]

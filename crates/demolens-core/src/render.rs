@@ -5,7 +5,7 @@
 use crate::events::{CursorTrack, EventLog};
 use crate::text;
 use crate::project::{Background, BlurBox, Project};
-use crate::zoom::{camera_at, Camera, CameraTiming};
+use crate::zoom::{camera_at_mapped, Camera, CameraTiming};
 use rayon::prelude::*;
 
 /// RGBA8 frame.
@@ -614,20 +614,15 @@ impl Renderer {
         }
     }
 
+    /// The camera for the frame showing source time `src_t`. It is worked out
+    /// on the exported timeline, so a cut in the middle of a zoom shortens the
+    /// zoom instead of making the picture jump between two camera states.
     pub fn camera(&self, src_t: f64) -> Camera {
         let p = &self.project;
-        camera_at(
-            src_t,
-            &p.zoom,
-            self.track.as_ref(),
-            p.source_width as f64,
-            p.source_height as f64,
-            {
-                let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0));
-                t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
-                t
-            },
-        )
+        let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0));
+        t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
+        let segs = p.zoom_on_output();
+        camera_at_mapped(p.src_to_out(src_t), &segs, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o))
     }
 
     /// Render one output frame. `src` must be the source frame at `src_t`.
