@@ -718,9 +718,6 @@ mod tests {
         let n = (ms / 50.0) as usize;
         (0..=n).map(|i| mv(t_end - ms + i as f64 * 50.0, a.0 + (b.0 - a.0) * i as f64 / n as f64, a.1 + (b.1 - a.1) * i as f64 / n as f64)).collect()
     }
-    fn zoomed(events: Vec<Event>, cfg: &ZoomConfig) -> usize {
-        generate_zoom_segments(&log_with(events), 3_800.0, cfg).len()
-    }
 
     // Clicks `gap` ms apart starting at `t0`, all near (x, y).
     fn burst(t0: f64, n: usize, gap: f64, x: f64, y: f64) -> Vec<Event> {
@@ -992,7 +989,7 @@ mod tests {
         let mut p = Project::new("a.mp4".into(), None, 1920, 1080, 20_000.0);
         p.zoom = vec![ZoomSegment { start_ms: 2000.0, end_ms: 12_000.0, scale: 2.0, follow_cursor: false, focus: (1400.0, 300.0), reason: "click".into() }];
         // Remove 5 s from the middle of the zoom.
-        p.clips = vec![Clip { src_start_ms: 0.0, src_end_ms: 6000.0, speed: 1.0 }, Clip { src_start_ms: 11_000.0, src_end_ms: 20_000.0, speed: 1.0 }];
+        p.clips = vec![Clip { src_start_ms: 0.0, src_end_ms: 6000.0, speed: 1.0, mute: false }, Clip { src_start_ms: 11_000.0, src_end_ms: 20_000.0, speed: 1.0, mute: false }];
         let segs = p.zoom_on_output();
         assert_eq!(segs.len(), 1);
         assert_eq!((segs[0].start_ms, segs[0].end_ms), (2000.0, 7000.0));

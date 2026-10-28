@@ -105,7 +105,9 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
         let pad = ((off - c.src_start_ms / 1000.0).max(0.0) / c.speed.max(0.01) * 1000.0).round();
         let pad = if pad > 0.0 { format!(",adelay={pad:.0}:all=1") } else { String::new() };
         let rebase = if project.audio.rebase_start { "asetpts=PTS-STARTPTS," } else { "" };
-        f.push_str(&format!("[{idx}:a]aresample=48000,{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
+        // A muted clip keeps its length, so everything after it stays in sync.
+        let mute = if c.mute { ",volume=0" } else { "" };
+        f.push_str(&format!("[{idx}:a]aresample=48000,{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{mute}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
     }
     for i in 0..n {
         f.push_str(&format!("[a{i}]"));
@@ -143,6 +145,48 @@ pub fn with_audio_lead(project: &Project, zero_based: bool) -> Project {
 pub fn pad_audio_graph(graph: &str, front_ms: f64, whole_dur_s: f64) -> String {
     let delay = if front_ms > 0.5 { format!("adelay={front_ms:.0}:all=1,") } else { String::new() };
     format!("{}[ao0];[ao0]{delay}apad=whole_dur={whole_dur_s:.3}[aout]", graph.trim_end_matches("[aout]"))
+}
+
+/// The music file, when the project has one that can be mixed.
+pub fn music_of(project: &Project) -> Option<crate::project::Music> {
+    project.music.as_ref().filter(|m| !m.path.as_os_str().is_empty() && m.path.exists() && m.volume > 0.0).map(|m| m.clamped())
+}
+
+/// Mixes the music into an audio graph. `voice` is a graph that ends in
+/// `[aout]` (the recording's sound), or `None` when there is none. The music
+/// is input `music_idx`; `whole_s` is the length of the finished file. With
+/// `duck` on, the music drops while the voice is loud (a sidechain
+/// compressor), and it fades in and out over the ends of the file.
+pub fn music_graph(m: &crate::project::Music, voice: Option<&str>, music_idx: usize, whole_s: f64) -> String {
+    let start = (m.start_ms / 1000.0).min((whole_s - 0.1).max(0.0));
+    let len = (whole_s - start).max(0.1);
+    let fi = (m.fade_in_ms / 1000.0).min(len / 2.0);
+    let fo = (m.fade_out_ms / 1000.0).min(len / 2.0);
+    let mut chain = format!("[{music_idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration={len:.3},asetpts=PTS-STARTPTS,volume={:.3}", m.volume);
+    if fi > 0.01 {
+        chain.push_str(&format!(",afade=t=in:d={fi:.3}"));
+    }
+    if fo > 0.01 {
+        chain.push_str(&format!(",afade=t=out:st={:.3}:d={fo:.3}", (len - fo).max(0.0)));
+    }
+    if start > 0.005 {
+        chain.push_str(&format!(",adelay={:.0}:all=1", start * 1000.0));
+    }
+    chain.push_str(&format!(",apad=whole_dur={whole_s:.3}"));
+    match voice {
+        None => format!("{chain}[aout]"),
+        Some(v) => {
+            let v = v.trim_end_matches("[aout]");
+            if m.duck {
+                // The harder the duck, the higher the ratio. The release is
+                // long enough that the music does not pump between words.
+                let ratio = (2.0 + m.duck_db / 2.0).clamp(2.0, 20.0);
+                format!("{v}[vo];[vo]aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=2[vm][vs];{chain}[mu];[mu][vs]sidechaincompress=threshold=0.02:ratio={ratio:.1}:attack=30:release=600:makeup=1[md];[vm][md]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]")
+            } else {
+                format!("{v}[vo];[vo]aformat=sample_fmts=fltp:channel_layouts=stereo[vm];{chain}[md];[vm][md]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]")
+            }
+        }
+    }
 }
 
 /// Gain, normalising, volume and fades after the clips are joined. With
@@ -219,6 +263,9 @@ pub fn passthrough_ok(p: &Project) -> bool {
         && p.style.padding == 0.0
         && p.style.corner_radius == 0.0
         && !p.style.glass.enabled
+        && p.style.frame == crate::project::DeviceFrame::None
+        && p.music.is_none()
+        && !p.clips[0].mute
         && !p.cursor.visible
         && !p.keys.enabled
         && p.webcam.as_ref().is_none_or(|w| !w.visible)
@@ -331,38 +378,60 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
 
     let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-r", &fps.to_string(), "-i", "-"]);
-    let with_audio = s.format != Format::Gif && info.has_audio && !project.audio.mute;
+    let voice = s.format != Format::Gif && info.has_audio && !project.audio.mute;
+    let music = if s.format == Format::Gif { None } else { music_of(project) };
+    let with_audio = voice || music.is_some();
     // Noise cleanup writes a cleaned track to a private temp folder and uses
     // it as the audio input instead of the original.
     let mut audio_input = project.source.clone();
-    let tmp = if with_audio && project.audio.denoise { Some(private_tmp()?) } else { None };
+    let tmp = if voice && project.audio.denoise { Some(private_tmp()?) } else { None };
     if let Some(t) = &tmp {
         let denoised = t.join("denoised.wav");
         crate::audio::denoise_file(&project.source, &denoised)?;
         audio_input = denoised;
     }
+    let whole_s = (out_dur + intro_ms + outro_ms) / 1000.0;
     let audio_graph_text = if with_audio {
-        // Lead of the audio track over the video, folded in (see with_audio_lead).
-        let ap = with_audio_lead(project, tmp.is_some());
-        let m = if ap.audio.normalize { measure_export_audio(&ap, &audio_input) } else { None };
-        let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
-        // Silence under the intro, and padding to the full length so neither a
-        // short microphone track nor the outro card cuts the video short.
-        pad_audio_graph(&g, if intro_n > 0 { intro_ms } else { 0.0 }, (out_dur + intro_ms + outro_ms) / 1000.0)
+        let voice_graph = if voice {
+            // Lead of the audio track over the video, folded in (see with_audio_lead).
+            let ap = with_audio_lead(project, tmp.is_some());
+            let m = if ap.audio.normalize { measure_export_audio(&ap, &audio_input) } else { None };
+            let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
+            // Silence under the intro, and padding to the full length so neither a
+            // short microphone track nor the outro card cuts the video short.
+            Some(pad_audio_graph(&g, if intro_n > 0 { intro_ms } else { 0.0 }, whole_s))
+        } else {
+            None
+        };
+        match &music {
+            Some(m) => music_graph(m, voice_graph.as_deref(), if voice { 2 } else { 1 }, whole_s),
+            None => voice_graph.unwrap_or_default(),
+        }
     } else {
         String::new()
+    };
+    let add_audio_inputs = |cmd: &mut std::process::Command| {
+        if voice {
+            cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
+        }
+        if let Some(m) = &music {
+            if m.looped {
+                cmd.args(["-stream_loop", "-1"]);
+            }
+            cmd.arg("-i").arg(ffmpeg::file_url(&m.path));
+        }
     };
     match s.format {
         Format::Mp4 => {
             if with_audio {
-                cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
+                add_audio_inputs(&mut cmd);
                 cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]);
             }
             cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
         }
         Format::Webm => {
             if with_audio {
-                cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
+                add_audio_inputs(&mut cmd);
                 cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "160k", "-ar", "48000"]);
             }
             cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p"]);
@@ -724,5 +793,130 @@ mod tests {
         p.audio.offset_ms = -200.0;
         // Earlier audio reads later in the file.
         assert!(audio_filter(&p).contains("atrim=start=0.200"));
+    }
+
+    fn make_tone(dir: &std::path::Path, name: &str, hz: u32, secs: f64) -> std::path::PathBuf {
+        let f = dir.join(name);
+        assert!(crate::proc::command(ffmpeg::ffmpeg_bin()).args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("sine=frequency={hz}:d={secs}"), "-ar", "44100"]).arg(&f).status().unwrap().success());
+        f
+    }
+
+    #[test]
+    fn a_muted_clip_is_silent_and_its_neighbours_are_not() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-clipmute-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = make_source(&dir, "a.mkv", &["-f", "lavfi", "-i", "sine=frequency=300:d=3"]);
+        let mut p = Project::new(src, None, 1920, 1080, 3000.0);
+        p.export.quality = 360;
+        p.audio.normalize = false;
+        p.clips = vec![
+            crate::project::Clip { src_start_ms: 0.0, src_end_ms: 1500.0, speed: 1.0, mute: false },
+            crate::project::Clip { src_start_ms: 1500.0, src_end_ms: 3000.0, speed: 1.0, mute: true },
+        ];
+        assert!(audio_filter(&p).contains("volume=0"));
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let x = crate::audio::decode_mono(&out, 8000).unwrap();
+        assert!(rms(&x, 0.2, 1.3, 8000.0) > 0.05, "the first clip lost its sound");
+        assert!(rms(&x, 1.7, 2.8, 8000.0) < 0.002, "the muted clip is still audible");
+        let d = crate::ffmpeg::probe(&out).unwrap().duration_ms;
+        assert!((d - 3000.0).abs() < 250.0, "the length changed: {d}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn music_is_mixed_faded_and_ducked_under_the_voice() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-music-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The voice is loud for the first 1.5 s and then silent.
+        let src = make_source(&dir, "a.mkv", &["-f", "lavfi", "-i", "sine=frequency=300:d=1.5"]);
+        // Shorter than the video, so it must loop.
+        let mus = make_tone(&dir, "m.wav", 1000, 1.0);
+        let run = |duck: bool, name: &str| {
+            let mut p = Project::new(src.clone(), None, 1920, 1080, 3000.0);
+            p.export.quality = 360;
+            p.audio.normalize = false;
+            let mut m = crate::project::Music::new(mus.clone());
+            m.volume = 1.0;
+            m.duck = duck;
+            m.duck_db = 18.0;
+            m.fade_in_ms = 800.0;
+            m.fade_out_ms = 600.0;
+            p.music = Some(m);
+            assert!(!passthrough_ok(&p), "music needs a real export");
+            let out = dir.join(name);
+            export(&p, &out, |_| {}).unwrap();
+            assert!((crate::ffmpeg::probe(&out).unwrap().duration_ms - 3000.0).abs() < 250.0);
+            crate::audio::decode_mono(&out, 8000).unwrap()
+        };
+        let ducked = run(true, "d.mp4");
+        let plain = run(false, "p.mp4");
+        // After the voice stops, the music is there (and it looped past its 1 s length).
+        assert!(rms(&plain, 1.9, 2.3, 8000.0) > 0.05, "no music after the voice: {}", rms(&plain, 1.9, 2.3, 8000.0));
+        assert!(rms(&ducked, 2.0, 2.3, 8000.0) > 0.05, "ducking must release: {}", rms(&ducked, 2.0, 2.3, 8000.0));
+        // It fades out to nothing.
+        assert!(rms(&plain, 2.9, 3.0, 8000.0) < rms(&plain, 1.9, 2.3, 8000.0) / 2.0, "no fade out");
+        // Under the voice the ducked mix is quieter than the plain one.
+        let (d, n) = (rms(&ducked, 1.0, 1.4, 8000.0), rms(&plain, 1.0, 1.4, 8000.0));
+        assert!(d < n * 0.85, "ducked {d} should be quieter than plain {n}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn music_alone_makes_a_sound_track_for_a_silent_recording() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-musiconly-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("mute.mp4");
+        assert!(crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1280x720:r=10:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        let mut p = Project::new(src, None, 1280, 720, 3000.0);
+        p.export.quality = 360;
+        let mut m = crate::project::Music::new(make_tone(&dir, "m.wav", 800, 5.0));
+        m.volume = 0.8;
+        m.fade_in_ms = 1000.0;
+        m.fade_out_ms = 0.0;
+        p.music = Some(m);
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let x = crate::audio::decode_mono(&out, 8000).unwrap();
+        assert!(rms(&x, 1.2, 2.8, 8000.0) > 0.05, "{}", rms(&x, 1.2, 2.8, 8000.0));
+        assert!(rms(&x, 0.0, 0.15, 8000.0) < rms(&x, 1.2, 2.8, 8000.0) / 2.0, "no fade in");
+        // A missing file is ignored, not an error.
+        p.music.as_mut().unwrap().path = dir.join("gone.mp3");
+        assert!(music_of(&p).is_none());
+        export(&p, &dir.join("again.mp4"), |_| {}).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_music_graph_has_the_pieces_it_promises() {
+        let mut m = crate::project::Music::new("m.mp3".into());
+        m.volume = 0.3;
+        m.start_ms = 2000.0;
+        let g = music_graph(&m, Some("[1:a]anull[aout]"), 2, 20.0);
+        assert!(g.contains("sidechaincompress") && g.contains("amix=inputs=2") && g.contains("adelay=2000") && g.contains("volume=0.300") && g.ends_with("[aout]"), "{g}");
+        assert!(g.contains("afade=t=in") && g.contains("afade=t=out:st=16.5"), "{g}");
+        m.duck = false;
+        assert!(!music_graph(&m, Some("[1:a]anull[aout]"), 2, 20.0).contains("sidechain"));
+        let alone = music_graph(&m, None, 1, 20.0);
+        assert!(alone.starts_with("[1:a]") && alone.ends_with("[aout]") && !alone.contains("amix"), "{alone}");
+        // The settings are held to sane ranges.
+        m.volume = 4.0;
+        m.duck_db = 100.0;
+        let c = m.clamped();
+        assert_eq!((c.volume, c.duck_db), (1.0, 24.0));
     }
 }

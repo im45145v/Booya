@@ -49,6 +49,39 @@ pub struct Style {
     /// Frosted glass frame around the recording and glass overlays.
     #[serde(default)]
     pub glass: Glass,
+    /// A simple vector device drawn round the recording. Added in 0.7.0.
+    #[serde(default)]
+    pub frame: DeviceFrame,
+    /// Blur the picture while the camera zooms or pans (a camera shutter
+    /// look). Costs a little export time during those moments. Added in 0.7.0.
+    #[serde(default)]
+    pub motion_blur: bool,
+}
+
+/// A device drawn round the recording. Plain shapes and neutral colours, no
+/// logos and no one maker's artwork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceFrame {
+    #[default]
+    None,
+    /// A laptop: lid, thin bezel, camera dot and a base.
+    Laptop,
+    /// A browser window: a title bar with three dots and an address field.
+    Browser,
+    /// A phone: rounded body, speaker slot and camera dot.
+    Phone,
+}
+
+impl DeviceFrame {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "laptop" | "macbook" => Self::Laptop,
+            "browser" | "window" => Self::Browser,
+            "phone" | "iphone" => Self::Phone,
+            _ => Self::None,
+        }
+    }
 }
 
 /// A frosted, liquid glass look: the recording sits on a blurred, tinted,
@@ -107,6 +140,8 @@ impl Default for Style {
             shadow: 0.035,
             shadow_opacity: 0.45,
             glass: Glass::default(),
+            frame: DeviceFrame::None,
+            motion_blur: false,
         }
     }
 }
@@ -157,6 +192,10 @@ pub struct Clip {
     pub src_start_ms: f64,
     pub src_end_ms: f64,
     pub speed: f64,
+    /// No sound from the recording in this clip (the music still plays).
+    /// Added in 0.7.0.
+    #[serde(default)]
+    pub mute: bool,
 }
 
 impl Clip {
@@ -254,6 +293,42 @@ impl Default for AudioSettings {
     }
 }
 
+/// A music track under the whole video. Mixed on export, and in the preview
+/// by the native player. Added in 0.7.0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Music {
+    /// The audio file (mp3, m4a, wav, ogg, flac).
+    pub path: PathBuf,
+    /// 0 to 1.
+    pub volume: f64,
+    /// Lower the music while someone speaks.
+    pub duck: bool,
+    /// How far the music drops under the voice, in dB (3 to 24).
+    pub duck_db: f64,
+    pub fade_in_ms: f64,
+    pub fade_out_ms: f64,
+    /// Where in the video the music starts.
+    pub start_ms: f64,
+    /// Repeat the file when it is shorter than the video.
+    pub looped: bool,
+}
+
+impl Default for Music {
+    fn default() -> Self {
+        Self { path: PathBuf::new(), volume: 0.25, duck: true, duck_db: 12.0, fade_in_ms: 1000.0, fade_out_ms: 1500.0, start_ms: 0.0, looped: true }
+    }
+}
+
+impl Music {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, ..Self::default() }
+    }
+    pub fn clamped(&self) -> Self {
+        Self { volume: self.volume.clamp(0.0, 1.0), duck_db: self.duck_db.clamp(3.0, 24.0), fade_in_ms: self.fade_in_ms.clamp(0.0, 10_000.0), fade_out_ms: self.fade_out_ms.clamp(0.0, 10_000.0), start_ms: self.start_ms.max(0.0), ..self.clone() }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Aspect {
     #[serde(rename = "16:9")]
@@ -336,6 +411,38 @@ pub enum Corner {
     TopRight,
     BottomLeft,
     BottomRight,
+    /// Middle of the top edge. Edge pins were added in 0.7.0.
+    TopCenter,
+    BottomCenter,
+    /// Middle of the left edge.
+    LeftCenter,
+    RightCenter,
+}
+
+impl Corner {
+    /// On the left half (a corner or the middle of the left edge).
+    pub fn is_left(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::BottomLeft | Corner::LeftCenter)
+    }
+    /// On the top (a corner or the middle of the top edge).
+    pub fn is_top(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::TopRight | Corner::TopCenter)
+    }
+    /// Where a box `w` by `h` sits in an `ow` by `oh` frame with margin `m`.
+    pub fn place(self, ow: f64, oh: f64, w: f64, h: f64, m: f64) -> (f64, f64) {
+        let cx = (ow - w) / 2.0;
+        let cy = (oh - h) / 2.0;
+        match self {
+            Corner::TopLeft => (m, m),
+            Corner::TopRight => (ow - w - m, m),
+            Corner::BottomLeft => (m, oh - h - m),
+            Corner::BottomRight => (ow - w - m, oh - h - m),
+            Corner::TopCenter => (cx, m),
+            Corner::BottomCenter => (cx, oh - h - m),
+            Corner::LeftCenter => (m, cy),
+            Corner::RightCenter => (ow - w - m, cy),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -600,6 +707,9 @@ pub struct Project {
     pub caption_style: CaptionStyle,
     #[serde(default)]
     pub audio: AudioSettings,
+    /// Background music. Added in 0.7.0.
+    #[serde(default)]
+    pub music: Option<Music>,
     #[serde(default)]
     pub webcam: Option<Webcam>,
     #[serde(default)]
@@ -665,7 +775,7 @@ impl Project {
             source_width: w,
             source_height: h,
             duration_ms,
-            clips: vec![Clip { src_start_ms: 0.0, src_end_ms: duration_ms, speed: 1.0 }],
+            clips: vec![Clip { src_start_ms: 0.0, src_end_ms: duration_ms, speed: 1.0, mute: false }],
             zoom: Vec::new(),
             zoom_config: ZoomConfigSer::default(),
             style: Style::default(),
@@ -676,6 +786,7 @@ impl Project {
             captions: Vec::new(),
             caption_style: CaptionStyle::default(),
             audio: AudioSettings::default(),
+            music: None,
             webcam: None,
             layouts: Layouts::default(),
             watermark: None,
@@ -901,10 +1012,10 @@ impl Project {
                     continue;
                 }
                 if a > c.src_start_ms {
-                    next.push(Clip { src_start_ms: c.src_start_ms, src_end_ms: a, speed: c.speed });
+                    next.push(Clip { src_start_ms: c.src_start_ms, src_end_ms: a, speed: c.speed, mute: c.mute });
                 }
                 if b < c.src_end_ms {
-                    next.push(Clip { src_start_ms: b, src_end_ms: c.src_end_ms, speed: c.speed });
+                    next.push(Clip { src_start_ms: b, src_end_ms: c.src_end_ms, speed: c.speed, mute: c.mute });
                 }
             }
             clips = next;
@@ -922,7 +1033,7 @@ impl Project {
             let s = c.src_start_ms.max(start);
             let e = c.src_end_ms.min(end);
             if e > s {
-                out.push(Clip { src_start_ms: s, src_end_ms: e, speed: c.speed });
+                out.push(Clip { src_start_ms: s, src_end_ms: e, speed: c.speed, mute: c.mute });
             }
         }
         self.clips = out;
@@ -933,7 +1044,7 @@ impl Project {
         if let Some(i) = self.clips.iter().position(|c| at > c.src_start_ms && at < c.src_end_ms) {
             let c = self.clips[i].clone();
             self.clips[i].src_end_ms = at;
-            self.clips.insert(i + 1, Clip { src_start_ms: at, src_end_ms: c.src_end_ms, speed: c.speed });
+            self.clips.insert(i + 1, Clip { src_start_ms: at, src_end_ms: c.src_end_ms, speed: c.speed, mute: c.mute });
             true
         } else {
             false
@@ -971,6 +1082,18 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_pins_sit_in_the_middle_of_their_edge() {
+        let (ow, oh, d, m) = (1920.0, 1080.0, 200.0, 40.0);
+        assert_eq!(Corner::TopCenter.place(ow, oh, d, d, m), (860.0, 40.0));
+        assert_eq!(Corner::BottomCenter.place(ow, oh, d, d, m), (860.0, 840.0));
+        assert_eq!(Corner::LeftCenter.place(ow, oh, d, d, m), (40.0, 440.0));
+        assert_eq!(Corner::RightCenter.place(ow, oh, d, d, m), (1680.0, 440.0));
+        assert_eq!(Corner::BottomRight.place(ow, oh, d, d, m), (1680.0, 840.0));
+        assert_eq!(serde_json::to_string(&Corner::LeftCenter).unwrap(), "\"left-center\"");
+        assert!(Corner::LeftCenter.is_left() && !Corner::TopCenter.is_left() && Corner::TopCenter.is_top());
+    }
 
     #[test]
     fn trim_split_speed_mapping() {
