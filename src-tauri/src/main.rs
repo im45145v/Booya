@@ -447,7 +447,7 @@ async fn capture_sources() -> R<serde_json::Value> {
 #[tauri::command]
 async fn capture_thumb(kind: String, id: String, bundle: String, x: i32, y: i32, w: u32, h: u32) -> R<serde_json::Value> {
     blocking(move || {
-        let src = capture::sources::SourceInfo { kind, id, title: String::new(), app: String::new(), bundle, x, y, w, h };
+        let src = capture::sources::SourceInfo { kind, id, title: String::new(), app: String::new(), bundle, x, y, w, h, z: 0 };
         let t = capture::sources::thumbnail(&src).map_err(e)?;
         let url = |b: Option<Vec<u8>>| b.map(|b| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)));
         Ok(serde_json::json!({ "image": url(t.image), "icon": url(t.icon) }))
