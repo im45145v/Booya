@@ -363,6 +363,25 @@ mod tests {
         assert!(file_peak_db(&loud, 2.0).unwrap() > -20.0);
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    /// CI machines have no microphone (or a virtual one). Either way the whole
+    /// pipeline must run to the end and say what happened, never hang or
+    /// pretend: it is recorded, or the reason is written down and shown.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn with_no_microphone_the_pipeline_reports_why_instead_of_failing_silently() {
+        let r = check_audio(None, 1.0);
+        match &r.state {
+            MicState::Ok { .. } => {}
+            other => {
+                let msg = other.message().expect("a problem always has a message");
+                assert!(msg.starts_with("Mic not recorded"), "{msg}");
+                assert!(msg.len() > "Mic not recorded: ".len() + 5, "the reason is not empty: {msg}");
+            }
+        }
+        let log = std::fs::read_to_string(&r.log).unwrap_or_default();
+        assert!(log.contains("devices:"), "the audio log lists the devices that were found: {log}");
+    }
 }
 
 impl Drop for MicRec {

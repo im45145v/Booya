@@ -471,6 +471,11 @@ async fn start_recording(
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let out_dir = base.join(format!("recording-{stamp}"));
     let mic_device = mic_device.filter(|m| !m.is_empty());
+    // Nothing may hold the microphone when the recorder opens it: stop the
+    // level meter here, in Rust, rather than trusting the page to have done it.
+    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
+        m.stop();
+    }
     let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height }).map_err(e)).await;
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().unwrap();
@@ -479,6 +484,9 @@ async fn start_recording(
             let warnings = s.warnings.clone();
             *slot = Some(RecSlot::Running(s));
             drop(slot);
+            if mic {
+                watch_mic(app.clone());
+            }
             show_indicator(&app);
             // Get the editor out of the picture while recording.
             if let Some(w) = app.get_webview_window("main") {
@@ -490,6 +498,42 @@ async fn start_recording(
             *slot = None;
             Err(err)
         }
+    }
+}
+
+/// About two seconds after the recording starts, check that the microphone is
+/// really delivering sound, and tell the editor (event `rec-mic`) when it is
+/// not. Checked again a few times because a device can take a moment to wake.
+fn watch_mic(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        for wait in [1800u64, 1500, 2500] {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+            let st = mic_state_now(&app);
+            let Some(st) = st else { return };
+            let msg = st.message();
+            let _ = app.emit("rec-mic", serde_json::json!({ "state": st, "message": msg }));
+            if matches!(st, demolens_core::capture::mic::MicState::Ok { .. } | demolens_core::capture::mic::MicState::Off) {
+                return;
+            }
+        }
+    });
+}
+
+fn mic_state_now(app: &tauri::AppHandle) -> Option<demolens_core::capture::mic::MicState> {
+    let state = app.state::<AppState>();
+    let mut slot = state.recording.lock().ok()?;
+    match slot.as_mut() {
+        Some(RecSlot::Running(s)) => Some(s.mic_status()),
+        _ => None,
+    }
+}
+
+/// What the microphone is doing right now (the editor asks about 2 s in).
+#[tauri::command]
+fn rec_mic_status(app: tauri::AppHandle) -> serde_json::Value {
+    match mic_state_now(&app) {
+        Some(st) => serde_json::json!({ "state": st, "message": st.message() }),
+        None => serde_json::json!({ "state": { "state": "off" }, "message": null }),
     }
 }
 
@@ -611,6 +655,9 @@ async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Pr
     let app2 = app.clone();
     blocking(move || {
         let rec = s.stop().map_err(e)?;
+        if !rec.warnings.is_empty() {
+            let _ = app2.emit("rec-warnings", &rec.warnings);
+        }
         // The 720p editing proxy is built in the background while the editor opens.
         let proxy_of = |src: PathBuf| {
             let a3 = app2.clone();
@@ -2155,6 +2202,7 @@ fn main() {
             mic_list,
             mic_meter_start,
             mic_meter_stop,
+            rec_mic_status,
             storage_report,
             storage_delete,
             storage_clear_proxies,

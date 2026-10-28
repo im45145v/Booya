@@ -100,7 +100,7 @@ function syncPanel() {
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
-  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 2500; $('zc-merge').value = zc.merge_gap_ms ?? 3000; $('zc-style').value = zc.intensity || 'normal';
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8; $('zc-hold').value = zc.hold_ms ?? 2500; $('zc-merge').value = zc.merge_gap_ms ?? 3000; $('zc-style').value = zc.intensity || 'normal'; $('zc-clicks').value = zc.min_clicks ?? 3; $('zc-window').value = zc.click_window_ms ?? 4500;
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
@@ -109,7 +109,7 @@ function syncPanel() {
 function baseLayout() { const w = project.webcam, b = project.layouts && project.layouts.base; return b || (w && w.layout === 'side' ? 'split' : 'bubble'); }
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
-  s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%'); s('zc-hold', (+$('zc-hold').value / 1000).toFixed(1) + ' s'); s('zc-merge', (+$('zc-merge').value / 1000).toFixed(1) + ' s');
+  s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%'); s('zc-hold', (+$('zc-hold').value / 1000).toFixed(1) + ' s'); s('zc-merge', (+$('zc-merge').value / 1000).toFixed(1) + ' s'); s('zc-clicks', (+$('zc-clicks').value) + ' clicks'); s('zc-window', (+$('zc-window').value / 1000).toFixed(1) + ' s');
   s('card-len', (+$('card-len').value).toFixed(1) + ' s'); s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
   s('aud-fadein', (+$('aud-fadein').value / 1000).toFixed(1) + ' s'); s('aud-fadeout', (+$('aud-fadeout').value / 1000).toFixed(1) + ' s'); s('aud-offset', (+$('aud-offset').value) + ' ms');
 }
@@ -131,7 +131,7 @@ function readPanel() {
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
     project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
   { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
-  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value, hold_ms: +$('zc-hold').value, merge_gap_ms: +$('zc-merge').value, intensity: $('zc-style').value || 'normal' });
+  Object.assign(project.zoom_config, { ease_in_ms: +$('zc-ease').value, transition_ms: +$('zc-ease').value, ease_out_ms: Math.round(+$('zc-ease').value * 0.9 / 100) * 100, level: +$('zc-level').value, steadiness: +$('zc-steady').value, hold_ms: +$('zc-hold').value, merge_gap_ms: +$('zc-merge').value, min_clicks: +$('zc-clicks').value, click_window_ms: +$('zc-window').value, intensity: $('zc-style').value || 'normal' });
   outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
@@ -340,10 +340,10 @@ $('zoom-del').onclick = () => { if (project && tl.selectedZoom >= 0) { project.z
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
 // Mirrors ZoomConfig::with_intensity in crates/demolens-core/src/zoom.rs.
-const ZOOM_STYLES = { subtle: { level: 1.5, hold: 2000, ease: 1000 }, normal: { level: 1.6, hold: 2500, ease: 900 }, lively: { level: 1.8, hold: 3000, ease: 800 } };
-$('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-hold').value = z.hold; $('zc-ease').value = z.ease; readPanel(); outputs(); status('Zoom intensity set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
+const ZOOM_STYLES = { subtle: { level: 1.5, hold: 2000, ease: 1000, clicks: 4 }, normal: { level: 1.6, hold: 2500, ease: 900, clicks: 3 }, lively: { level: 1.8, hold: 3000, ease: 800, clicks: 2 } };
+$('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-hold').value = z.hold; $('zc-ease').value = z.ease; $('zc-clicks').value = z.clicks; readPanel(); outputs(); status('Zoom intensity set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
-  try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
+  try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zoom${project.zoom.length === 1 ? '' : 's'} from clusters of clicks and typing` : (project.events ? `No zooms: nothing had ${project.zoom_config.min_clicks} clicks in one small area within ${(project.zoom_config.click_window_ms / 1000).toFixed(1)} s. Lower the clicks needed to zoom more, or add zooms by hand.` : 'No input log for this video, so there is nothing to zoom on.')); } catch (e) { fail(e); }
 };
 $('blur-add').onclick = () => {
   const v = $('blur-rect').value.split(',').map(Number);
@@ -445,22 +445,26 @@ $('rec-btn').onclick = async () => {
     if (!recording) {
       const target = recSource.target;
       $('rec-btn').disabled = true; status('Starting in 3 seconds. Click the number to cancel. If macOS asks for permission, allow it.', 'busy');
-      if (IS_WIN) meterStop();
+      await meterStopAndWait();
+      showRecWarn([]);
       let warn;
       try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true', micDevice: $('rec-mic-dev').value || null, maxHeight: $('rec-res').value === '' ? null : +$('rec-res').value, countdown: 3 }); }
       finally { $('rec-btn').disabled = false; }
       setRecUi(true); localStorage.setItem('mic-ok', '1');
       if (!IS_WIN && $('rec-mic').getAttribute('aria-pressed') === 'true') meterStart();
       const w = warn.filter(x => x !== 'recording without audio');
+      showRecWarn(w);
+      checkMicSoon();
       status(w.length ? 'Recording. ' + w.join(' ') : 'Recording. Press Stop or Ctrl+R when you are done.', w.length ? 'error' : 'busy');
     } else {
       setRecUi(false); meterStop(); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
       const ins = typeof takeInsertArgs === 'function' ? takeInsertArgs() : null;
       try {
         const p = await invoke('stop_recording', { insert: ins });
+        micWatch = 0;
         if (ins) { applySplice(p, ins); } else setProject(p, null);
       } finally { $('rec-btn').disabled = false; }
-      if (!ins) status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
+      if (!ins && $('rec-warn').hidden) status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
       hideBusy();
     }
   } catch (e) { setRecUi(false); hideBusy(); if (typeof clearTakePlan === 'function') clearTakePlan(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
@@ -916,6 +920,28 @@ async function meterStart() {
   try { await invoke('mic_meter_start', { device: $('rec-mic-dev').value || null }); meterOn = true; $('mic-meter').hidden = false; localStorage.setItem('mic-ok', '1'); }
   catch (e) { meterOn = false; $('mic-meter').hidden = true; status('Cannot read the microphone: ' + humanError(e) + ' On a Mac, allow DemoLens under System Settings > Privacy & Security > Microphone.', 'error'); }
 }
+// Nothing may hold the microphone when the recorder opens it (Windows lets one
+// app lock it), so wait until the meter has really let go.
+async function meterStopAndWait() { meterOn = false; $('mic-meter').hidden = true; try { await invoke('mic_meter_stop'); } catch { } }
+// A recording problem stays on screen until dismissed.
+function showRecWarn(list) {
+  const msgs = (list || []).filter(x => x && x !== 'recording without audio');
+  $('rec-warn').hidden = !msgs.length;
+  $('rec-warn-text').textContent = msgs.join(' ');
+}
+$('rec-warn-x').onclick = () => showRecWarn([]);
+// About two seconds in, check that the microphone really delivers sound.
+let micWatch = 0;
+function checkMicSoon() {
+  if ($('rec-mic').getAttribute('aria-pressed') !== 'true') return;
+  const id = ++micWatch;
+  setTimeout(async () => {
+    if (id !== micWatch || !recording) return;
+    try { const r = await invoke('rec_mic_status'); if (r.message) showRecWarn([r.message]); } catch { }
+  }, 2000);
+}
+window.__TAURI__.event.listen('rec-mic', e => { if (e.payload?.message) showRecWarn([e.payload.message]); });
+window.__TAURI__.event.listen('rec-warnings', e => { const w = (e.payload || []).filter(x => x !== 'recording without audio'); if (w.length) { showRecWarn(w); status(w.join(' '), 'error'); } });
 function meterStop() { meterOn = false; $('mic-meter').hidden = true; invoke('mic_meter_stop').catch(() => { }); }
 window.__TAURI__.event.listen('mic-level', e => {
   const { rms, peak } = e.payload, bars = [...$('mic-meter').children];

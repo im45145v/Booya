@@ -279,13 +279,15 @@
       <label class="slider">Card length <input id="card-len" type="range" min="1" max="6" step="0.5" /><output id="card-len-out">2.5 s</output></label>
 
       <h3 class="section">Zoom</h3>
-      <label class="stack" title="How picky auto zoom is. Subtle zooms on typing and clear moments only. Lively zooms on most clicks. Press Apply to auto zoom afterwards.">Zoom intensity<select id="zc-style" class="field"><option value="subtle">Subtle (fewest zooms)</option><option value="normal">Normal (default)</option><option value="lively">Lively (most zooms)</option></select></label>
-      <p class="muted small" id="zc-explain">Zooms in on clicks and typing.</p>
+      <label class="stack" title="How picky auto zoom is. It sets the clicks needed: Subtle 4, Normal 3, Lively 2. Press Apply to auto zoom afterwards.">Zoom intensity<select id="zc-style" class="field"><option value="subtle">Subtle (fewest zooms)</option><option value="normal">Normal (default)</option><option value="lively">Lively (most zooms)</option></select></label>
+      <p class="muted small" id="zc-explain">The camera stays on the whole screen. It zooms in only when you click several times in one small area, or type into a field for a while. It eases back out when you scroll.</p>
+      <label class="slider" title="How many clicks in one small area (about a fifth of the screen) it takes to zoom in. Normal is 3. Higher means fewer zooms.">Clicks needed <input id="zc-clicks" type="range" min="1" max="6" step="1" /><output id="zc-clicks-out">3 clicks</output></label>
+      <label class="slider" title="The clicks have to happen within this long.">Within <input id="zc-window" type="range" min="1500" max="10000" step="250" /><output id="zc-window-out">4.5 s</output></label>
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
       <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="2" step="0.05" /><output id="zc-level-out">1.6x</output></label>
       <label class="slider" title="High keeps the view still while the cursor roams and follows only when it nears the edge. Low follows every move.">Steadiness <input id="zc-steady" type="range" min="0" max="1" step="0.05" /><output id="zc-steady-out">65%</output></label>
       <label class="slider" title="How long each zoom stays in after your last click or key press.">Zoom hold <input id="zc-hold" type="range" min="400" max="6000" step="100" /><output id="zc-hold-out">2.5 s</output></label>
-      <label class="slider" title="Clicks closer together than this share one zoom. Raise it to get fewer, longer zooms. Lower it for a zoom per click.">Group clicks within <input id="zc-merge" type="range" min="500" max="8000" step="100" /><output id="zc-merge-out">3.0 s</output></label>
+      <label class="slider" title="Once a zoom is running, clicks in the same area keep it going when each comes within this long of the one before.">Keep zoomed between clicks <input id="zc-merge" type="range" min="500" max="8000" step="100" /><output id="zc-merge-out">3.0 s</output></label>
       <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-auto"/></svg><span>Apply to auto zoom</span></button></div>
 
       <h3 class="section">Audio</h3>
@@ -363,6 +365,7 @@
   </aside>
 </main>
 
+<div id="rec-warn" class="rec-warn" role="alert" hidden><span id="rec-warn-text"></span><button id="rec-warn-x" class="txt" aria-label="Dismiss">Dismiss</button></div>
 <footer class="statusbar" role="status" aria-live="polite">
   <svg class="ico" id="status-icon" aria-hidden="true"><use href="#i-check"/></svg>
   <span id="status">Ready</span>

@@ -505,3 +505,8 @@ body.resizing.v, body.resizing.v * { cursor: col-resize !important; }
 body.resizing.h, body.resizing.h * { cursor: row-resize !important; }
 body.resizing #preview, body.resizing .timeline-wrap { pointer-events: none; }
 .pane .pill, .pane .badge { flex: none; overflow-wrap: normal; white-space: nowrap; }
+
+/* A recording problem that must not be missed (for example "Mic not recorded"). */
+.rec-warn { display: flex; align-items: center; gap: var(--sp-3); padding: 6px var(--sp-3); background: color-mix(in srgb, var(--danger) 16%, var(--surface)); border-top: 1px solid var(--danger); color: var(--text); font-size: var(--fs-sm); }
+.rec-warn[hidden] { display: none; }
+.rec-warn #rec-warn-text { flex: 1; line-height: 1.35; }

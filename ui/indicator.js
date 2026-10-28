@@ -6,7 +6,7 @@ const $ = id => document.getElementById(id);
 const invoke = (c, a) => T.core.invoke(c, a);
 if (/Mac/i.test(navigator.platform)) document.body.classList.add('mac');
 
-let paused = false, baseMs = 0, baseAt = performance.now(), pausedMs = 0, quietSince = null, lastLevel = 0;
+let micBad = '', paused = false, baseMs = 0, baseAt = performance.now(), pausedMs = 0, quietSince = null, lastLevel = 0;
 const fmt = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
 // Key hints come from the user's own bindings (Settings > Shortcuts).
@@ -25,7 +25,8 @@ loadKeys();
 
 function render() {
   $('pill').classList.toggle('paused', paused);
-  $('state').textContent = paused ? 'Paused' : '';
+  $('state').textContent = paused ? 'Paused' : micBad ? 'No mic' : '';
+  $('state').title = micBad || '';
   $('pause').innerHTML = paused
     ? '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>'
     : '<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>';
@@ -55,6 +56,7 @@ $('stop').onclick = () => invoke('request_stop').catch(() => { });
 $('trash').onclick = () => { $('confirm').hidden = false; $('no').focus(); setTimeout(() => ($('confirm').hidden = true), 6000); };
 $('no').onclick = () => ($('confirm').hidden = true);
 $('yes').onclick = () => invoke('discard_recording').catch(() => { });
+T.event.listen('rec-mic', e => { micBad = e.payload?.message || ''; render(); });
 T.event.listen('rec-paused', e => { paused = !!e.payload; poll(); });
 
 // Microphone level: five bars from the peak, amber when the mic is very quiet.

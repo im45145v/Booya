@@ -636,19 +636,23 @@ pub struct ZoomConfigSer {
     pub merge_gap_ms: f64,
     /// "subtle", "normal" or "lively": how selective auto zoom is. Added in 0.5.2.
     pub intensity: crate::zoom::Intensity,
+    /// Clicks in one small area it takes to zoom. Normal is 3. Added in 0.7.0.
+    pub min_clicks: usize,
+    /// The clicks have to come within this long. Added in 0.7.0.
+    pub click_window_ms: f64,
 }
 
 impl Default for ZoomConfigSer {
     fn default() -> Self {
         let c = ZoomConfig::default();
-        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.8, hold_ms: c.hold_ms, merge_gap_ms: c.merge_gap_ms, intensity: c.intensity }
+        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.8, hold_ms: c.hold_ms, merge_gap_ms: c.merge_gap_ms, intensity: c.intensity, min_clicks: c.min_clicks, click_window_ms: c.cluster_window_ms }
     }
 }
 
 impl ZoomConfigSer {
     /// The generator config that matches these settings.
     pub fn to_config(&self) -> ZoomConfig {
-        ZoomConfig::default().with_intensity(self.intensity).with_level(self.level).with_speed(self.ease_in_ms, self.ease_out_ms).with_timing(self.hold_ms, self.merge_gap_ms)
+        ZoomConfig::default().with_intensity(self.intensity).with_level(self.level).with_speed(self.ease_in_ms, self.ease_out_ms).with_timing(self.hold_ms, self.merge_gap_ms).with_clicks(self.min_clicks, self.click_window_ms)
     }
 }
 

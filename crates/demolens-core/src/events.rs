@@ -57,6 +57,18 @@ pub enum EventKind {
     /// The presenter dropped a marker (a global shortcut) with the cursor at
     /// (x, y). It is a deliberate "zoom here" point.
     Mark { x: f64, y: f64 },
+    /// The wheel or trackpad scrolled, with the cursor at (x, y). `dx` and
+    /// `dy` are the amount when the OS tells it (0 when it only says that a
+    /// scroll happened). Scrolling is what keeps auto zoom wide: a zoomed
+    /// view that scrolls under the viewer is hard to follow.
+    Scroll {
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        dx: f64,
+        #[serde(default)]
+        dy: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,7 +114,7 @@ pub struct EventLog {
 pub fn scale_coords(events: &mut [Event], k: f64) {
     for e in events.iter_mut() {
         match &mut e.kind {
-            EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Release { x, y, .. } | EventKind::Mark { x, y } => {
+            EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Release { x, y, .. } | EventKind::Mark { x, y } | EventKind::Scroll { x, y, .. } => {
                 *x *= k;
                 *y *= k;
             }
@@ -187,6 +199,14 @@ impl EventLog {
     }
 
     /// Markers dropped while recording: (time, x, y).
+    /// Times (ms) of every scroll event, in order.
+    pub fn scrolls(&self) -> impl Iterator<Item = f64> + '_ {
+        self.events.iter().filter_map(|e| match e.kind {
+            EventKind::Scroll { .. } => Some(e.t),
+            _ => None,
+        })
+    }
+
     pub fn marks(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
         self.events.iter().filter_map(|e| match e.kind {
             EventKind::Mark { x, y } => Some((e.t, x, y)),
