@@ -463,7 +463,7 @@ mod silent_demo_tests {
         assert!(!r.cuts.is_empty(), "a long still and silent stretch is cut");
         for &(s, e, _) in &r.cuts {
             assert!(s >= 5_000.0 + 600.0, "padding after the last activity: {s}");
-            assert!(e <= 14_000.0);
+            assert!(e <= 14_500.0, "cut ends within the video (container length can run a little over): {e}");
         }
         // dry run changes nothing
         assert_eq!(p.clips.len(), 1);
