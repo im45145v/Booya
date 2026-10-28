@@ -1439,6 +1439,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 /// "Pause or Resume  (Shift+Cmd+P)", or just the label when unbound.
+#[allow(dead_code)]
 fn menu_text(label: &str, combo: &str, mac: bool) -> String {
     let k = shortcuts::label(combo, mac);
     if k.is_empty() {
