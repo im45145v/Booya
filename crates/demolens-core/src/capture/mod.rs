@@ -835,6 +835,15 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
         v["microphones"] = json!(audio.iter().map(|d| d.name.clone()).collect::<Vec<_>>());
     }
 
+    v["touch"] = crate::touch::capabilities();
+    #[cfg(windows)]
+    {
+        let (x, y, w, h) = winapi::virtual_screen();
+        v["virtual_screen"] = json!({ "x": x, "y": y, "width": w, "height": h });
+        v["windows_listed"] = json!(sources::list_sources().map(|l| l.len()).unwrap_or(0));
+        v["microphones"] = json!(mics::list_mics());
+    }
+
     let dir = std::env::temp_dir().join(format!("demolens-doctor-{}", std::process::id()));
     let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
     let t0 = Instant::now();

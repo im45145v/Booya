@@ -72,6 +72,56 @@ jobs:
           "### Windows screen capture clock`n`n$r" | Out-File -Append $env:GITHUB_STEP_SUMMARY
           $r
           exit $code
+      - name: Windows capture, doctor and export (real run)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "$PWD\target\release\demolens.exe"
+          # A folder name with spaces: every path the app builds must survive them.
+          $dir = Join-Path $env:RUNNER_TEMP 'demo lens rec'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+
+          # doctor: ffmpeg found, gdigrab capture works, touch and screen reported.
+          $doc = & $exe doctor --no-ai --seconds 3
+          $doc
+          if ($LASTEXITCODE -ne 0) { throw "doctor failed" }
+          $d = $doc | ConvertFrom-Json
+          if (-not $d.ok) { throw "doctor says not ok" }
+          if ($d.virtual_screen.width -le 0) { throw "no virtual screen size" }
+
+          # The picker's list is native now: it must be quick and include the screen.
+          $t = Measure-Command { $src = & $exe sources }
+          $src
+          if ($t.TotalSeconds -gt 20) { throw "listing sources took $($t.TotalSeconds) s" }
+          if (-not ($src -match 'display|Entire')) { throw "the entire screen is not listed" }
+
+          # Record the screen, then an area, with the real capture code.
+          foreach ($case in @(@('screen', @()), @('area', @('--area', '0,0,640,480')))) {
+            $out = Join-Path $dir $case[0]
+            & $exe record --seconds 5 --out $out @($case[1])
+            if ($LASTEXITCODE -ne 0) { throw "record $($case[0]) failed" }
+            $video = Get-ChildItem $out -Filter 'recording.mp4' | Select-Object -First 1
+            if (-not $video -or $video.Length -lt 10000) { throw "no video for $($case[0])" }
+            $hdr = (Get-Content (Join-Path $out 'recording.events.jsonl') -TotalCount 1) | ConvertFrom-Json
+            if ($hdr.width -le 0 -or $hdr.height -le 0) { throw "event log has no size for $($case[0])" }
+            $proj = Join-Path $out 'project.json'
+            & $exe new $video.FullName --events (Join-Path $out 'recording.events.jsonl') -o $proj
+            if ($LASTEXITCODE -ne 0) { throw "new failed" }
+            $final = Join-Path $out 'final.mp4'
+            & $exe export $proj -o $final --quality 720
+            if ($LASTEXITCODE -ne 0) { throw "export $($case[0]) failed" }
+            $dur = [double](& ffprobe -v error -show_entries format=duration -of csv=p=0 $final)
+            "$($case[0]): exported $([math]::Round($dur,1)) s, $((Get-Item $final).Length) bytes"
+            if ($dur -lt 3) { throw "exported video is too short ($dur s)" }
+          }
+
+          # Nothing is left running: no ffmpeg from the capture or the export.
+          Start-Sleep -Seconds 1
+          $left = Get-Process -Name ffmpeg, ffprobe -ErrorAction SilentlyContinue
+          if ($left) { $left | Format-Table; throw "ffmpeg or ffprobe is still running after the run" }
+          "### Windows capture, doctor and export`n`nPassed: doctor, sources, screen and area capture, export, no leftover processes." | Out-File -Append $env:GITHUB_STEP_SUMMARY
       - name: Speed numbers (macOS, VideoToolbox)
         if: runner.os == 'macOS'
         continue-on-error: true

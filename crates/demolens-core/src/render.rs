@@ -349,6 +349,8 @@ pub struct Renderer {
     pub out_h: u32,
     track: Option<CursorTrack>,
     clicks: Vec<(f64, f64, f64)>,
+    /// Where a finger or pen touched down (also in `clicks`, for the zoom).
+    touches: Vec<(f64, f64, f64)>,
     labels: Vec<KeyLabel>,
     background: Frame,
     /// The plain backdrop, used behind title cards.
@@ -387,6 +389,7 @@ impl Renderer {
     pub fn new(project: Project, log: Option<&EventLog>, out_w: u32, out_h: u32, bg_image: Option<Frame>) -> Self {
         let track = log.map(CursorTrack::new).filter(|t| !t.is_empty());
         let clicks = log.map(|l| l.clicks().collect()).unwrap_or_default();
+        let touches = log.map(|l| l.touches().collect()).unwrap_or_default();
         let labels = match log {
             Some(l) if project.keys.enabled => build_key_labels(l, &project.keys),
             _ => Vec::new(),
@@ -429,7 +432,7 @@ impl Renderer {
             let t = glass.tint.map(|v| v as f32);
             frost_rect(&mut background, pl.x, pl.y, pl.w, pl.h, pl.radius, glass.blur * short, t, glass.tint_opacity as f32, glass.highlight as f32, 1.0);
         }
-        Self { project, out_w, out_h, track, clicks, labels, background, card_bg, layout, panel, glass }
+        Self { project, out_w, out_h, track, clicks, touches, labels, background, card_bg, layout, panel, glass }
     }
 
     /// The drop shadow never changes between frames, so it is painted into the
@@ -699,6 +702,9 @@ impl Renderer {
         if p.cursor.click_ripples {
             let rc = p.cursor.ripple_color.map(|c| c as f32);
             for &(t, x, y) in &self.clicks {
+                if self.touches.iter().any(|&(tt, _, _)| tt == t) {
+                    continue;
+                }
                 let age = src_t - t;
                 if !(0.0..=600.0).contains(&age) {
                     continue;
@@ -715,6 +721,35 @@ impl Renderer {
                         let ring = (thick / 2.0 + 0.5 - (d - r).abs()).clamp(0.0, 1.0) as f32;
                         let fill = if d < r { 0.18 } else { 0.0 };
                         out.blend(xx, yy, rc, alpha * ring.max(fill));
+                    }
+                }
+            }
+        }
+
+        // 3b. Touch: a soft fingertip disc that settles, with one thin ring
+        // around it, so a tap reads differently from a mouse click.
+        if p.cursor.click_ripples {
+            let rc = p.cursor.ripple_color.map(|c| c as f32);
+            for &(t, x, y) in &self.touches {
+                let age = src_t - t;
+                if !(0.0..=700.0).contains(&age) {
+                    continue;
+                }
+                let k = age / 700.0;
+                let (ox, oy) = to_out(x, y);
+                let unit = base * px_per_src * p.cursor.size / 1.5;
+                let r = (24.0 - 6.0 * (1.0 - (1.0 - k).powi(2)).min(1.0) + 4.0 * k) * unit;
+                let ring_r = r * (1.25 + 0.9 * k);
+                let thick = (2.5 * base * px_per_src).max(1.2);
+                let fade = (1.0 - k).powi(2) as f32;
+                let ext = (ring_r + thick + 2.0) as i64;
+                for yy in (oy as i64 - ext)..=(oy as i64 + ext) {
+                    for xx in (ox as i64 - ext)..=(ox as i64 + ext) {
+                        let d = ((xx as f64 + 0.5 - ox).powi(2) + (yy as f64 + 0.5 - oy).powi(2)).sqrt();
+                        // Soft edged disc.
+                        let disc = ((r - d) / (r * 0.35).max(1.0)).clamp(0.0, 1.0) as f32 * 0.55;
+                        let ring = (thick / 2.0 + 0.5 - (d - ring_r).abs()).clamp(0.0, 1.0) as f32 * 0.7;
+                        out.blend(xx, yy, rc, fade * disc.max(ring));
                     }
                 }
             }

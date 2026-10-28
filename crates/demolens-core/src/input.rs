@@ -97,6 +97,8 @@ pub struct InputLogger {
     keys: KeyLogging,
     hook: Option<std::process::Child>,
     poller: Option<std::thread::JoinHandle<()>>,
+    /// Finger and pen input (Windows Raw Input, X11 XInput2).
+    touch: Option<crate::touch::Watcher>,
     /// macOS key state poller: a stop flag and its thread.
     keypoll: Option<(Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>)>,
 }
@@ -112,7 +114,8 @@ impl InputLogger {
     pub fn start(region: Region, keys: KeyLogging) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new(), last_pos: (region.w as f64 / 2.0, region.h as f64 / 2.0) }));
         let poller = poll::spawn(shared.clone(), region);
-        let mut me = Self { shared, keys, hook: None, poller, keypoll: None };
+        let touch = start_touch(shared.clone(), region);
+        let mut me = Self { shared, keys, hook: None, poller, touch, keypoll: None };
         me.start_hook();
         Ok(me)
     }
@@ -124,6 +127,7 @@ impl InputLogger {
             keys: KeyLogging::Off,
             hook: None,
             poller: None,
+            touch: None,
             keypoll: None,
         }
     }
@@ -227,8 +231,31 @@ impl InputLogger {
         if let Some(h) = self.poller.take() {
             let _ = h.join();
         }
+        self.touch.take();
+        let mut events: Vec<Event> = events;
+        crate::touch::drop_emulated_mouse(&mut events);
         Logged { events, pauses }
     }
+}
+
+/// Logs taps and drags from the touch screen as touch clicks.
+fn start_touch(shared: Arc<Mutex<Shared>>, region: Region) -> Option<crate::touch::Watcher> {
+    use crate::events::{EventKind, MouseButton};
+    use crate::touch::Phase;
+    crate::touch::start(Box::new(move |phase, x, y| {
+        let now = Instant::now();
+        let (x, y) = (x - region.x as f64, y - region.y as f64);
+        let mut s = shared.lock().unwrap();
+        s.last_pos = (x, y);
+        match phase {
+            Phase::Down => {
+                s.push(now, EventKind::Move { x, y });
+                s.push(now, EventKind::Click { x, y, button: MouseButton::Touch });
+            }
+            Phase::Move => s.push(now, EventKind::Move { x, y }),
+            Phase::Up => s.push(now, EventKind::Release { x, y, button: MouseButton::Touch }),
+        }
+    }))
 }
 
 impl Drop for InputLogger {

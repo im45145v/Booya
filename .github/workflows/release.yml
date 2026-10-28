@@ -74,6 +74,9 @@ jobs:
               # the installer puts the sidecars next to the app exe; run the staged copies
               ./target/release/demolens-ffmpeg.exe -hide_banner -version | head -1
               ./target/release/demolens-ffprobe.exe -hide_banner -version | head -1
+              # screen (gdigrab) and microphone (dshow) capture must be in this build
+              ./target/release/demolens-ffmpeg.exe -hide_banner -devices 2>&1 | tee /tmp/dev.txt
+              grep -q gdigrab /tmp/dev.txt && grep -q dshow /tmp/dev.txt
               7z l $b/msi/*.msi | grep -i demolens-ff || true ;;
             Linux)
               deb=$(ls $b/deb/*.deb | head -1)

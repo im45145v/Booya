@@ -22,6 +22,9 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+    /// A finger or pen on a touch screen. A tap is a click for zoom and
+    /// click effects, drawn with a touch ripple instead of a mouse ring.
+    Touch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +166,22 @@ impl EventLog {
     pub fn clicks(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
         self.events.iter().filter_map(|e| match e.kind {
             EventKind::Click { x, y, .. } => Some((e.t, x, y)),
+            _ => None,
+        })
+    }
+
+    /// Mouse clicks only (no taps): (time, x, y).
+    pub fn mouse_clicks(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
+        self.events.iter().filter_map(|e| match e.kind {
+            EventKind::Click { x, y, button } if button != MouseButton::Touch => Some((e.t, x, y)),
+            _ => None,
+        })
+    }
+
+    /// Finger and pen touches (the start of each): (time, x, y).
+    pub fn touches(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
+        self.events.iter().filter_map(|e| match e.kind {
+            EventKind::Click { x, y, button: MouseButton::Touch } => Some((e.t, x, y)),
             _ => None,
         })
     }

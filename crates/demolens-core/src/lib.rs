@@ -19,6 +19,7 @@ pub mod shortcuts;
 pub mod storage;
 pub mod bundle;
 pub mod proc;
+pub mod touch;
 pub mod splice;
 pub mod syncprobe;
 pub mod zoom;

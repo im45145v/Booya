@@ -219,6 +219,7 @@ fn button_word(b: MouseButton, symbols: bool) -> &'static str {
         MouseButton::Left => "Click",
         MouseButton::Right => "Right click",
         MouseButton::Middle => "Middle click",
+        MouseButton::Touch => "Tap",
     }
 }
 
@@ -359,7 +360,7 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
         };
         match release {
             Some((rt, rx, ry)) if ((rx - x).powi(2) + (ry - y).powi(2)).sqrt() > 12.0 || rt - t > 350.0 => {
-                let word = if b == MouseButton::Left { "Drag".to_string() } else { format!("{} drag", button_word(b, sym).trim_end_matches(" click")) };
+                let word = if b == MouseButton::Left || b == MouseButton::Touch { "Drag".to_string() } else { format!("{} drag", button_word(b, sym).trim_end_matches(" click")) };
                 out.push(KeyLabel { start_ms: t, end_ms: rt + 400.0, text: join_word(&word) });
             }
             _ => out.push(KeyLabel { start_ms: t, end_ms: t + hold, text: join_word(button_word(b, sym)) }),
