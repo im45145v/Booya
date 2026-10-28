@@ -44,7 +44,23 @@ jobs:
         run: bash scripts/fetch-ffmpeg.sh
       - name: Build installers
         working-directory: src-tauri
-        run: npx --yes @tauri-apps/cli@2 build --config tauri.bundle-ffmpeg.json
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # With the updater key present the build also writes signed update
+          # files (the .sig next to each installer). Without it (a fork, or the
+          # secret not set yet) the installers are built as before and
+          # scripts/sign-release.py can sign them afterwards.
+          extra=()
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            extra=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+            echo "Updater signing is on"
+          else
+            echo "No updater key in this run: update files are not signed here"
+          fi
+          npx --yes @tauri-apps/cli@2 build --config tauri.bundle-ffmpeg.json "${extra[@]}"
       - name: Check bundled ffmpeg runs
         shell: bash
         run: |
@@ -135,6 +151,12 @@ jobs:
           mkdir -p dist
           b=target/release/bundle
           find "$b" -maxdepth 2 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} dist/ \;
+          find "$b" -maxdepth 3 -type f \( -name '*.app.tar.gz' -o -name '*.sig' \) -exec cp {} dist/ \;
+          if [ "$RUNNER_OS" = "macOS" ] && ! ls dist/*.app.tar.gz >/dev/null 2>&1; then
+            # The updater wants the .app in a tarball. Tauri writes it only when it signs.
+            app=$(find "$b/macos" -maxdepth 1 -name '*.app' | head -1)
+            tar -czf "dist/DemoLens_${{ matrix.name }}.app.tar.gz" -C "$b/macos" "$(basename "$app")"
+          fi
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a "dist/demolens-cli-${{ matrix.name }}.zip" ./target/release/demolens.exe
           else
@@ -159,6 +181,14 @@ jobs:
           path: dist
           merge-multiple: true
       - run: ls -la dist
+      - name: Write latest.json for the in-app updater
+        run: |
+          if ls dist/*.sig >/dev/null 2>&1; then
+            python3 scripts/make-latest-json.py dist "${{ github.ref_name }}" "${{ github.repository }}" "docs/release-notes/${{ github.ref_name }}.md" > dist/latest.json
+            cat dist/latest.json
+          else
+            echo "No signed update files in this run. Run scripts/sign-release.py ${{ github.ref_name }} to add them."
+          fi
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

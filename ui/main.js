@@ -654,7 +654,7 @@ async function showAbout() {
   <p class="hint">This app bundles FFmpeg (https://ffmpeg.org), licensed under the GNU GPL version 2 or later (the bundled builds include GPL components). FFmpeg is a trademark of Fabrice Bellard. Source code for the bundled builds is available from the builders: BtbN/FFmpeg-Builds (Linux, Windows) and ffmpeg.martin-riedl.de (macOS). See THIRD_PARTY_NOTICES.md in the repository.</p>
   <p class="hint">Models are downloaded separately and keep their own licenses.</p>`);
 }
-$('about-btn').onclick = showAbout;
+$('about-btn').onclick = () => showSettings('about');
 setTimeout(() => checkFfmpeg(false), 400);
 
 // Every command goes through act(), so the native menu, the keyboard and the
@@ -999,7 +999,7 @@ async function showSettings(tab = 'privacy') {
   await loadCloud();
   const st = await invoke('get_settings'), recs = await invoke('list_recordings').catch(() => []);
   const s3 = await invoke('s3_get').catch(() => ({ config: {}, secret_set: false }));
-  const tabs = ['privacy', 'appearance', 'shortcuts', 'cloud', 'storage', 'disk'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', appearance: 'Appearance', shortcuts: 'Shortcuts', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage' }[t]}</button>`).join('');
+  const tabs = ['privacy', 'appearance', 'shortcuts', 'cloud', 'storage', 'disk', 'about'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', appearance: 'Appearance', shortcuts: 'Shortcuts', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage', about: 'About and updates' }[t]}</button>`).join('');
   let body = '';
   if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
     <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
@@ -1020,6 +1020,7 @@ async function showSettings(tab = 'privacy') {
       <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>`;
   }
   if (tab === 'shortcuts') body = '<div id="sc-body"><p class="muted small">Loading...</p></div>';
+  if (tab === 'about') body = '<div id="about-body"><p class="muted small">Loading...</p></div>';
   if (tab === 'disk') body = '<div id="disk-body"><p class="muted small">Measuring...</p></div>';
   if (tab === 'storage') { const c = s3.config || {}; body = `<p>Upload exports to your own S3 or Cloudflare R2 bucket. Objects are private, encrypted at rest where supported, and shared with a signed link (24 hours by default, 7 days at most). Event logs are never uploaded.</p>
     ${['endpoint', 'region', 'bucket', 'prefix', 'access_key_id'].map(k => `<label class="stack">${k.replace(/_/g, ' ')}<input class="field" data-s3="${k}" value="${esc(c[k] || '')}" /></label>`).join('')}
@@ -1029,6 +1030,7 @@ async function showSettings(tab = 'privacy') {
   modal('Settings', `<div class="row">${tabs}</div>${body}`);
   document.querySelectorAll('[data-st]').forEach(b => (b.onclick = () => showSettings(b.dataset.st)));
   if (tab === 'disk') renderDisk();
+  if (tab === 'about') renderAboutTab();
   if (tab === 'shortcuts') renderShortcutsPage();
   if ($('set-glass')) $('set-glass').onchange = async () => { glassPref = $('set-glass').checked; await invoke('set_glass_ui', { enabled: glassPref }).catch(fail); await applyGlassUi(); status(glassPref ? 'Glass look on.' : 'Glass look off.', 'success'); };
   if ($('set-tray')) $('set-tray').onchange = () => invoke('set_menu_bar', { enabled: $('set-tray').checked }).then(() => status('Saved.', 'success'), fail);

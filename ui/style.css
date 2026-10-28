@@ -427,3 +427,10 @@ html.glass-native[data-theme="light"] .toolbar, html.glass-native[data-theme="li
   html.glass-ui .toolbar, html.glass-ui .inspector, html.glass-ui .statusbar, html.glass-ui dialog { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
   html.glass-native .toolbar, html.glass-native .inspector, html.glass-native .statusbar { background: var(--surface); }
 }
+
+/* Update banner: floats above the status bar so the page grid is untouched. */
+.update-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 36px; z-index: 60; display: flex; align-items: center; gap: var(--sp-2); max-width: min(760px, calc(100vw - 24px)); padding: 8px 10px 8px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.update-banner[hidden] { display: none; }
+.update-banner .grow { flex: 1; min-width: 8px; }
+.update-banner .bar { width: 120px; }
+.about-notes { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--fs-sm); background: rgba(128,128,128,.1); border-radius: 6px; padding: 8px; }

@@ -1678,11 +1678,66 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// What the updater found, for the banner and Settings > About.
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    available: bool,
+    current: String,
+    version: String,
+    notes: String,
+    date: String,
+    /// False when this install cannot replace itself (a .deb or .rpm on Linux).
+    can_install: bool,
+}
+
+fn can_self_update() -> bool {
+    // Linux packages are owned by the package manager. Only an AppImage can replace itself.
+    !cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some()
+}
+
+/// Ask GitHub Releases whether a newer version exists. Nothing is sent but the
+/// request for latest.json, which carries the app version and platform.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> R<UpdateInfo> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = app.package_info().version.to_string();
+    let found = app.updater().map_err(e)?.check().await.map_err(e)?;
+    Ok(match found {
+        Some(u) => UpdateInfo { available: true, current, version: u.version.clone(), notes: u.body.clone().unwrap_or_default(), date: u.date.map(|d| d.to_string()).unwrap_or_default(), can_install: can_self_update() },
+        None => UpdateInfo { available: false, version: current.clone(), current, notes: String::new(), date: String::new(), can_install: can_self_update() },
+    })
+}
+
+/// Download the update, verify its signature against the key in the app, install it and restart.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> R<()> {
+    use tauri::Emitter;
+    use tauri_plugin_updater::UpdaterExt;
+    if !can_self_update() {
+        return Err("This copy was installed from a .deb or .rpm package. Update it with your package manager or download the new release.".into());
+    }
+    let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("DemoLens is already up to date.".into()) };
+    let mut got: u64 = 0;
+    let handle = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                got += chunk as u64;
+                let _ = handle.emit("update-progress", serde_json::json!({ "got": got, "total": total }));
+            },
+            || {},
+        )
+        .await
+        .map_err(e)?;
+    app.restart()
+}
+
 fn main() {
     demolens_core::input::run_keyhook_if_requested();
     use tauri_plugin_global_shortcut::ShortcutState;
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, sc, ev| {
@@ -1748,7 +1803,7 @@ fn main() {
             initial_project,
             load_project,
             save_project,
-            regenerate_zoom, key_track, input_monitoring_status, open_input_monitoring_settings,
+            regenerate_zoom, key_track, check_update, install_update, input_monitoring_status, open_input_monitoring_settings,
             preview,
             export_interactive,
             background_import,
