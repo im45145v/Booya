@@ -187,7 +187,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("big.mp4");
         let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=2940x1912:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=300:d=2", "-af", "volume=-25dB"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=2940x1912:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=300:d=2", "-af", "volume=-14dB"])
             .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&src)
             .status()

@@ -14,7 +14,12 @@ pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
         .output()
         .context("failed to run ffmpeg")?;
     if !out.status.success() {
-        bail!("audio decode failed: {}", String::from_utf8_lossy(&out.stderr));
+        let err = String::from_utf8_lossy(&out.stderr);
+        // A recording with no sound track is not an error: it has no samples.
+        if err.contains("does not contain any stream") || err.contains("matches no streams") {
+            return Ok(Vec::new());
+        }
+        bail!("audio decode failed: {err}");
     }
     Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
 }
@@ -74,17 +79,37 @@ pub fn measure_file(input: &Path) -> Result<Option<Loudness>> {
     measure_graph(input, "[0:a]anull[aout]")
 }
 
+/// Tracks quieter than this are mostly microphone noise floor (or a mic that
+/// is barely picking anything up). Loudnorm would lift them by 25 dB or more
+/// and turn hiss into the loudest thing in the video, so they get a capped
+/// boost behind a noise gate instead.
+pub const VERY_QUIET_LUFS: f64 = -42.0;
+/// The most a very quiet track is ever boosted.
+pub const QUIET_BOOST_DB: f64 = 15.0;
+/// Gate in front of any big boost: below about -56 dBFS the level is dropped
+/// by 20 dB, so the noise floor is not amplified along with the speech.
+const NOISE_GATE: &str = "agate=threshold=0.0015:ratio=3:attack=15:release=300:range=0.1:knee=1.5";
+
 /// The normalising filters for a track measured as `m` (empty when the track
 /// is silent). Two pass loudnorm is exact and linear (no pumping); the limiter
-/// after it catches any peak that still pokes out.
+/// after it catches any peak that still pokes out. Quiet tracks are gated
+/// first so the normalizer does not amplify the noise floor, and very quiet
+/// ones are never boosted by more than [`QUIET_BOOST_DB`].
 pub fn normalize_chain(m: Option<&Loudness>) -> String {
     match m {
         Some(m) if m.input_i < SILENT_LUFS => String::new(),
-        Some(m) => format!(
-            "loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11:measured_I={:.2}:measured_TP={:.2}:measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear=true,alimiter=limit=0.84:level=disabled",
-            m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset
-        ),
-        None => format!("loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11,alimiter=limit=0.84:level=disabled"),
+        Some(m) if m.input_i < VERY_QUIET_LUFS => {
+            let boost = (TARGET_LUFS - m.input_i).clamp(0.0, QUIET_BOOST_DB);
+            format!("highpass=f=80,{NOISE_GATE},volume={boost:.1}dB,alimiter=limit=0.84:level=disabled")
+        }
+        Some(m) => {
+            let gate = if TARGET_LUFS - m.input_i > 8.0 { format!("{NOISE_GATE},") } else { String::new() };
+            format!(
+                "{gate}loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11:measured_I={:.2}:measured_TP={:.2}:measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear=true,alimiter=limit=0.84:level=disabled",
+                m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset
+            )
+        }
+        None => format!("{NOISE_GATE},loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11,alimiter=limit=0.84:level=disabled"),
     }
 }
 
@@ -218,7 +243,7 @@ mod loudness_tests {
         let m = parse_loudnorm(text).unwrap();
         assert_eq!(m.input_i, -42.10);
         assert_eq!(m.target_offset, 0.5);
-        assert!(normalize_chain(Some(&m)).contains("measured_I=-42.10"));
+        assert!(normalize_chain(Some(&Loudness { input_i: -30.0, ..m })).contains("measured_I=-30.00"));
         let silent = "{\"input_i\":\"-inf\",\"input_tp\":\"-inf\",\"input_lra\":\"0\",\"input_thresh\":\"-70\"}";
         assert!(parse_loudnorm(silent).is_none());
     }
@@ -230,6 +255,52 @@ mod loudness_tests {
     }
 
     #[test]
+    fn a_noise_floor_is_gated_and_never_boosted_by_loudnorm() {
+        let m = Loudness { input_i: -50.0, input_tp: -35.0, input_lra: 2.0, input_thresh: -60.0, target_offset: 0.0 };
+        let c = normalize_chain(Some(&m));
+        assert!(!c.contains("loudnorm"), "{c}");
+        assert!(c.contains("agate") && c.contains("volume=15.0dB"), "{c}");
+        // A moderately quiet track is gated before it is normalized.
+        let q = normalize_chain(Some(&Loudness { input_i: -36.0, ..m }));
+        assert!(q.find("agate").unwrap() < q.find("loudnorm").unwrap(), "{q}");
+        // A normal track is not gated at all.
+        assert!(!normalize_chain(Some(&Loudness { input_i: -20.0, ..m })).contains("agate"));
+    }
+
+    #[test]
+    fn hiss_stays_quiet_after_normalizing() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-hiss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hiss = dir.join("hiss.wav");
+        // Very quiet white noise: the "mic is on but nobody is talking" case.
+        let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=d=4:c=white:a=0.004:r=48000", "-ac", "1"])
+            .arg(&hiss)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let m = measure_file(&hiss).unwrap().expect("measurable");
+        let out = dir.join("out.wav");
+        let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&hiss)
+            .args(["-af", &normalize_chain(Some(&m))])
+            .arg(&out)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let after = measure_file(&out).unwrap();
+        // Never anywhere near the -16 target: noise is not turned into signal.
+        assert!(after.map(|a| a.input_i < -30.0).unwrap_or(true), "{after:?} from {m:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_quiet_track_is_brought_to_the_target() {
         if !crate::ffmpeg::ffmpeg_found() {
             return;
@@ -238,7 +309,7 @@ mod loudness_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let quiet = dir.join("quiet.wav");
         let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:d=4", "-af", "volume=-25dB"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:d=4", "-af", "volume=-14dB"])
             .arg(&quiet)
             .status()
             .unwrap()

@@ -150,6 +150,10 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
             return Ok(w);
         }
     }
+    if !audible(&audio) {
+        // Nothing but a noise floor: whisper would invent words from it.
+        return Ok(Vec::new());
+    }
     // Quiet recordings are brought up to a normal level first; whisper drops
     // words it cannot hear. The cache key above uses the original samples.
     let audio = normalise_for_speech(audio);
@@ -164,18 +168,42 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
         w.end_ms = uncompact_ms(w.end_ms, &map, 16_000).max(w.start_ms);
     }
     words.retain(|w| !demolens_core::captions::is_nonspeech(&w.text));
+    if only_hallucination(&words) {
+        words.clear();
+    }
     if let Ok(s) = serde_json::to_string(&words) {
         let _ = write_private(&cache, &s);
     }
     Ok(words)
 }
 
-/// Scale quiet audio so its peak sits near 0.9, with at most 30 dB of gain.
+/// Quietest 30 ms window (RMS) that counts as sound at all: about -52 dBFS.
+/// A microphone that is on but picks up nothing sits below this.
+const AUDIBLE_RMS: f32 = 0.0025;
+
+/// Whether the track has anything above the noise floor to transcribe.
+pub fn audible(audio: &[f32]) -> bool {
+    let win = 16_000 * 30 / 1000;
+    audio.chunks(win).any(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt() >= AUDIBLE_RMS)
+}
+
+/// Whisper's stock output for audio with no speech in it. A transcript that
+/// is nothing but these is thrown away.
+pub fn only_hallucination(words: &[CaptionWord]) -> bool {
+    if words.is_empty() || words.len() > 4 {
+        return false;
+    }
+    let text: String = words.iter().map(|w| w.text.trim().to_lowercase()).collect::<Vec<_>>().join(" ");
+    let text = text.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+    ["you", "thank you", "thanks", "thanks for watching", "thank you for watching", "bye", "bye bye", "so", "the", "uh", "um", "hmm", "mm"].contains(&text.as_str())
+}
+
+/// Scale quiet audio so its peak sits near 0.9, with at most 24 dB of gain.
 /// Loud audio is left alone, so this never clips or changes a good recording.
 pub fn normalise_for_speech(mut audio: Vec<f32>) -> Vec<f32> {
     let peak = audio.iter().fold(0.0f32, |m, x| m.max(x.abs()));
     if peak > 1e-4 && peak < 0.5 {
-        let gain = (0.9 / peak).min(31.6);
+        let gain = (0.9 / peak).min(15.8);
         for x in &mut audio {
             *x = (*x * gain).clamp(-1.0, 1.0);
         }
@@ -259,17 +287,36 @@ pub fn merge_fragments(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
 mod tests {
     #[test]
     fn quiet_audio_is_lifted_and_loud_audio_is_left_alone() {
-        let quiet: Vec<f32> = (0..100).map(|i| 0.05 * ((i as f32) / 7.0).sin()).collect();
+        let quiet: Vec<f32> = (0..100).map(|i| 0.1 * ((i as f32) / 7.0).sin()).collect();
         let up = super::normalise_for_speech(quiet.clone());
         let peak = up.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!((peak - 0.9).abs() < 0.02, "{peak}");
-        let loud: Vec<f32> = quiet.iter().map(|x| x * 15.0).collect();
+        let loud: Vec<f32> = quiet.iter().map(|x| x * 8.0).collect();
         assert_eq!(super::normalise_for_speech(loud.clone()), loud);
         let silent = vec![0.0f32; 10];
         assert_eq!(super::normalise_for_speech(silent.clone()), silent);
     }
 
     use super::*;
+
+    #[test]
+    fn a_noise_floor_is_not_audible_and_speech_level_sound_is() {
+        let hiss: Vec<f32> = (0..32_000).map(|i| 0.001 * ((i * 7919 % 100) as f32 / 50.0 - 1.0)).collect();
+        assert!(!audible(&hiss));
+        assert!(!audible(&[]));
+        let tone: Vec<f32> = (0..32_000).map(|i| 0.05 * (i as f32 * 0.05).sin()).collect();
+        assert!(audible(&tone));
+    }
+
+    #[test]
+    fn stock_hallucinations_on_their_own_are_dropped() {
+        let w = |t: &str| CaptionWord { start_ms: 0.0, end_ms: 100.0, text: t.into() };
+        assert!(only_hallucination(&[w("Thank"), w("you.")]));
+        assert!(only_hallucination(&[w("Thanks"), w("for"), w("watching!")]));
+        assert!(!only_hallucination(&[w("Thank"), w("you"), w("for"), w("coming"), w("today")]));
+        assert!(!only_hallucination(&[w("Click"), w("here")]));
+        assert!(!only_hallucination(&[]));
+    }
 
     #[test]
     fn vad_compacts_long_silence_and_maps_back() {

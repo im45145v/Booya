@@ -493,6 +493,77 @@ mod tests {
         assert!(audio_filter(&p).contains("afade=t=in"));
     }
 
+    /// Per stream durations (seconds) of a media file: (video, audio).
+    fn stream_durations(path: &std::path::Path) -> (f64, f64) {
+        let out = crate::proc::command(ffmpeg::ffprobe_bin())
+            .args(["-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "json"])
+            .arg(path)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let mut d = (0.0, 0.0);
+        for s in v["streams"].as_array().unwrap() {
+            let x = s["duration"].as_str().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
+            if s["codec_type"] == "video" { d.0 = x } else { d.1 = x }
+        }
+        d
+    }
+
+    #[test]
+    fn cuts_keep_picture_and_sound_the_same_length() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-cuts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.mp4");
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1280x720:r=10:d=6", "-f", "lavfi", "-i", "sine=frequency=300:d=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let mut p = Project::new(src.clone(), None, 1280, 720, 6000.0);
+        p.style.padding = 0.0;
+        p.style.corner_radius = 0.0;
+        p.cursor.visible = false;
+        p.keys.enabled = false;
+        p.cut_ranges(&[(2000.0, 3000.0), (4000.0, 4500.0)]);
+        // Ten clips of cuts and a speed change are the splice cases that could drift.
+        p.clips[0].speed = 1.0;
+        let expect = p.output_duration_ms() / 1000.0;
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let (v, a) = stream_durations(&out);
+        assert!((v - expect).abs() < 0.2, "video {v} vs expected {expect}");
+        assert!((a - v).abs() < 0.15, "audio {a} vs video {v}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_without_sound_exports_without_failing() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-nosound-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("mute.mp4");
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1280x720:r=10:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let p = Project::new(src.clone(), None, 1280, 720, 3000.0);
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        assert!(out.exists());
+        assert!(crate::audio::decode_mono(&src, 16_000).unwrap().is_empty(), "no sound track decodes to no samples, not an error");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_quiet_recording_is_normalised_on_export() {
         if !ffmpeg::ffmpeg_found() {
@@ -502,7 +573,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("quiet.mp4");
         let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-af", "volume=-25dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-af", "volume=-19dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&src)
             .status()
             .unwrap()

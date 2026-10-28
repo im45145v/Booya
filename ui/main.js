@@ -571,8 +571,14 @@ $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
   const cloud = await confirmCloud('stt');
   if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');
   const r = await invoke('ai_transcribe', { project, model: null, cloud });
+  const rp = r.report;
+  if (!rp.words) {
+    applyResult(r.project);
+    const why = { no_audio: 'This recording has no sound track, so there is nothing to caption.', too_quiet: 'The microphone only picked up a faint noise floor, so there is nothing to caption.' }[rp.reason] || 'No speech was heard, so no captions were added.';
+    return status(why, 'info');
+  }
   r.project.caption_style.burn_in = true; applyResult(r.project);
-  status(r.report.words ? `Transcribed ${r.report.words} words (${r.report.fillers} filler words). Captions are burned in; switch that off in Style.` : 'Transcribed, but no speech was found. Is the microphone track silent? Check the level meter next time.', r.report.words ? 'success' : 'error');
+  status(`Transcribed ${rp.words} words (${rp.fillers} filler words). Captions are burned in; switch that off in Style.`, 'success');
 });
 // Auto cut proposes first. Nothing is removed until the red bands on the timeline have been reviewed.
 function clearProposal() { tl.proposed = null; $('cut-review').hidden = true; tl.draw(); }

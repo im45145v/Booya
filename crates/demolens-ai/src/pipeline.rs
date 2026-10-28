@@ -16,6 +16,11 @@ pub struct TranscribeReport {
     pub model: String,
     /// True when a small model was used and a better one would help.
     pub weak_model: bool,
+    /// Why there are no captions, when there are none: "no_audio" (the
+    /// recording has no sound track), "too_quiet" (only a noise floor) or
+    /// "no_speech" (sound, but no words). Empty otherwise.
+    #[serde(default)]
+    pub reason: String,
 }
 
 pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
@@ -27,10 +32,30 @@ pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
 
 /// Transcribe the project's audio into captions (word timed, in source time).
 pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&str>) -> Result<TranscribeReport> {
+    let mut samples = Vec::new();
+    let has_audio = demolens_core::ffmpeg::probe(&p.source).map(|i| i.has_audio).unwrap_or(true);
+    if has_audio {
+        samples = audio::decode_mono(&p.source, 16_000)?;
+    }
+    let reason = if !has_audio || samples.is_empty() {
+        Some("no_audio")
+    } else if !transcribe::audible(&samples) {
+        Some("too_quiet")
+    } else {
+        None
+    };
+    if let Some(r) = reason {
+        // Nothing to hear: no captions, and no error either.
+        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: r.into() });
+    }
     let model = speech_model(model)?;
     let words = transcribe::transcribe(&p.source, &model, lang)?;
     let name = model.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-    let mut r = finish_transcript(p, words)?;
+    let mut r = if words.is_empty() {
+        TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: "no_speech".into() }
+    } else {
+        finish_transcript(p, words)?
+    };
     r.weak_model = name.contains("tiny");
     r.model = name;
     Ok(r)
@@ -47,10 +72,13 @@ pub fn transcribe_project_cloud(p: &mut Project, cfg: &crate::providers::CloudCo
 
 fn finish_transcript(p: &mut Project, mut words: Vec<demolens_core::project::CaptionWord>) -> Result<TranscribeReport> {
     words.retain(|w| !captions::is_nonspeech(&w.text));
+    if words.is_empty() || transcribe::only_hallucination(&words) {
+        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: "no_speech".into() });
+    }
     let samples = audio::decode_mono(&p.source, 16_000)?;
     captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0));
     p.captions = captions::words_to_captions(&words, 42, 900.0);
-    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false })
+    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: String::new() })
 }
 
 #[derive(Debug, Serialize)]
