@@ -11,12 +11,15 @@ use demolens_core::render::Renderer;
 use demolens_core::capture::{self, CaptureTarget, RecordOptions, RecordingSession};
 use demolens_core::preset::{self, Preset};
 use demolens_core::project::Project;
+use demolens_core::shortcuts;
 use demolens_core::{export, new_project, zoom, EventLog, ZoomSegment};
 use demolens_ai::providers::{self, CloudConfig, Provider, Task};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+
+mod keys;
 use tauri_plugin_dialog::DialogExt;
 
 enum RecSlot {
@@ -487,7 +490,7 @@ fn show_indicator(app: &tauri::AppHandle) {
     }
     let w = tauri::WebviewWindowBuilder::new(app, "indicator", tauri::WebviewUrl::App("indicator.html".into()))
         .title("DemoLens is recording")
-        .inner_size(344.0, 52.0)
+        .inner_size(384.0, 52.0)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -507,7 +510,7 @@ fn show_indicator(app: &tauri::AppHandle) {
         if let Ok(Some(m)) = w.current_monitor().or_else(|_| w.primary_monitor()) {
             let sz = m.size();
             let sf = m.scale_factor();
-            let x = m.position().x + ((sz.width as f64 - 344.0 * sf) / 2.0) as i32;
+            let x = m.position().x + ((sz.width as f64 - 384.0 * sf) / 2.0) as i32;
             let y = m.position().y + (18.0 * sf) as i32;
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
@@ -524,11 +527,23 @@ fn recordings_dir(app: &tauri::AppHandle) -> R<PathBuf> {
     Ok(app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("DemoLens"))
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(default)]
 struct Settings {
     /// Delete recordings older than this many days at startup. None keeps them.
     retention_days: Option<u32>,
+    /// Frosted glass look for the app itself (macOS vibrancy, or a CSS blur elsewhere).
+    glass_ui: bool,
+    /// Show DemoLens in the menu bar (macOS) or the system tray (Windows).
+    menu_bar: bool,
+    /// Shortcut overrides by action id. Missing means the default.
+    shortcuts: demolens_core::shortcuts::Bindings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { retention_days: None, glass_ui: false, menu_bar: true, shortcuts: Default::default() }
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -536,7 +551,19 @@ fn settings_path() -> PathBuf {
 }
 
 fn load_settings() -> Settings {
-    std::fs::read_to_string(settings_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    let mut st: Settings = std::fs::read_to_string(settings_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    // A hand edited file must not break startup or register bad keys.
+    st.shortcuts = demolens_core::shortcuts::sanitize(&st.shortcuts);
+    st
+}
+
+fn save_settings(st: &Settings) -> R<()> {
+    let p = settings_path();
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(e)?;
+    }
+    std::fs::write(&p, serde_json::to_string_pretty(st).map_err(e)?).map_err(e)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -548,12 +575,72 @@ fn get_settings() -> Settings {
 fn set_retention(app: tauri::AppHandle, days: Option<u32>) -> R<usize> {
     let mut st = load_settings();
     st.retention_days = days.filter(|d| *d > 0);
-    let p = settings_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).map_err(e)?;
-    }
-    std::fs::write(&p, serde_json::to_string_pretty(&st).map_err(e)?).map_err(e)?;
+    save_settings(&st)?;
     Ok(apply_retention(&app))
+}
+
+/// Remember the glass look choice. The native effect is applied separately
+/// (`glass_native`), because Reduce Transparency can pause it without
+/// changing the choice.
+#[tauri::command]
+fn set_glass_ui(enabled: bool) -> R<()> {
+    let mut st = load_settings();
+    st.glass_ui = enabled;
+    save_settings(&st)
+}
+
+/// Turn the macOS vibrancy behind the editor on or off. Other platforms use
+/// the CSS fallback only, so this does nothing there.
+#[tauri::command]
+fn glass_native(app: tauri::AppHandle, on: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::window::{Effect, EffectState, EffectsBuilder};
+        if let Some(w) = app.get_webview_window("main") {
+            let r = if on {
+                w.set_effects(EffectsBuilder::new().effect(Effect::Sidebar).state(EffectState::FollowsWindowActiveState).build())
+            } else {
+                w.set_effects(Option::<tauri::utils::config::WindowEffectsConfig>::None)
+            };
+            return on && r.is_ok();
+        }
+    }
+    let _ = (&app, on);
+    false
+}
+
+/// Is the system "Reduce transparency" setting on? Only macOS exposes it
+/// outside the web view; elsewhere the web view's own media query is used.
+#[tauri::command]
+fn os_reduce_transparency() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return std::process::Command::new("defaults")
+            .args(["read", "com.apple.universalaccess", "reduceTransparency"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+            .unwrap_or(false);
+    }
+    #[allow(unreachable_code)]
+    {
+        false
+    }
+}
+
+/// Show or hide the menu bar / tray item.
+#[tauri::command]
+fn set_menu_bar(app: tauri::AppHandle, enabled: bool) -> R<()> {
+    let mut st = load_settings();
+    st.menu_bar = enabled;
+    save_settings(&st)?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        if let Some(t) = app.tray_by_id("main") {
+            let _ = t.set_visible(enabled);
+        }
+    }
+    let _ = &app;
+    Ok(())
 }
 
 /// Remove recording folders older than the retention setting.
@@ -1288,7 +1375,7 @@ async fn models_download_recommended(app: tauri::AppHandle) -> R<usize> {
 // ---------- Menu (macOS) ----------
 
 #[cfg(target_os = "macos")]
-fn build_menu(app: &tauri::App) -> tauri::Result<()> {
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     let item = |id: &str, text: &str, acc: Option<&str>| -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
         let mut b = MenuItemBuilder::with_id(id, text);
@@ -1331,10 +1418,19 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
         .paste()
         .select_all()
         .build()?;
-    let rec = SubmenuBuilder::new(app, "Record")
-        .item(&item("record", "Start or Stop Recording  (Shift+Cmd+R)", None)?)
-        .item(&item("pause", "Pause or Resume  (Shift+Cmd+P)", None)?)
-        .build()?;
+    // The Record menu lists every shortcut with the keys currently bound. The
+    // keys are text, not menu accelerators: the global shortcut already fires
+    // them, and a second registration would run each action twice.
+    let ov = load_settings().shortcuts;
+    let rec_items = shortcuts::ACTIONS
+        .iter()
+        .map(|a| item(&format!("sc:{}", a.id), &menu_text(a.label, &shortcuts::effective(&ov, a.id), true), None))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let mut rec = SubmenuBuilder::new(app, "Record");
+    for it in &rec_items {
+        rec = rec.item(it);
+    }
+    let rec = rec.build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().fullscreen().build()?;
     let help = SubmenuBuilder::new(app, "Help").item(&item("shortcuts", "Keyboard Shortcuts", Some("Cmd+/"))?).item(&item("ai-status", "AI Status", None)?).build()?;
     let menu = MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&rec).item(&window).item(&help).build()?;
@@ -1342,30 +1438,230 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-static SHORTCUT_FAILURES: Mutex<String> = Mutex::new(String::new());
+/// "Pause or Resume  (Shift+Cmd+P)", or just the label when unbound.
+fn menu_text(label: &str, combo: &str, mac: bool) -> String {
+    let k = shortcuts::label(combo, mac);
+    if k.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}  ({k})")
+    }
+}
+
+/// Shortcuts the OS refused to register, by action id, with the reason.
+static SHORTCUT_FAILURES: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+/// The shortcuts registered right now, so the handler can tell which action fired.
+static REGISTERED: Mutex<Vec<(String, tauri_plugin_global_shortcut::Shortcut)>> = Mutex::new(Vec::new());
+
+/// Register every bound shortcut with the OS, replacing whatever was
+/// registered before. Failures (another app owns the keys) are remembered
+/// per action and shown on the Shortcuts page.
+fn apply_shortcuts(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let gs = app.global_shortcut();
+    let old: Vec<_> = REGISTERED.lock().unwrap().drain(..).collect();
+    for (_, sc) in old {
+        let _ = gs.unregister(sc);
+    }
+    let mut failures = BTreeMap::new();
+    let overrides = load_settings().shortcuts;
+    for (id, combo) in shortcuts::all_effective(&overrides) {
+        if combo.is_empty() {
+            continue;
+        }
+        let Some(sc) = keys::to_shortcut(&combo) else {
+            failures.insert(id.to_string(), "That key combination is not supported.".to_string());
+            continue;
+        };
+        match gs.register(sc) {
+            Ok(()) => REGISTERED.lock().unwrap().push((id.to_string(), sc)),
+            Err(err) => {
+                eprintln!("shortcut {id} ({combo}) unavailable: {err}");
+                failures.insert(id.to_string(), err.to_string());
+            }
+        }
+    }
+    *SHORTCUT_FAILURES.lock().unwrap() = failures;
+}
+
+/// Rebuild what shows the keys: the macOS Record menu and the tray menu.
+fn refresh_menus(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = build_menu(app);
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        if let Some(t) = app.tray_by_id("main") {
+            if let Ok(m) = tray_menu(app) {
+                let _ = t.set_menu(Some(m));
+            }
+        }
+    }
+    let _ = app;
+}
+
+/// Run a shortcut action (from a global shortcut, the menu or the tray).
+/// Pause and markers act on the recording directly; everything else goes to
+/// the editor, which owns the source, microphone and picker choices.
+fn run_action(app: &tauri::AppHandle, id: &str) {
+    match id {
+        "pause" => {
+            let _ = pause_recording(app.clone(), None);
+        }
+        "marker" => {
+            let _ = drop_marker(app.clone());
+        }
+        "record_toggle" => {
+            restore_main_if_idle(app);
+            let _ = app.emit("global-record", ());
+        }
+        "record_area" | "record_window" | "record_screen" => {
+            restore_main_if_idle(app);
+            let _ = app.emit("shortcut", id);
+        }
+        other => {
+            let _ = app.emit("shortcut", other);
+        }
+    }
+}
+
+/// Drop a marker at the cursor: a deliberate "zoom here" point in the editor.
+#[tauri::command]
+fn drop_marker(app: tauri::AppHandle) -> R<bool> {
+    let state = app.state::<AppState>();
+    let slot = state.recording.lock().unwrap();
+    let Some(RecSlot::Running(s)) = &*slot else { return Err("Not recording".into()) };
+    let ok = s.mark();
+    if ok {
+        let _ = app.emit("rec-marker", ());
+    }
+    Ok(ok)
+}
+
+fn shortcuts_json() -> serde_json::Value {
+    let ov = load_settings().shortcuts;
+    let failed = SHORTCUT_FAILURES.lock().unwrap().clone();
+    let mac = cfg!(target_os = "macos");
+    let rows: Vec<_> = shortcuts::ACTIONS
+        .iter()
+        .map(|a| {
+            let combo = shortcuts::effective(&ov, a.id);
+            serde_json::json!({
+                "id": a.id, "label": a.label, "hint": a.hint,
+                "default": a.default, "combo": combo,
+                "text": shortcuts::label(&combo, mac),
+                "default_text": shortcuts::label(a.default, mac),
+                "custom": ov.contains_key(a.id),
+                "error": failed.get(a.id),
+            })
+        })
+        .collect();
+    serde_json::json!({ "mac": mac, "actions": rows })
+}
+
+/// Every action with its keys, whether they are custom, and any registration error.
+#[tauri::command]
+fn get_shortcuts() -> serde_json::Value {
+    shortcuts_json()
+}
+
+/// Rebind one action. An empty combo unbinds it. A combo the OS refuses is
+/// rolled back, so the old keys keep working.
+#[tauri::command]
+fn set_shortcut(app: tauri::AppHandle, action: String, combo: String) -> R<serde_json::Value> {
+    let mut st = load_settings();
+    let prev = st.shortcuts.clone();
+    shortcuts::set_binding(&mut st.shortcuts, &action, &combo)?;
+    save_settings(&st)?;
+    apply_shortcuts(&app);
+    let failed = SHORTCUT_FAILURES.lock().unwrap().get(&action).cloned();
+    if let Some(err) = failed {
+        st.shortcuts = prev;
+        save_settings(&st)?;
+        apply_shortcuts(&app);
+        refresh_menus(&app);
+        let name = shortcuts::info(&action).map(|a| a.label).unwrap_or("this action");
+        return Err(format!("{} cannot use those keys: the system refused them, usually because another app has them. Pick different keys. ({err})", name));
+    }
+    refresh_menus(&app);
+    Ok(shortcuts_json())
+}
+
+/// Release every global shortcut while the recorder is listening (so the OS
+/// does not swallow the combo being captured), and register them again after.
+#[tauri::command]
+fn shortcuts_pause(app: tauri::AppHandle, paused: bool) {
+    if paused {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        let old: Vec<_> = REGISTERED.lock().unwrap().drain(..).collect();
+        for (_, sc) in old {
+            let _ = app.global_shortcut().unregister(sc);
+        }
+    } else {
+        apply_shortcuts(&app);
+    }
+}
+
+/// Put every shortcut back to its default.
+#[tauri::command]
+fn reset_shortcuts(app: tauri::AppHandle) -> R<serde_json::Value> {
+    let mut st = load_settings();
+    st.shortcuts.clear();
+    save_settings(&st)?;
+    apply_shortcuts(&app);
+    refresh_menus(&app);
+    Ok(shortcuts_json())
+}
 
 /// Global shortcuts that could not be registered (empty when all work).
 #[tauri::command]
 fn shortcut_status() -> String {
-    SHORTCUT_FAILURES.lock().unwrap().clone()
+    SHORTCUT_FAILURES.lock().unwrap().keys().cloned().collect::<Vec<_>>().join(",")
 }
 
-/// When idle, the global record shortcut brings the editor forward so the
-/// choices are visible. While recording the editor is minimised on purpose.
+/// When idle, a record shortcut brings the editor forward so the choices (and
+/// the picker) are visible. While recording the editor stays out of the way.
 fn restore_main_if_idle(app: &tauri::AppHandle) {
     let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
-    if recording {
+    if !recording {
         restore_main(app);
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    let ov = load_settings().shortcuts;
+    let mac = cfg!(target_os = "macos");
+    let mut m = MenuBuilder::new(app);
+    for id in ["record_toggle", "pause", "record_area", "record_window", "record_screen", "marker"] {
+        if let Some(a) = shortcuts::info(id) {
+            m = m.item(&MenuItemBuilder::with_id(format!("sc:{id}"), menu_text(a.label, &shortcuts::effective(&ov, id), mac)).build(app)?);
+        }
+    }
+    m.separator()
+        .item(&MenuItemBuilder::with_id("tray-show", "Show DemoLens").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray-quit", "Quit DemoLens").build(app)?)
+        .build()
+}
+
+/// The menu bar (macOS) or tray (Windows) item with quick record.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::tray::TrayIconBuilder;
+    let mut b = TrayIconBuilder::with_id("main").menu(&tray_menu(app)?).tooltip("DemoLens");
+    if let Some(icon) = app.default_window_icon() {
+        b = b.icon(icon.clone());
+    }
+    let tray = b.build(app)?;
+    let _ = tray.set_visible(load_settings().menu_bar);
+    Ok(())
+}
+
 fn main() {
     demolens_core::input::run_keyhook_if_requested();
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-    // Cmd on macOS, Ctrl elsewhere.
-    let cmd = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
-    let pause_key = Shortcut::new(Some(Modifiers::SHIFT | cmd), Code::KeyP);
-    let record_key = Shortcut::new(Some(Modifiers::SHIFT | cmd), Code::KeyR);
+    use tauri_plugin_global_shortcut::ShortcutState;
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -1374,19 +1670,30 @@ fn main() {
                     if ev.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if *sc == pause_key {
-                        let _ = pause_recording(app.clone(), None);
-                    } else if *sc == record_key {
-                        // The editor owns the choices (screen, mic, ...), so it starts or stops.
-                        restore_main_if_idle(app);
-                        let _ = app.emit("global-record", ());
+                    let id = REGISTERED.lock().unwrap().iter().find(|(_, s)| s == sc).map(|(a, _)| a.clone());
+                    if let Some(id) = id {
+                        run_action(app, &id);
                     }
                 })
                 .build(),
         )
         .on_menu_event(|app, event| {
             let id = event.id().0.clone();
+            if let Some(action) = id.strip_prefix("sc:") {
+                run_action(app, action);
+                return;
+            }
             match id.as_str() {
+                "tray-show" => restore_main(app),
+                "tray-quit" => {
+                    // Never quit under a running recording: bring the editor up so it can be stopped.
+                    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+                    if recording {
+                        restore_main(app);
+                    } else {
+                        app.exit(0);
+                    }
+                }
                 "pause" => {
                     let _ = pause_recording(app.clone(), None);
                 }
@@ -1399,18 +1706,17 @@ fn main() {
             }
         })
         .setup(move |app| {
-            // Cmd/Ctrl+Shift+P pauses and Cmd/Ctrl+Shift+R starts or stops from any app.
-            // A failure (another app owns the key) is shown in the editor.
-            let mut failed = Vec::new();
-            for (sc, name) in [(pause_key, "pause"), (record_key, "record")] {
-                if let Err(err) = app.global_shortcut().register(sc) {
-                    eprintln!("{name} shortcut unavailable: {err}");
-                    failed.push(name);
+            // Bound shortcuts work from any app. A failure (another app owns the
+            // keys) is shown on Settings > Shortcuts.
+            apply_shortcuts(app.handle());
+            #[cfg(target_os = "macos")]
+            build_menu(app.handle())?;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                if let Err(err) = build_tray(app.handle()) {
+                    eprintln!("tray unavailable: {err}");
                 }
             }
-            *SHORTCUT_FAILURES.lock().unwrap() = failed.join(",");
-            #[cfg(target_os = "macos")]
-            build_menu(app)?;
             let removed = apply_retention(app.handle());
             if removed > 0 {
                 eprintln!("retention: removed {removed} old recordings");
@@ -1450,7 +1756,8 @@ fn main() {
             ai_status,
             ai_self_test,
             models_download_recommended,
-            shortcut_status,
+            shortcut_status, get_shortcuts, set_shortcut, reset_shortcuts, shortcuts_pause, drop_marker,
+            set_glass_ui, glass_native, os_reduce_transparency, set_menu_bar,
             models_list,
             model_download,
             model_delete,

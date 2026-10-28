@@ -46,6 +46,54 @@ pub struct Style {
     pub shadow: f64,
     /// Shadow opacity 0..1.
     pub shadow_opacity: f64,
+    /// Frosted glass frame around the recording and glass overlays.
+    #[serde(default)]
+    pub glass: Glass,
+}
+
+/// A frosted, liquid glass look: the recording sits on a blurred, tinted,
+/// rounded panel with a light edge, and captions, callouts and the keystroke
+/// overlay become small frosted pills. Off by default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Glass {
+    pub enabled: bool,
+    /// Frost blur as a fraction of the shorter output side (0 to 0.06).
+    pub blur: f64,
+    /// Tint colour laid over the frost.
+    pub tint: [u8; 3],
+    /// How strongly the tint shows, 0 to 0.6.
+    pub tint_opacity: f64,
+    /// Strength of the bright rim light on the edge, 0 to 1.
+    pub highlight: f64,
+    /// Panel corner radius as a fraction of the shorter output side.
+    pub radius: f64,
+    /// Space between the panel edge and the recording, fraction of the shorter side.
+    pub inset: f64,
+    /// Also draw captions, callouts and the keystroke overlay as frosted glass.
+    pub overlays: bool,
+}
+
+impl Default for Glass {
+    fn default() -> Self {
+        Self { enabled: false, blur: 0.018, tint: [255, 255, 255], tint_opacity: 0.16, highlight: 0.7, radius: 0.04, inset: 0.022, overlays: true }
+    }
+}
+
+impl Glass {
+    /// Glass limits so a hand edited project cannot produce nonsense.
+    pub fn clamped(&self) -> Glass {
+        Glass {
+            enabled: self.enabled,
+            blur: self.blur.clamp(0.0, 0.06),
+            tint: self.tint,
+            tint_opacity: self.tint_opacity.clamp(0.0, 0.6),
+            highlight: self.highlight.clamp(0.0, 1.0),
+            radius: self.radius.clamp(0.0, 0.12),
+            inset: self.inset.clamp(0.0, 0.08),
+            overlays: self.overlays,
+        }
+    }
 }
 
 impl Default for Style {
@@ -58,6 +106,7 @@ impl Default for Style {
             corner_radius: 0.018,
             shadow: 0.035,
             shadow_opacity: 0.45,
+            glass: Glass::default(),
         }
     }
 }

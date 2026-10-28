@@ -15,7 +15,7 @@ Two reviews from October 2026, written after actually using the app. I ran the d
 | Engineer filing or showing a bug / PR | "Record 30 seconds, make sure no API key or customer email is visible, drop it in the PR." | OBS, Peek, Kap, built in recorders |
 | Linux and Windows users | "I want the Screen Studio look and I am not on a Mac." | OBS plus a video editor |
 
-The sharpest job is the third and fourth row combined with the AI: **a demo that is safe to share and looks polished, made on any OS, without uploading anything.** Nobody else does that.
+The sharpest job is the third and fourth row combined with the AI: **a demo that is safe to share and looks good, made on any OS, without uploading anything.** Nobody else does that.
 
 ### Onboarding and first run
 
@@ -91,7 +91,7 @@ Impact and effort are 1 (low) to 3 (high).
 
 Cap already owns "open source Screen Studio" for Mac and Windows. DemoLens should not fight on that sentence. The defensible position is:
 
-> **The private demo studio. Polished product demos with local AI, on Linux, Windows and macOS. Nothing leaves your machine.**
+> **The private demo studio. Product demos with local models, on Linux, Windows and macOS. Nothing leaves your machine.**
 
 Three things nobody else combines:
 

@@ -2,19 +2,25 @@
 
 <h1 align="center">DemoLens</h1>
 
-DemoLens is a free, open source screen recorder for product demos. It is a local alternative to Screen Studio and Screen Charm that runs on Windows, macOS and Linux. Everything happens on your machine: no account and no telemetry. The only network use by default is downloading the optional AI models when you ask for them. Cloud AI and uploads exist but are off until you turn them on.
+DemoLens is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
 
-You record your screen, DemoLens logs your cursor, clicks and key presses next to the video, and the editor turns that into a polished demo with smooth auto zoom, a nicer cursor, click ripples, a keystroke overlay and a styled background. Export to MP4 or GIF up to 4K in 16:9, 9:16 or 1:1.
+While you record, DemoLens writes the cursor, clicks and key presses to a file next to the video. The editor uses that file to zoom on the right spots, draw a clean cursor and show key presses. Export to MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.
 
 ![Demo GIF rendered by DemoLens from the built in sample](docs/media/demo.gif)
 
-![The editor after one click on Make it demo-ready](docs/media/editor-ai.png)
+![The editor with the built-in sample loaded](docs/media/v040-editor.png)
+
+Screenshots of the app in this README come from the real interface running in a browser against a stand-in backend, so the data is a sample. The exported frames are rendered by the real compositor.
+
+| Glass frame in the export | Rebinding a shortcut |
+|---|---|
+| ![Export with the Frosted preset](docs/media/v040-glass-export.png) | ![Settings, Shortcuts](docs/media/v040-settings-shortcuts.png) |
 
 ## Quick start
 
 1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
 2. Open DemoLens and click **Try the sample**, or **Record screen**.
-3. Click **Make it demo-ready**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and cleans the audio. Each step says what it did, and Ctrl+Z undoes all of it.
+3. Open the **Auto edit** tab and click **Run auto edit**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and removes noise. Each step reports what it did, and Ctrl+Z undoes all of it.
 4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
 
 Press `?` in the app for all keyboard shortcuts.
@@ -43,33 +49,35 @@ The first time you record, macOS asks for **Screen & System Audio Recording** an
 |---|---|---|---|---|
 | Price | Free, MIT | Paid | Free core, paid cloud | Subscription |
 | Windows, macOS, Linux | All three | macOS only | macOS, Windows | Browser and desktop |
-| AI captions and cuts | Offline, on your machine | No | Cloud | Cloud |
+| Captions and cuts | Local models, offline | No | Cloud | Cloud |
 | Auto blur of API keys, emails, cards | Yes | No | No | No |
 | Scriptable CLI | Yes | No | No | No |
 
-If you record demos of developer tools, your screen is full of tokens, emails and customer data. DemoLens finds and blurs them for you and never uploads a frame unless you set up your own storage.
-
+If you record developer tools, your screen is full of tokens, emails and customer data. DemoLens looks for them and blurs them, and it never uploads a frame unless you set up your own storage.
 
 ## Features
 
 - **Recording**: full screen, a single window or an area, with microphone and system audio where the OS allows it (see the capture table below).
 - **Event log**: while recording, cursor moves and clicks are written to a timestamped `*.events.jsonl` file next to the video. Key capture is off by default; when you turn it on, only shortcut names and the timing of typing are kept, never the characters.
-- **Recording indicator**: an always on top REC badge with a timer and a Pause button (Ctrl/Cmd+Shift+P). Paused parts are cut.
+- **Recording pill**: a small always on top control with a timer, a marker button, pause, stop and discard. It is not in the video. Paused parts are cut.
+- **Shortcuts you can change**: Settings > Shortcuts lists every recording action (start or stop, pause, record an area, a window or the full screen, restart the take, discard, drop a marker, toggle the microphone, webcam and key display). Click a row, press the new keys, and it checks for clashes with your other shortcuts and with other apps. Reset one row or all of them. The keys you set show in the tooltips, the menu and the tray menu.
+- **Markers**: press the marker shortcut (or the flag button on the pill) during a recording and the editor adds a zoom to the cursor at that moment.
 - **Webcam overlay**: record the webcam alongside the screen and show it as a circle or rounded square in any corner, or in a column beside the screen. Optional mirror. It shows in the editor preview, not only in the export.
 - **Auto zoom**: zoom segments are generated from clicks and typing bursts. The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Subtle, moderate and intense zoom styles are one click. Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
 - **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
 - **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
+- **Glass frame**: Style > Glass puts the recording on a frosted panel over the background, with adjustable blur, tint, edge light, corner radius and inset. Captions, notes and key labels use the same frosted look. The built-in presets "Frosted" and "Frosted dark" start from it.
 - **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, twelve built-in wallpapers, intro and outro title cards, timed text callouts and drawn shapes (arrow, box, ellipse, highlight).
-- **Interactive demo**: `demolens interactive demo.json` (or Magic tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
+- **Interactive demo**: `demolens interactive demo.json` (or the Auto edit tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot, or hover a window and click to snap to its exact frame (hold Alt, Option on a Mac, to turn snapping off). Edges snap to nearby window and screen edges while you drag.
 - **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
-- **Make it demo-ready**: one button (or `D`, or `demolens ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
-- **Editor comforts**: dark and light themes, undo and redo, a timeline you can zoom and scrub, draggable zoom segments, keyboard shortcuts for everything (press `?`). Opening a video also loads the event log next to it.
-- **Local AI** (optional, offline, see below): captions, auto cut of filler words and long pauses, auto blur of emails, API keys and card numbers, and written docs (title, chapters, step by step guide, social post).
+- **Auto edit**: one button (or `D`, or `demolens ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
+- **Editor**: dark and light themes, an optional glass look for the app (Settings > Appearance), undo and redo, a timeline you can zoom and scrub, and keyboard shortcuts for most actions (press `?`). Opening a video also loads the event log next to it.
+- **Local models** (optional, offline, see below): captions, auto cut of filler words and long pauses, blur for emails, API keys and card numbers, and written docs (title, chapters, a step by step guide, a social post).
 - **Audio cleanup**: background noise removal and mute.
 - **Export**: MP4 (H.264 + AAC), WebM (VP9 + Opus) or GIF (palette optimised), 480p to 4K, in 16:9, 9:16 or 1:1, with presets for YouTube, Reels and Shorts, feed posts and READMEs. An untouched recording is remuxed without re-encoding.
-- **Optional cloud AI and storage**: bring your own key for OpenAI, Anthropic, Gemini, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs or any OpenAI compatible endpoint, and your own S3 or R2 bucket. Off by default; see [Cloud AI](#cloud-ai-optional).
+- **Optional cloud providers and storage**: bring your own key for OpenAI, Anthropic, Gemini, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs or any OpenAI compatible endpoint, and your own S3 or R2 bucket. Off by default; see [Cloud providers](#cloud-providers-optional).
 
 ## How it works
 
@@ -116,9 +124,9 @@ JSON Lines. The first line is a header, then one event per line. Times are milli
 
 Clicks and typing bursts (3 or more keys with less than 0.9 s between them; shortcuts do not count) become activity points. Points closer than 1.8 s are grouped. Each group becomes a segment that starts 0.5 s before the first event and holds 1.4 s after the last one, with a minimum length and clamping to the video. Overlapping segments are merged. At render time the camera eases in and out with a cubic curve, follows the smoothed cursor, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/demolens-core/src/zoom.rs`.
 
-## Local AI
+## Local models
 
-By default all AI features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it (models come from Hugging Face, GitHub and AWS and are SHA-256 checked). Without any model installed, DemoLens works exactly as before and each AI button tells you which model it needs.
+By default the captioning, cutting, blurring and writing features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it (models come from Hugging Face, GitHub and AWS and are SHA-256 checked). Without any model installed, everything else still works and each button tells you which model it needs.
 
 Open **Models...** in the app (or run `demolens models list`) to see, download and delete models. They live in `~/.config/demolens/models` (the platform config folder on macOS and Windows). Once downloaded, everything works with no network.
 
@@ -149,9 +157,9 @@ Honest limits: Whisper often drops filler words or writes them as real words, so
 
 ![Generated docs](docs/media/docs.png)
 
-## Cloud AI (optional)
+## Cloud providers (optional)
 
-Off by default. Open **Settings > Cloud AI**, paste your own key (stored in the OS keychain, shown masked, removable) and tick a task for a provider. Ticking shows a notice that the data leaves your device and records the date. Every call then shows exactly what is sent, its size, the provider, the endpoint and links to their terms and privacy policy, and you can cancel.
+Off by default. Open **Settings > Cloud & API keys**, paste your own key (stored in the OS keychain, shown masked, removable) and tick a task for a provider. Ticking shows a notice that the data leaves your device and records the date. Every call then shows exactly what is sent, its size, the provider, the endpoint and links to their terms and privacy policy, and you can cancel.
 
 | Provider | Speech to text | Writing docs | Text to speech |
 |----------|---|---|---|
@@ -167,7 +175,7 @@ Off by default. Open **Settings > Cloud AI**, paste your own key (stored in the 
 
 Speech to text sends only the audio track as 16 kHz mono WAV. Writing sends only the transcript and chapter timings. Video and event logs are never sent.
 
-**Storage:** in **Settings > Storage**, add an S3 or Cloudflare R2 bucket. After an export, "Upload and copy a private link" uploads the video as a private object (encrypted at rest on S3) and copies a signed link that expires after 24 hours by default (7 days at most). Event logs and project files are refused.
+**Storage:** in **Settings > Upload (S3)**, add an S3 or Cloudflare R2 bucket. After an export, "Upload and copy a private link" uploads the video as a private object (encrypted at rest on S3) and copies a signed link that expires after 24 hours by default (7 days at most). Event logs and project files are refused.
 
 These integrations are tested against mocked HTTP servers. They follow each provider's public API, but not every provider has been tried live.
 
@@ -175,9 +183,9 @@ These integrations are tested against mocked HTTP servers. They follow each prov
 
 DemoLens runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
 
-- **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press and when you type, not the characters you type. Cursor moves and clicks are logged for auto zoom. A REC badge is always visible while recording.
+- **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press and when you type, not the characters you type. Cursor moves and clicks are logged for auto zoom. The recording pill is visible while recording.
 - **Where it goes:** `Videos/DemoLens/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
-- **Network use:** only when you download AI models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `DEMOLENS_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
+- **Network use:** only when you download models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `DEMOLENS_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
 - **Auto blur helps but is not perfect.** Always watch your export before sharing.
 - **Recording other people:** if your screen, mic or calls include other people, you are responsible for telling them and having a lawful reason under laws such as GDPR or India's DPDP Act.
 
@@ -274,7 +282,7 @@ demolens sample samples          # synthetic app video + event log + project
 demolens export samples/sample.demolens.json -o demo.mp4
 ```
 
-Local AI from the command line:
+Models from the command line:
 
 ```sh
 demolens models list
@@ -293,12 +301,12 @@ Run the tests with `cargo test -p demolens-core -p demolens-ai`.
 
 ## Roadmap
 
-Done: drawn blur boxes, a visual area picker, webcam overlay, optional cloud AI and storage, one click demo-ready, templates, new editor layout and timeline, shortcuts, installers for all OSes, local captions, auto cut, auto blur of sensitive text, noise cleanup, local docs writer, undo and redo, native file dialogs.
+Done: blur boxes, a visual area picker with window snapping, webcam overlay, optional cloud providers and storage, auto edit, templates, glass frame and glass app look, configurable recording shortcuts, markers, installers for all three systems, local captions, auto cut, blur of sensitive text, noise cleanup, a local docs writer, undo and redo.
 
 - Bundled ffmpeg and signed builds.
 - Wayland capture through the PipeWire portal (Wayland is not supported yet; use an X11 session).
 - Intel Mac builds. The release ships Apple Silicon only; Intel Macs can build from source with `cargo build --release --target x86_64-apple-darwin`.
-- Local AI voiceover with Piper, to replace or fix narration.
+- Local voiceover with Piper, to replace or fix narration.
 - Loudness normalisation for the mic track.
 - System audio on macOS through SCStream, and Windows.Graphics.Capture plus WASAPI loopback (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.

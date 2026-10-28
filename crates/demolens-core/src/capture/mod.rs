@@ -440,6 +440,11 @@ impl RecordingSession {
         self.logger.is_paused()
     }
 
+    /// Drop a marker at the cursor. False while paused.
+    pub fn mark(&self) -> bool {
+        self.logger.mark()
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }

@@ -20,6 +20,9 @@ demolens-ai = { path = "../crates/demolens-ai" }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 

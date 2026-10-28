@@ -3,8 +3,13 @@
 // Uses helpers from main.js ($, invoke, modal, status, fail, esc) at call time.
 
 let recSource = { target: { type: 'screen', display: 0 }, label: 'Entire screen', kind: 'screen' };
+// Set when a "record an area / window" shortcut opened the picker: choosing
+// a source then starts the recording straight away.
+let pkThen = false;
+let pkSel = null; // the area box, kept when the screenshot is retaken
 function setRecSource(target, label, kind) {
   recSource = { target, label, kind };
+  if (pkThen) { pkThen = false; setTimeout(() => { if (!recording) $('rec-btn').click(); }, 200); }
   $('rec-source-label').textContent = label;
   $('rec-source').dataset.kind = kind;
   $('rec-source').title = 'What to record: ' + label + '. Click to change.';
@@ -53,9 +58,10 @@ function pkCard(s) {
   el.innerHTML = `<div class="pk-thumb"><span class="pk-skel"></span><span class="pk-none">${s.kind === 'display' ? '' : 'No preview'}</span></div>
     <div class="pk-meta"><span class="pk-icon${s.kind === 'display' ? ' disp' : ''}" style="--h:${pkHue(s.app)}">${s.kind === 'display' ? '<svg class="ico"><use href="#i-monitor"/></svg>' : esc(initial)}</span><span class="pk-text"><b>${esc(name)}</b><small>${esc(sub)}</small></span></div>`;
   el.onclick = () => {
+    const then = pkThen;
     setRecSource(s.kind === 'display' ? { type: 'screen', display: +s.id } : { type: 'window', id: s.id }, s.kind === 'display' ? s.title : (s.app ? `${s.app}: ${s.title}` : s.title), s.kind === 'display' ? 'screen' : 'window');
     $('modal').close();
-    status('Will record: ' + recSource.label + '. Press Record when you are ready.', 'info');
+    status(then ? 'Starting: ' + recSource.label : 'Will record: ' + recSource.label + '. Press Record when you are ready.', 'info');
   };
   return el;
 }
@@ -66,9 +72,10 @@ function pkRenderList(host, items, empty) {
   items.forEach(s => { const c = pkCard(s); host.appendChild(c); pkObserver.observe(c); });
 }
 
-async function openPicker(tab = 'screens') {
+async function openPicker(tab = 'screens', opts = {}) {
+  pkThen = !!opts.record; pkSel = null;
   $('modal').classList.add('wide');
-  $('modal').addEventListener('close', () => { $('modal').classList.remove('wide'); pkQueue.length = 0; }, { once: true });
+  $('modal').addEventListener('close', () => { $('modal').classList.remove('wide'); pkQueue.length = 0; pkThen = false; }, { once: true });
   modal('What do you want to record?', `<div class="pk-bar">
       <div class="seg pk-tabs" role="tablist"><button role="tab" data-tab="screens">Screens</button><button role="tab" data-tab="windows">Windows</button><button role="tab" data-tab="area">Area</button></div>
       <input id="pk-search" class="field" type="search" placeholder="Search windows" aria-label="Search windows" />
@@ -80,7 +87,8 @@ async function openPicker(tab = 'screens') {
     tab = t;
     document.querySelectorAll('.pk-tabs button').forEach(b => b.setAttribute('aria-checked', b.dataset.tab === t));
     $('pk-search').hidden = t !== 'windows';
-    $('pk-refresh').hidden = t === 'area';
+    $('pk-refresh').textContent = t === 'area' ? 'Retake screenshot' : 'Refresh';
+    $('pk-refresh').title = t === 'area' ? 'Take a new screenshot and read the window list again. Your box is kept.' : 'Look again';
     if (t === 'area') return pkArea(body);
     if (err) return (body.innerHTML = `<div class="pk-empty"><b>Could not list what is on screen.</b><br>${esc(err)}</div>`);
     if (!sources) return (body.innerHTML = '<div class="pk-grid">' + '<div class="pk-card skel"><div class="pk-thumb"><span class="pk-skel"></span></div></div>'.repeat(3) + '</div>');
@@ -97,7 +105,7 @@ async function openPicker(tab = 'screens') {
   };
   document.querySelectorAll('.pk-tabs button').forEach(b => (b.onclick = () => show(b.dataset.tab)));
   $('pk-search').oninput = () => show('windows');
-  $('pk-refresh').onclick = () => { pkThumbs.clear(); load(); };
+  $('pk-refresh').onclick = () => { if (tab === 'area') return pkArea(body); pkThumbs.clear(); load(); };
   if (tab === 'area') show('area');
   load();
 }
@@ -114,13 +122,23 @@ async function pkArea(body) {
   if (!$('modal').open || !$('pk-body')) return;
   const W = s.w, H = s.h;
   const wins = Snap.usableWindows(sources, W, H), edges = Snap.edgeTargets(wins, W, H);
-  let aspect = 0, sel = null, snapOn = true;
+  let aspect = 0, sel = pkSel, snapOn = true;
   body.innerHTML = `<p class="muted small">Hover a window and click to snap to it, or drag for a free area. Drag the box to move it, or a corner to resize. Hold ${/Mac/i.test(navigator.platform) ? 'Option' : 'Alt'} to turn snapping off for a moment.</p>
     <div class="pk-aspects" role="radiogroup" aria-label="Aspect ratio">${PK_ASPECTS.map(([n], i) => `<button class="chip" role="radio" data-i="${i}" aria-checked="${i === 0}">${n}</button>`).join('')}
       <span class="spacer"></span><button class="chip" id="pk-snap" aria-pressed="true" title="Snap to windows and to window and screen edges">Snap</button><button class="chip" id="pk-full">Whole screen</button></div>
     <div class="draw pk-draw" id="pk-draw"><img src="${s.url}" alt="" draggable="false" /><div class="pk-sel" id="pk-sel" hidden><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i><span class="pk-size" id="pk-size"></span></div><div class="pk-hover" id="pk-hover" hidden><span class="pk-tip" id="pk-tip"></span></div><i class="pk-guide v" id="pk-gv" hidden></i><i class="pk-guide h" id="pk-gh" hidden></i></div>
     <div class="row pk-nums"><label class="inline">X<input class="field" id="pk-x" type="number" min="0" /></label><label class="inline">Y<input class="field" id="pk-y" type="number" min="0" /></label><label class="inline">Width<input class="field" id="pk-w" type="number" min="2" /></label><label class="inline">Height<input class="field" id="pk-h" type="number" min="2" /></label>
-      <span class="spacer"></span><button class="btn primary" id="pk-use" disabled>Record this area</button></div>`;
+      <span class="spacer"></span><button class="btn primary" id="pk-use" disabled>Record this area</button></div>
+    <p class="pk-stale" id="pk-stale" role="status" hidden>The windows on screen have changed since this screenshot. <button class="link" id="pk-retake">Retake it</button></p>`;
+  // The picture is a snapshot, so it can go out of date while this tab stays open.
+  // Notice that (windows opened, closed or moved) and offer a retake instead of snapping to ghosts.
+  const sig = list => Snap.usableWindows(list, W, H).map(w => [w.id, w.x, w.y, w.w, w.h].join(':')).sort().join('|');
+  const baseSig = sig(sources);
+  const watch = setInterval(async () => {
+    if (!$('pk-draw') || $('pk-draw') !== box) return clearInterval(watch);
+    try { if (sig(await invoke('capture_sources')) !== baseSig) { $('pk-stale').hidden = false; clearInterval(watch); } } catch { }
+  }, 3000);
+  $('pk-retake').onclick = () => pkArea(body);
   const box = $('pk-draw'), el = $('pk-sel');
   const clampSel = r => {
     let { x, y, w, h } = r;
@@ -129,6 +147,7 @@ async function pkArea(body) {
     return { x, y, w, h };
   };
   const paint = () => {
+    pkSel = sel;
     el.hidden = !sel;
     $('pk-use').disabled = !sel || sel.w < 64 || sel.h < 64;
     if (!sel) return;
@@ -240,9 +259,10 @@ async function pkArea(body) {
   }));
   $('pk-use').onclick = () => {
     const r = { x: sel.x, y: sel.y, w: sel.w & ~1, h: sel.h & ~1 };
+    const then = pkThen;
     setRecSource({ type: 'area', ...r }, `Area ${r.w} x ${r.h}`, 'area');
     $('modal').close();
-    status(`Will record the ${r.w} x ${r.h} area. Press Record when you are ready.`, 'info');
+    status(then ? `Starting the ${r.w} x ${r.h} area.` : `Will record the ${r.w} x ${r.h} area. Press Record when you are ready.`, 'info');
   };
   paint();
 }

@@ -28,7 +28,7 @@ function cutSourceRange(clips, a, b) {
 function renderTranscript() {
   const box = $('tr-list'); if (!box || !project) return;
   const caps = project.captions || [];
-  $('tr-hint').textContent = caps.length ? 'Fix a word by editing it. Cut line removes that part of the video.' : 'No transcript yet. Use Transcribe in the Magic tab.';
+  $('tr-hint').textContent = caps.length ? 'Fix a word by editing it. Cut line removes that part of the video.' : 'No transcript yet. Use Transcribe in the Auto edit tab.';
   box.innerHTML = '';
   caps.forEach((c, i) => {
     const row = document.createElement('div'); row.className = 'tr-row';

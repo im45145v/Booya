@@ -9,13 +9,27 @@ if (/Mac/i.test(navigator.platform)) document.body.classList.add('mac');
 let paused = false, baseMs = 0, baseAt = performance.now(), pausedMs = 0, quietSince = null, lastLevel = 0;
 const fmt = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
+// Key hints come from the user's own bindings (Settings > Shortcuts).
+let keyText = {};
+const keyed = (label, id) => keyText[id] ? `${label} (${keyText[id]})` : label;
+async function loadKeys() {
+  try {
+    keyText = Object.fromEntries((await invoke('get_shortcuts')).actions.map(a => [a.id, a.text]));
+    $('stop').title = keyed('Stop and open in the editor', 'record_toggle');
+    $('mark').title = keyed('Drop a marker: the editor zooms to the cursor here', 'marker');
+    $('trash').title = keyed('Discard this recording', 'discard');
+    render();
+  } catch { }
+}
+loadKeys();
+
 function render() {
   $('pill').classList.toggle('paused', paused);
   $('state').textContent = paused ? 'Paused' : '';
   $('pause').innerHTML = paused
     ? '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>'
     : '<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>';
-  $('pause').title = paused ? 'Resume (Shift+Cmd/Ctrl+P)' : 'Pause: stops cursor and key logging and cuts this part (Shift+Cmd/Ctrl+P)';
+  $('pause').title = keyed(paused ? 'Resume' : 'Pause: stops cursor and key logging and cuts this part', 'pause');
   $('pause').setAttribute('aria-label', paused ? 'Resume' : 'Pause');
 }
 
@@ -35,6 +49,8 @@ setInterval(() => {
 setInterval(poll, 2000); poll();
 
 $('pause').onclick = async () => { try { paused = await invoke('pause_recording', { paused: !paused }); await poll(); render(); } catch { } };
+$('mark').onclick = async () => { try { await invoke('drop_marker'); } catch { } };
+T.event.listen('rec-marker', () => { $('mark').classList.add('flash'); setTimeout(() => $('mark').classList.remove('flash'), 600); });
 $('stop').onclick = () => invoke('request_stop').catch(() => { });
 $('trash').onclick = () => { $('confirm').hidden = false; $('no').focus(); setTimeout(() => ($('confirm').hidden = true), 6000); };
 $('no').onclick = () => ($('confirm').hidden = true);

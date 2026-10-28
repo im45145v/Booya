@@ -19,7 +19,7 @@
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/></symbol>
     <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
-    <symbol id="i-wand" viewBox="0 0 24 24"><path d="m4 20 11-11M14 4v3M18.5 5.5l-2 2M20 10h-3M12 6.5 13.5 8"/><path d="M16 2.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" fill="currentColor"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><path d="M4 7h9M4 12h16M4 17h11"/><circle cx="17" cy="7" r="2"/></symbol>
     <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
     <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/></symbol>
@@ -72,7 +72,7 @@
   </div>
   <div class="tb-group">
     <button id="theme-btn" class="btn icon ghost" title="Switch light or dark theme" aria-label="Switch theme"><svg class="ico"><use href="#i-sun"/></svg></button>
-    <button id="settings-btn" class="btn icon ghost" title="Settings: privacy, cloud AI, storage" aria-label="Settings"><svg class="ico"><use href="#i-gear"/></svg></button>
+    <button id="settings-btn" class="btn icon ghost" title="Settings: appearance, shortcuts, privacy, cloud, storage" aria-label="Settings"><svg class="ico"><use href="#i-gear"/></svg></button>
     <button id="about-btn" class="btn icon ghost" title="About DemoLens" aria-label="About DemoLens"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button>
     <button id="keys-btn" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico"><use href="#i-keyboard"/></svg></button>
     <button id="ex-top" class="btn primary needs-project" title="Export video (Ctrl+E)"><svg class="ico"><use href="#i-export"/></svg><span>Export</span></button>
@@ -86,9 +86,9 @@
       <div id="shape-layer" class="shape-layer" hidden><svg id="shape-svg" aria-hidden="true"></svg></div>
       <div id="welcome" class="welcome">
         <div class="welcome-card">
-          <img class="welcome-logo" src="logo.svg" alt="DemoLens logo" width="112" height="112">
-          <h1>Turn a screen recording into a polished demo</h1>
-          <p class="lead">Auto zoom on every click, a smooth cursor, captions, filler words cut and secrets blurred. Everything runs on this computer unless you turn on a cloud provider.</p>
+          <img class="welcome-logo" src="logo.svg" alt="DemoLens" width="40" height="40">
+          <h1>Record the screen, then tidy the recording</h1>
+          <p class="lead">DemoLens zooms in on clicks, smooths the cursor, adds captions, cuts filler words and blurs emails and keys. It all runs on this computer unless you turn on a cloud provider.</p>
           <div class="welcome-actions">
             <button id="w-sample" class="btn primary lg"><svg class="ico"><use href="#i-sample"/></svg><span>Try the sample</span></button>
             <button id="w-record" class="btn lg"><svg class="ico"><use href="#i-record"/></svg><span>Record screen</span></button>
@@ -96,10 +96,10 @@
           </div>
           <ol class="steps">
             <li><b>1</b><span>Record or open a video</span></li>
-            <li><b>2</b><span>Press <em>Make it demo-ready</em></span></li>
+            <li><b>2</b><span>Run <em>Auto edit</em></span></li>
             <li><b>3</b><span>Export for YouTube, X, Reels or a GIF</span></li>
           </ol>
-          <p class="hint">AI features are optional and offline. <button id="w-models" class="link">Manage models</button> &middot; <button id="w-keys" class="link">Shortcuts</button></p>
+          <p class="hint">Captions and blur detection use models stored on this computer. <button id="w-models" class="link">Manage models</button> &middot; <button id="w-keys" class="link">Shortcuts</button></p>
         </div>
       </div>
       <div id="busy-overlay" class="busy-overlay" hidden><div class="spinner" aria-hidden="true"></div><span id="busy-text">Working...</span></div>
@@ -126,7 +126,7 @@
 
   <aside class="inspector" aria-label="Inspector">
     <div class="tabs" role="tablist">
-      <button role="tab" class="tab" id="tab-magic" aria-controls="pane-magic" aria-selected="true"><svg class="ico"><use href="#i-wand"/></svg>Magic</button>
+      <button role="tab" class="tab" id="tab-magic" aria-controls="pane-magic" aria-selected="true"><svg class="ico"><use href="#i-auto"/></svg>Auto edit</button>
       <button role="tab" class="tab" id="tab-style" aria-controls="pane-style" aria-selected="false"><svg class="ico"><use href="#i-sun"/></svg>Style</button>
       <button role="tab" class="tab" id="tab-edit" aria-controls="pane-edit" aria-selected="false"><svg class="ico"><use href="#i-scissors"/></svg>Edit</button>
       <button role="tab" class="tab" id="tab-export" aria-controls="pane-export" aria-selected="false"><svg class="ico"><use href="#i-export"/></svg>Export</button>
@@ -134,8 +134,8 @@
 
     <div class="pane" id="pane-magic" role="tabpanel" aria-labelledby="tab-magic">
       <div class="card hero">
-        <h2><svg class="ico"><use href="#i-wand"/></svg> Make it demo-ready</h2>
-        <p class="muted">One click: zoom, captions, cuts, blur and clean audio. Steps without a model are skipped and explained.</p>
+        <h2>Auto edit</h2>
+        <p class="muted">Runs the steps you tick, in order. A step that needs a model you have not installed is skipped, and the list below says why.</p>
         <div class="checks">
           <label><input type="checkbox" id="r-zoom" checked /> Auto zoom on clicks and typing</label>
           <label><input type="checkbox" id="r-captions" checked /> Captions <span class="pill" id="pill-speech"></span></label>
@@ -143,11 +143,11 @@
           <label><input type="checkbox" id="r-blur" checked /> Blur emails, keys, cards, IDs and passwords <span class="pill" id="pill-ocr"></span></label>
           <label><input type="checkbox" id="r-denoise" checked /> Remove background noise</label>
         </div>
-        <button id="ready-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-wand"/></svg><span>Make it demo-ready</span></button>
+        <button id="ready-btn" class="btn primary block lg needs-project"><svg class="ico"><use href="#i-auto"/></svg><span>Run auto edit</span></button>
         <ul id="ready-report" class="report" aria-live="polite"></ul>
       </div>
 
-      <h3 class="section">AI status <span class="badge" id="ai-badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
+      <h3 class="section">Models <span class="badge" id="ai-badge" title="Models run on this computer. Nothing is uploaded.">offline</span></h3>
       <div class="card ai-status" id="ai-status" aria-live="polite"><p class="muted small">Checking...</p></div>
       <div class="row ai-actions">
         <button id="ai-dl-all" class="btn primary" hidden><svg class="ico"><use href="#i-chip"/></svg><span>Download recommended models</span></button>
@@ -155,7 +155,7 @@
       </div>
       <div class="bar-wrap" id="ai-dl-wrap" hidden><div class="bar"><div id="ai-dl-bar"></div></div><small class="muted" id="ai-dl-text"></small></div>
 
-      <h3 class="section">AI tools</h3>
+      <h3 class="section">Tools</h3>
       <div class="tool-list">
         <button id="ai-transcribe" class="tool needs-project"><svg class="ico"><use href="#i-captions"/></svg><span><b>Transcribe</b><small>Captions and word timings</small></span></button>
         <button id="ai-autocut" class="tool needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span><b>Auto cut</b><small>Remove fillers and pauses</small></span></button>
@@ -202,6 +202,18 @@
       <label class="slider">Corners <input id="radius" type="range" min="0" max="0.06" step="0.002" /></label>
       <label class="slider">Shadow <input id="shadow" type="range" min="0" max="0.1" step="0.002" /></label>
 
+      <h3 class="section">Glass</h3>
+      <label class="switch" title="Put the recording on a frosted, blurred glass panel, and make captions, notes and keys frosted too"><input type="checkbox" id="gl-on" /> Frosted glass frame</label>
+      <div id="gl-opts">
+        <label class="slider">Blur <input id="gl-blur" type="range" min="0" max="0.05" step="0.002" /></label>
+        <label class="slider">Tint <input id="gl-tint-op" type="range" min="0" max="0.6" step="0.01" /></label>
+        <label class="inline">Tint colour <input id="gl-tint" type="color" value="#ffffff" /></label>
+        <label class="slider">Edge light <input id="gl-hi" type="range" min="0" max="1" step="0.05" /></label>
+        <label class="slider">Glass corners <input id="gl-radius" type="range" min="0" max="0.1" step="0.002" /></label>
+        <label class="slider">Inset <input id="gl-inset" type="range" min="0" max="0.07" step="0.002" /></label>
+        <label class="switch"><input type="checkbox" id="gl-over" /> Glass captions, notes and keys</label>
+      </div>
+
       <h3 class="section">Cursor</h3>
       <label class="switch"><input type="checkbox" id="cur-visible" /> Show cursor</label>
       <label class="slider">Size <input id="cur-size" type="range" min="0.5" max="4" step="0.1" /></label>
@@ -242,7 +254,7 @@
       <label class="slider" title="How long each zoom takes to ease in. Higher is slower and smoother.">Speed <input id="zc-ease" type="range" min="500" max="2000" step="100" /><output id="zc-ease-out">1.0 s</output></label>
       <label class="slider" title="How far auto zoom goes in.">Level <input id="zc-level" type="range" min="1.2" max="3" step="0.1" /><output id="zc-level-out">1.7x</output></label>
       <label class="slider" title="High keeps the view still while the cursor roams and follows only when it nears the edge. Low follows every move.">Steadiness <input id="zc-steady" type="range" min="0" max="1" step="0.05" /><output id="zc-steady-out">65%</output></label>
-      <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-wand"/></svg><span>Apply to auto zoom</span></button></div>
+      <div class="row"><button id="zc-apply" class="btn needs-project" title="Rebuild the automatic zooms with these settings. Zooms you added by hand are replaced too."><svg class="ico"><use href="#i-auto"/></svg><span>Apply to auto zoom</span></button></div>
 
       <h3 class="section">Audio</h3>
       <label class="switch"><input type="checkbox" id="aud-normalize" /> Even out the loudness (-16 LUFS)</label>
@@ -266,7 +278,7 @@
       <p class="muted small" id="zoom-info">Select a zoom segment on the timeline. Drag it to move it, drag its edges to resize.</p>
       <label class="slider">Scale <input id="zoom-scale" type="range" min="1.1" max="4" step="0.1" value="2" /><output id="zoom-scale-out">2.0x</output></label>
       <label class="switch"><input type="checkbox" id="zoom-follow" checked /> Follow the cursor</label>
-      <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-wand"/></svg><span>Regenerate auto zoom</span></button></div>
+      <div class="row"><button id="auto-zoom" class="btn needs-project" title="Rebuild zooms from clicks and typing"><svg class="ico"><use href="#i-auto"/></svg><span>Regenerate auto zoom</span></button></div>
 
       <h3 class="section">Callouts</h3>
       <p class="muted small">Short notes on the video, such as "Click here". Added at the playhead.</p>
@@ -328,6 +340,7 @@
   <div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="btn icon ghost" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button></div>
   <div id="modal-body"></div>
 </dialog>
+<script src="shortcuts.js"></script>
 <script src="timeline.js"></script>
 <script src="main.js"></script>
 <script src="snap.js"></script>

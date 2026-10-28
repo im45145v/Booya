@@ -64,6 +64,8 @@ struct Shared {
     /// Start of the current pause, if paused.
     paused_at: Option<Instant>,
     pauses: Vec<(Instant, Instant)>,
+    /// Last cursor position seen, relative to the recorded region.
+    last_pos: (f64, f64),
 }
 
 impl Shared {
@@ -92,7 +94,7 @@ pub struct Logged {
 
 impl InputLogger {
     pub fn start(region: Region, keys: KeyLogging) -> Result<Self> {
-        let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new() }));
+        let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new(), last_pos: (region.w as f64 / 2.0, region.h as f64 / 2.0) }));
         let poller = poll::spawn(shared.clone(), region);
         let mut me = Self { shared, keys, hook: None, poller, keypoll: None };
         me.start_hook();
@@ -102,7 +104,7 @@ impl InputLogger {
     /// A logger that records nothing (used as a placeholder).
     pub fn idle() -> Self {
         Self {
-            shared: Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: false, paused_at: None, pauses: Vec::new() })),
+            shared: Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: false, paused_at: None, pauses: Vec::new(), last_pos: (0.0, 0.0) })),
             keys: KeyLogging::Off,
             hook: None,
             poller: None,
@@ -167,6 +169,18 @@ impl InputLogger {
 
     pub fn is_paused(&self) -> bool {
         self.shared.lock().unwrap().paused_at.is_some()
+    }
+
+    /// Drop a marker at the cursor's current position. Returns false (and
+    /// records nothing) while paused or not recording.
+    pub fn mark(&self) -> bool {
+        let mut s = self.shared.lock().unwrap();
+        if !s.active || s.paused_at.is_some() {
+            return false;
+        }
+        let (x, y) = s.last_pos;
+        s.push(Instant::now(), crate::events::EventKind::Mark { x, y });
+        true
     }
 
     /// Total time spent paused so far (finished pauses plus the current one).
@@ -365,6 +379,7 @@ mod poll {
                 if !evs.is_empty() {
                     last_change = now;
                     let mut s = shared.lock().unwrap();
+                    s.last_pos = pos;
                     for k in evs {
                         s.push(now, k);
                     }

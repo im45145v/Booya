@@ -4,7 +4,7 @@ Researched on 28 October 2026 from each vendor's own pricing and feature pages (
 
 ## The short version
 
-DemoLens is a **free, open source (MIT), local-first** recorder and editor for polished product demos on macOS, Windows and Linux. Nothing is uploaded unless you turn on a cloud provider or your own S3 bucket, and you are shown what would be sent first. The tools below are mostly paid subscriptions, and the ones with AI features run them in the vendor's cloud.
+DemoLens is a **free, open source (MIT), local-first** recorder and editor for product demos on macOS, Windows and Linux. Nothing is uploaded unless you turn on a cloud provider or your own S3 bucket, and you are shown what would be sent first. The tools below are mostly paid subscriptions, and the ones with AI features run them in the vendor's cloud.
 
 ## Comparison
 
@@ -35,7 +35,7 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 ## What DemoLens does better
 
 1. **Free and open, with nothing held back.** No plan, no watermark, no export limit, no seat count. Screen Studio will not export without a subscription; Loom's free plan stops at 25 videos of 5 minutes.
-2. **Local-first by default.** Captions (Whisper), secret detection (OCR), noise removal and doc writing all run on your computer. Screen Studio is the only other tool here that does much on-device, and it is Mac only. Cloud AI in DemoLens is off until you choose a provider, per task, and each request shows the endpoint and data first.
+2. **Local-first by default.** Captions (Whisper), secret detection (OCR), noise removal and doc writing all run on your computer. Screen Studio is the only other tool here that does much on-device, and it is Mac only. Cloud providers in DemoLens are off until you choose a provider, per task, and each request shows the endpoint and data first.
 3. **Automatic secret blurring.** None of the others find emails, API keys, card numbers and Indian IDs (Aadhaar, PAN, UPI) for you; they give you a blur brush.
 4. **Cross-platform.** One tool on macOS, Windows and Linux. Screen Studio is Mac only; Cap has no Linux app.
 5. **Your storage.** Share through your own S3 or Cloudflare R2 bucket with a signed, expiring link. There is no vendor server in the middle.
@@ -43,11 +43,11 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 7. **Honest diagnostics.** `demolens doctor` and `demolens verify` tell you what is wrong with permissions, audio level and sync instead of leaving you guessing.
 8. **Audio that is audible.** Two-pass loudness to -16 LUFS on export and in the editor, a mic level meter before you record, and a quiet-mic warning.
 
-## Where 0.3.2 stands against that list
+## Where 0.4.0 stands against that list
 
 | Idea | Status |
 |---|---|
-| Interactive HTML demo from the event log | Done: `demolens interactive` and Magic tab, Export tab share |
+| Interactive HTML demo from the event log | Done: `demolens interactive` and the Auto edit tab, Export tab share |
 | Auto chapters and titles, local | Done earlier through the docs pipeline (rule based, optional local LLM); no separate chapter UI yet |
 | Webcam layouts | Bubble and side by side, mirror, shows in the preview; a layout that changes over time is not done |
 | Instant share | Signed link to your own S3 or R2 for videos and interactive demos; no hosted viewer |
@@ -55,6 +55,9 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 | Intro and outro, callouts, watermark, background photos | Done; 0.3.1 adds arrows, boxes, ellipses and highlights, and twelve wallpapers |
 | Visual window and area picker | Done in 0.3.1: live previews, app icons, search, drag to select with aspect presets. 0.3.2 adds hover to snap (highlight a window, click to take its frame) and snap to edges while dragging. macOS parts untested on hardware |
 | macOS key track | Written (Input Monitoring poller), not yet run on a real Mac |
+| Glass look | Done in 0.4.0: a frosted frame for the export (blur, tint, edge light, radius) and the same look for captions, notes and keys; an optional glass look for the app, with macOS system vibrancy. The macOS vibrancy part has not been run on a Mac |
+| Rebindable recording shortcuts | Done in 0.4.0: Settings > Shortcuts, with clash checks. Registration with the OS has been compiled, not run on all three systems |
+| Markers while recording | Done in 0.4.0: a shortcut or the pill button adds a zoom to the cursor at that moment |
 | Multi-clip projects | Not done |
 | Script cleanup and voice retakes | Not done (needs a local TTS model) |
 | iPhone capture over USB | Not done |

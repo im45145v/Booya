@@ -247,7 +247,7 @@ impl Default for ReadyOptions {
     }
 }
 
-/// One click "make it demo-ready": auto zoom, transcribe and caption, cut
+/// Auto edit in one call: auto zoom, transcribe and caption, cut
 /// filler words and long pauses, blur secrets and clean up the audio. Steps
 /// whose model is missing are skipped with a note instead of failing.
 pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f64, &str)) -> ReadyReport {

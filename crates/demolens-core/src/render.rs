@@ -313,6 +313,65 @@ fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [
     }
 }
 
+/// Frosted glass over a rounded rectangle of `f`: what is under it is blurred,
+/// tinted and lit, and the edge gets a bright rim that is strongest towards the
+/// top left (like light catching a glass pane). `alpha` fades all of it.
+#[allow(clippy::too_many_arguments)]
+pub fn frost_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, radius: f64, blur_px: f64, tint: [f32; 3], tint_op: f32, highlight: f32, alpha: f32) {
+    if alpha <= 0.0 || w < 2.0 || h < 2.0 {
+        return;
+    }
+    let x0 = (x.floor() as i64).max(0);
+    let y0 = (y.floor() as i64).max(0);
+    let x1 = ((x + w).ceil() as i64).min(f.w as i64);
+    let y1 = ((y + h).ceil() as i64).min(f.h as i64);
+    if x1 <= x0 + 1 || y1 <= y0 + 1 {
+        return;
+    }
+    let (rw, rh) = ((x1 - x0) as u32, (y1 - y0) as u32);
+    // Blur a copy of the region, so the frost only ever shows what is behind the glass.
+    let mut tile = Frame::new(rw, rh);
+    for row in 0..rh as usize {
+        let src = ((y0 as usize + row) * f.w as usize + x0 as usize) * 4;
+        let dst = row * rw as usize * 4;
+        tile.data[dst..dst + rw as usize * 4].copy_from_slice(&f.data[src..src + rw as usize * 4]);
+    }
+    if blur_px >= 1.0 {
+        let b = BlurBox { x: 0.0, y: 0.0, w: rw as f64, h: rh as f64, start_ms: 0.0, end_ms: 0.0, radius: (blur_px * 2.0).round().max(2.0) as u32 };
+        blur_region(&mut tile, &b);
+    }
+    let (cx, cy, hw, hh) = (x + w / 2.0, y + h / 2.0, w / 2.0, h / 2.0);
+    let radius = radius.clamp(0.0, hw.min(hh));
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let (fx, fy) = (px as f64 + 0.5, py as f64 + 0.5);
+            let d = sd_round_rect(fx, fy, cx, cy, hw, hh, radius);
+            let cov = (0.5 - d).clamp(0.0, 1.0) as f32;
+            if cov > 0.0 {
+                let ti = (((py - y0) as usize) * rw as usize + (px - x0) as usize) * 4;
+                // Lighter towards the top, like a lit pane.
+                let sheen = (1.0 - ((fy - y) / h).clamp(0.0, 1.0)) as f32 * 0.07;
+                let mut c = [0f32; 3];
+                for k in 0..3 {
+                    let v = tile.data[ti + k] as f32 * (1.0 - tint_op) + tint[k] * tint_op;
+                    c[k] = v + (255.0 - v) * sheen;
+                }
+                f.blend(px, py, c, cov * alpha);
+            }
+            let rim = (1.4 - (d + 0.7).abs()).clamp(0.0, 1.0) as f32;
+            if rim > 0.0 && highlight > 0.0 {
+                // Outward normal from the distance field.
+                let nx = sd_round_rect(fx + 1.0, fy, cx, cy, hw, hh, radius) - sd_round_rect(fx - 1.0, fy, cx, cy, hw, hh, radius);
+                let ny = sd_round_rect(fx, fy + 1.0, cx, cy, hw, hh, radius) - sd_round_rect(fx, fy - 1.0, cx, cy, hw, hh, radius);
+                let n = (nx * nx + ny * ny).sqrt().max(1e-9);
+                let toward = ((-nx / n) * 0.7071 + (-ny / n) * 0.7071) as f32;
+                let wgt = 0.30 + 0.70 * toward.max(0.0) + 0.35 * (-toward).max(0.0);
+                f.blend(px, py, [255.0; 3], (highlight * wgt * rim * alpha).min(1.0));
+            }
+        }
+    }
+}
+
 /// Layout of the recording on the canvas.
 #[derive(Debug, Clone, Copy)]
 pub struct Layout {
@@ -334,6 +393,9 @@ pub struct Renderer {
     /// The plain backdrop, used behind title cards.
     card_bg: Frame,
     pub layout: Layout,
+    /// The glass panel behind the recording (glass style only).
+    pub panel: Option<Layout>,
+    glass: crate::project::Glass,
 }
 
 fn lerp3(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
@@ -370,7 +432,10 @@ impl Renderer {
         };
         let background = Self::paint_background(&project.style.background, out_w, out_h, bg_image);
         let short = out_w.min(out_h) as f64;
-        let pad = project.style.padding.clamp(0.0, 0.4) * short;
+        let glass = project.style.glass.clamped();
+        let inset_px = if glass.enabled { (glass.inset * short).round() } else { 0.0 };
+        // With glass, the panel needs its own margin around the recording.
+        let pad = project.style.padding.clamp(0.0, 0.4) * short + inset_px;
         // A side-by-side webcam takes a column off the screen's side.
         let col = Self::side_column(&project, out_w, out_h);
         let (aw, ah) = (out_w as f64 - 2.0 * pad - col.map(|c| c.0).unwrap_or(0.0), out_h as f64 - 2.0 * pad);
@@ -388,10 +453,22 @@ impl Renderer {
             h,
             radius: (project.style.corner_radius * short).min(w.min(h) / 2.0),
         };
+        let mut layout = layout;
+        let panel = glass.enabled.then(|| {
+            let (pw, ph) = (layout.w + 2.0 * inset_px, layout.h + 2.0 * inset_px);
+            let pr = (glass.radius * short).min(pw.min(ph) / 2.0);
+            // Concentric corners: the recording's radius follows the panel's.
+            layout.radius = layout.radius.max((pr - inset_px).max(0.0)).min(layout.w.min(layout.h) / 2.0);
+            Layout { x: layout.x - inset_px, y: layout.y - inset_px, w: pw, h: ph, radius: pr }
+        });
         let card_bg = background.clone();
         let mut background = background;
-        Self::bake_shadow(&mut background, &project, layout, out_w, out_h);
-        Self { project, out_w, out_h, track, clicks, labels, background, card_bg, layout }
+        Self::bake_shadow(&mut background, &project, panel.unwrap_or(layout), out_w, out_h);
+        if let Some(pl) = panel {
+            let t = glass.tint.map(|v| v as f32);
+            frost_rect(&mut background, pl.x, pl.y, pl.w, pl.h, pl.radius, glass.blur * short, t, glass.tint_opacity as f32, glass.highlight as f32, 1.0);
+        }
+        Self { project, out_w, out_h, track, clicks, labels, background, card_bg, layout, panel, glass }
     }
 
     /// The drop shadow never changes between frames, so it is painted into the
@@ -453,6 +530,19 @@ impl Renderer {
         f
     }
 
+    /// The plate behind captions, callouts and key labels: a dark translucent
+    /// pill, or frosted glass when the glass style is on. `fade` is 0 to 1.
+    #[allow(clippy::too_many_arguments)]
+    fn plate(&self, out: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32, fade: f32) {
+        let g = &self.glass;
+        if g.enabled && g.overlays {
+            let short = self.out_w.min(self.out_h) as f64;
+            frost_rect(out, x, y, w, h, r, (g.blur * short * 0.7).max(3.0), [18.0, 20.0, 28.0], 0.55, g.highlight as f32, fade);
+        } else {
+            fill_round_rect(out, x, y, w, h, r, rgb, alpha * fade);
+        }
+    }
+
     fn caption_at(&self, src_t: f64) -> Option<&crate::project::Caption> {
         if !self.project.caption_style.burn_in {
             return None;
@@ -478,7 +568,7 @@ impl Renderer {
         let block_w = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.4;
         let bx = (self.out_w as f32 - block_w) / 2.0;
         let by = self.out_h as f32 - block_h - (short as f32 * 0.05);
-        fill_round_rect(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32);
+        self.plate(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32, 1.0);
         // Which word is being spoken now (by index into the caption's words).
         let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
         let col = st.color.map(|v| v as f32);
@@ -722,7 +812,7 @@ impl Renderer {
                     cursor || click
                 };
                 let by = if hits(bottom) && !hits(top) { top } else { bottom };
-                fill_round_rect(&mut out, bx, by, bw, bh, bh * 0.3, [15.0, 15.0, 18.0], 0.82 * a);
+                self.plate(&mut out, bx, by, bw, bh, bh * 0.3, [15.0, 15.0, 18.0], 0.82, a);
                 text::draw(&mut out, (bx + padx) as f32, (by + pady) as f32, px, &text, [250.0, 250.0, 250.0], a);
             }
         }
@@ -829,7 +919,7 @@ impl Renderer {
             let bh = lh * lines.len() as f32 + pad * 1.2;
             let bx = (c.x.clamp(0.0, 1.0) as f32 * self.out_w as f32 - bw / 2.0).clamp(4.0, (self.out_w as f32 - bw - 4.0).max(4.0));
             let by = (c.y.clamp(0.0, 1.0) as f32 * self.out_h as f32 - bh / 2.0).clamp(4.0, (self.out_h as f32 - bh - 4.0).max(4.0));
-            fill_round_rect(out, bx as f64, by as f64, bw as f64, bh as f64, (bh * 0.32) as f64, [20.0, 20.0, 26.0], 0.86 * k);
+            self.plate(out, bx as f64, by as f64, bw as f64, bh as f64, (bh * 0.32) as f64, [20.0, 20.0, 26.0], 0.86, k);
             for (i, line) in lines.iter().enumerate() {
                 let x = bx + (bw - text::measure(line, px)) / 2.0;
                 text::draw(out, x, by + pad * 0.6 + i as f32 * lh, px, line, [255.0, 255.0, 255.0], k);
@@ -1148,5 +1238,89 @@ mod mesh_tests {
         let s = serde_json::to_string(&b).unwrap();
         assert!(s.contains("\"type\":\"mesh\""));
         assert_eq!(serde_json::from_str::<Background>(&s).unwrap(), b);
+    }
+}
+
+#[cfg(test)]
+mod glass_tests {
+    use super::*;
+
+    fn checker(w: u32, h: u32) -> Frame {
+        let mut f = Frame::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if (x / 4 + y / 4) % 2 == 0 { 230 } else { 20 };
+                let i = ((y * w + x) * 4) as usize;
+                f.data[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        f
+    }
+
+    fn at(f: &Frame, x: u32, y: u32) -> u8 {
+        f.data[((y * f.w + x) * 4) as usize]
+    }
+
+    #[test]
+    fn frost_blurs_inside_and_leaves_the_outside_alone() {
+        let before = checker(200, 120);
+        let mut f = before.clone();
+        frost_rect(&mut f, 40.0, 30.0, 120.0, 60.0, 12.0, 8.0, [255.0; 3], 0.0, 0.0, 1.0);
+        assert_eq!(at(&f, 5, 5), at(&before, 5, 5), "outside must not change");
+        assert_eq!(at(&f, 195, 115), at(&before, 195, 115));
+        // The checkerboard collapses towards its mean inside.
+        let spread = |fr: &Frame| {
+            let v: Vec<u8> = (40..60).map(|x| at(fr, x, 60)).collect();
+            *v.iter().max().unwrap() as i32 - *v.iter().min().unwrap() as i32
+        };
+        assert!(spread(&f) < spread(&before) / 2, "frost should blur: {} vs {}", spread(&f), spread(&before));
+    }
+
+    #[test]
+    fn the_rim_light_is_stronger_at_the_top_left_than_the_bottom_right() {
+        let mut f = Frame::new(200, 120);
+        for px in f.data.chunks_exact_mut(4) {
+            px.copy_from_slice(&[40, 40, 40, 255]);
+        }
+        frost_rect(&mut f, 20.0, 20.0, 160.0, 80.0, 16.0, 0.0, [40.0; 3], 0.0, 1.0, 1.0);
+        let rim = |x: u32, y: u32| (0..4).map(|d| at(&f, x, y + d)).max().unwrap();
+        // Top edge, left of centre, versus the bottom edge, right of centre.
+        let top_left = (0..4).map(|d| at(&f, 50, 20 + d)).max().unwrap();
+        let bottom_right = (0..4).map(|d| at(&f, 150, 96 + d)).max().unwrap();
+        assert!(top_left > bottom_right, "top left {top_left} should beat bottom right {bottom_right}");
+        assert!(top_left > 120, "rim should be visibly bright, got {top_left}");
+        let _ = rim;
+    }
+
+    #[test]
+    fn glass_adds_a_panel_around_a_smaller_recording() {
+        let mut p = Project::new("a.mp4".into(), None, 1920, 1080, 5000.0);
+        let plain = Renderer::new(p.clone(), None, 1280, 720, None);
+        assert!(plain.panel.is_none());
+        p.style.glass.enabled = true;
+        let g = Renderer::new(p, None, 1280, 720, None);
+        let panel = g.panel.expect("glass has a panel");
+        assert!(g.layout.w < plain.layout.w, "the recording makes room for the panel");
+        assert!(panel.x < g.layout.x && panel.y < g.layout.y);
+        assert!(panel.x + panel.w > g.layout.x + g.layout.w);
+        assert!(panel.radius >= g.layout.radius);
+        assert!(panel.x >= 0.0 && panel.x + panel.w <= 1280.0 && panel.y >= 0.0 && panel.y + panel.h <= 720.0);
+    }
+
+    #[test]
+    fn glass_overlays_differ_from_the_flat_pill() {
+        use crate::project::Callout;
+        let mut p = Project::new("a.mp4".into(), None, 640, 360, 4000.0);
+        p.callouts.push(Callout { text: "Hello".into(), x: 0.5, y: 0.5, start_ms: 0.0, end_ms: 3000.0 });
+        let src = checker(640, 360);
+        let flat = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0);
+        p.style.glass.enabled = true;
+        p.style.glass.overlays = true;
+        let glass = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0);
+        assert_ne!(flat.data, glass.data);
+        // With overlays off the callout pill is the flat one again; only the frame differs.
+        p.style.glass.overlays = false;
+        let no_overlay = Renderer::new(p, None, 640, 360, None);
+        assert!(no_overlay.panel.is_some());
     }
 }

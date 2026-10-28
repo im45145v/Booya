@@ -99,6 +99,8 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         .clicks()
         .map(|(t, x, y)| Activity { t, x, y, scale: cfg.click_scale, typing: false })
         .collect();
+    // Markers are deliberate: zoom to where the cursor was when it was dropped.
+    acts.extend(log.marks().map(|(t, x, y)| Activity { t, x, y, scale: cfg.click_scale, typing: false }));
 
     // Typing bursts: runs of key presses with small gaps. Shortcuts (keys with
     // modifiers other than Shift) are not typing and do not zoom on their own.
@@ -336,6 +338,27 @@ mod tests {
     fn empty_log_has_no_zoom() {
         let segs = generate_zoom_segments(&log_with(vec![]), 10_000.0, &ZoomConfig::default());
         assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn a_marker_zooms_to_the_cursor_without_any_click() {
+        let log = log_with(vec![mv(1000.0, 100.0, 100.0), Event { t: 5000.0, kind: EventKind::Mark { x: 1500.0, y: 800.0 } }]);
+        let segs = generate_zoom_segments(&log, 12_000.0, &ZoomConfig::default());
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        assert!(segs[0].start_ms <= 5000.0 && segs[0].end_ms > 5000.0);
+        assert!(log.clicks().next().is_none(), "a marker is not a click, so no ripple is drawn");
+        assert_eq!(log.marks().count(), 1);
+    }
+
+    #[test]
+    fn markers_survive_a_save_and_load() {
+        let mut log = log_with(vec![Event { t: 10.0, kind: EventKind::Mark { x: 3.0, y: 4.0 } }]);
+        log.events.push(mv(20.0, 1.0, 2.0));
+        let path = std::env::temp_dir().join(format!("demolens-mark-{}.jsonl", std::process::id()));
+        log.save(&path).unwrap();
+        let back = EventLog::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.marks().collect::<Vec<_>>(), vec![(10.0, 3.0, 4.0)]);
     }
 
     #[test]

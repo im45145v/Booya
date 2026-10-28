@@ -84,6 +84,8 @@ function syncPanel() {
   if (b.type === 'image') $('bg-image').value = b.path;
   setFit(project.style.bg_fit || 'fill'); $('bg-dim').value = project.style.bg_dim || 0;
   $('padding').value = s.padding; $('radius').value = s.corner_radius; $('shadow').value = s.shadow;
+  { const g = s.glass || {}; $('gl-on').checked = !!g.enabled; $('gl-blur').value = g.blur ?? 0.018; $('gl-tint-op').value = g.tint_opacity ?? 0.16; $('gl-tint').value = hex(g.tint || [255, 255, 255]);
+    $('gl-hi').value = g.highlight ?? 0.7; $('gl-radius').value = g.radius ?? 0.04; $('gl-inset').value = g.inset ?? 0.022; $('gl-over').checked = g.overlays ?? true; $('gl-opts').classList.toggle('off', !g.enabled); }
   const c = project.cursor;
   $('cur-visible').checked = c.visible; $('cur-size').value = c.size; $('cur-smooth').value = c.smoothing_ms; $('cur-ripple').checked = c.click_ripples;
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only;
@@ -114,6 +116,8 @@ function readPanel() {
   s.background = t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
     : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : t === 'mesh' ? s.background : { type: t, path: $('bg-image').value };
   s.padding = +$('padding').value; s.corner_radius = +$('radius').value; s.shadow = +$('shadow').value;
+  s.glass = { ...(s.glass || {}), enabled: $('gl-on').checked, blur: +$('gl-blur').value, tint: rgb($('gl-tint').value), tint_opacity: +$('gl-tint-op').value, highlight: +$('gl-hi').value, radius: +$('gl-radius').value, inset: +$('gl-inset').value, overlays: $('gl-over').checked };
+  $('gl-opts').classList.toggle('off', !s.glass.enabled);
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
@@ -173,7 +177,7 @@ async function loadRecents() {
 loadRecents();
 
 function renderBlurList() {
-  $('blur-list').innerHTML = project.blur.length ? '' : '<p class="muted small">No blur boxes yet. Blur secrets in the Magic tab finds them for you.</p>';
+  $('blur-list').innerHTML = project.blur.length ? '' : '<p class="muted small">No blur boxes yet. Blur secrets in the Auto edit tab finds them for you.</p>';
   project.blur.forEach((b, i) => {
     const d = document.createElement('div'); d.className = 'item';
     d.innerHTML = `<span>${b.x},${b.y} ${b.w}x${b.h} &middot; ${(b.start_ms / 1000).toFixed(1)}-${(b.end_ms / 1000).toFixed(1)}s</span>`;
@@ -327,7 +331,7 @@ async function save(as) {
 }
 async function trySample() {
   showBusy('Building the sample recording...');
-  try { const r = await invoke('make_sample'); setProject(r.project, r.path); status('Sample loaded. Press Make it demo-ready to see the AI at work.', 'success'); selectTab('magic'); }
+  try { const r = await invoke('make_sample'); setProject(r.project, r.path); status('Sample loaded. Press Run auto edit to try it.', 'success'); selectTab('magic'); }
   catch (e) { fail(e); }
   hideBusy();
 }
@@ -356,7 +360,7 @@ function setRecUi(on) {
   recording = on;
   $('rec-btn').classList.toggle('recording', on);
   $('rec-btn').innerHTML = icon(on ? 'i-stop' : 'i-record') + `<span>${on ? 'Stop' : 'Record'}</span>`;
-  $('rec-btn').title = on ? 'Stop recording (Ctrl+R)' : 'Start recording (Ctrl+R)';
+  try { applyShortcutHints(); } catch { }
   $('rec-pause').hidden = !on; if (!on) setPausedUi(false);
 }
 function setPausedUi(p) { $('rec-pause').innerHTML = icon(p ? 'i-play' : 'i-pause') + `<span>${p ? 'Resume' : 'Pause'}</span>`; $('rec-pause').dataset.paused = p; }
@@ -378,7 +382,7 @@ $('rec-btn').onclick = async () => {
       status(w.length ? 'Recording. ' + w.join(' ') : 'Recording. Press Stop or Ctrl+R when you are done.', w.length ? 'error' : 'busy');
     } else {
       setRecUi(false); meterStop(); $('rec-btn').disabled = true; showBusy('Finishing the recording...');
-      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Make it demo-ready.', 'success'); setTimeout(() => meterStart(), 500);
+      try { setProject(await invoke('stop_recording'), null); } finally { $('rec-btn').disabled = false; } status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
       hideBusy();
     }
   } catch (e) { setRecUi(false); hideBusy(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
@@ -496,14 +500,14 @@ window.__TAURI__.event.listen('ai-progress', e => {
   } else { $('ai-bar-wrap').classList.remove('indet'); $('ai-bar').style.width = (p.progress * 100) + '%'; status(p.message, 'busy'); }
 });
 
-$('ready-btn').onclick = () => aiTask('Making it demo-ready', async () => {
+$('ready-btn').onclick = () => aiTask('Running auto edit', async () => {
   const r = await invoke('ai_demo_ready', { project, zoom: $('r-zoom').checked, captions: $('r-captions').checked, cut: $('r-cut').checked, blur: $('r-blur').checked, denoise: $('r-denoise').checked });
   applyResult(r.project);
   const ic = { done: 'i-check', skipped: 'i-skip', failed: 'i-alert' };
   $('ready-report').innerHTML = r.report.steps.map(s => `<li class="${s.state}">${icon(ic[s.state])}<span><b>${esc(s.name)}</b><small>${esc(s.detail)}</small></span></li>`).join('') +
     `<li class="done">${icon('i-check')}<span><b>Length</b><small>${fmt(r.report.before_ms)} to ${fmt(r.report.after_ms)}. Ctrl+Z undoes everything at once.</small></span></li>`;
   const skipped = r.report.steps.filter(s => s.state !== 'done').length;
-  status(skipped ? `Demo-ready, ${skipped} step(s) skipped. See the Magic tab for why.` : 'Demo-ready. Press Space to watch it, then Export.', 'success');
+  status(skipped ? `Auto edit done, ${skipped} step(s) skipped. The Auto edit tab says why.` : 'Auto edit done. Press Space to watch it, then Export.', 'success');
 });
 $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
   const cloud = await confirmCloud('stt');
@@ -611,15 +615,16 @@ setTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: li
 // ---------- Keyboard shortcuts ----------
 const SHORTCUTS = [
   ['Playback', [['Space / K', 'Play or pause'], ['Left / Right', 'Step 0.1 s (Shift: 1 s)'], ['Home / End', 'Go to start or end'], ['J / L', 'Jump 5 s back or forward']]],
-  ['Editing', [['S', 'Split clip at playhead'], ['Z', 'Add zoom at playhead'], ['Delete', 'Delete selected zoom or clip'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo'], ['D', 'Make it demo-ready']]],
+  ['Editing', [['S', 'Split clip at playhead'], ['Z', 'Add zoom at playhead'], ['Delete', 'Delete selected zoom or clip'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo'], ['D', 'Run auto edit']]],
   ['Timeline', [['+ / -', 'Zoom timeline in or out'], ['0', 'Fit timeline'], ['Ctrl Wheel', 'Zoom around the mouse'], ['Wheel', 'Pan when zoomed in'], ['Double-click', 'Add a zoom on the zoom lane']]],
   ['File', [['Ctrl O', 'Open'], ['Ctrl S', 'Save'], ['Ctrl Shift S', 'Save as'], ['Ctrl E', 'Export'], ['Ctrl ,', 'Settings'], ['Ctrl /', 'This list (also ?)']]],
-  ['Recording (works from any app)', [['Ctrl Shift R', 'Start or stop recording'], ['Ctrl Shift P', 'Pause or resume']]],
 ];
 const IS_MAC = /Mac/i.test(navigator.platform);
 function showShortcuts() {
   const map = k => IS_MAC ? k.replace(/Ctrl/g, 'Cmd') : k;
-  modal('Keyboard shortcuts', `<p class="muted small">${IS_MAC ? 'Cmd is the Command key.' : ''} Recording shortcuts also work while another app is in front.</p><div class="shortcuts">${SHORTCUTS.map(([g, list]) => `<h4>${g}</h4>` + list.map(([k0, d]) => { const k = map(k0); return `<div><span>${d}</span><span>${k.split(' / ').map(x => x.split(' ').map(y => `<kbd>${esc(y)}</kbd>`).join('')).join(' / ')}</span></div>`; }).join('')).join('')}</div>`);
+  const rec = (shortcutState.actions || []).filter(a => a.text).map(a => `<div><span>${esc(a.label)}</span><span>${Shortcuts.parts(a.text).map(y => `<kbd>${esc(y)}</kbd>`).join('')}</span></div>`).join('');
+  modal('Keyboard shortcuts', `<p class="muted small">${IS_MAC ? 'Cmd is the Command key.' : ''} Recording shortcuts also work while another app is in front. <button class="link" id="sc-change">Change them</button></p><div class="shortcuts">${rec ? '<h4>Recording (works from any app)</h4>' + rec : ''}${SHORTCUTS.map(([g, list]) => `<h4>${g}</h4>` + list.map(([k0, d]) => { const k = map(k0); return `<div><span>${d}</span><span>${k.split(' / ').map(x => x.split(' ').map(y => `<kbd>${esc(y)}</kbd>`).join('')).join(' / ')}</span></div>`; }).join('')).join('')}</div>`);
+  $('sc-change').onclick = () => showSettings('shortcuts');
 }
 $('keys-btn').onclick = showShortcuts;
 
@@ -635,7 +640,7 @@ async function showAbout() {
   modal('About DemoLens', `<p><b>DemoLens ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
   <p><b>ffmpeg:</b> ${st.found ? esc(st.version) + (st.bundled ? ' (bundled)' : '') + '<br><span class="hint">' + esc(st.path) + '</span>' : 'not found'}</p>
   <p class="hint">This app bundles FFmpeg (https://ffmpeg.org), licensed under the GNU GPL version 2 or later (the bundled builds include GPL components). FFmpeg is a trademark of Fabrice Bellard. Source code for the bundled builds is available from the builders: BtbN/FFmpeg-Builds (Linux, Windows) and ffmpeg.martin-riedl.de (macOS). See THIRD_PARTY_NOTICES.md in the repository.</p>
-  <p class="hint">Optional AI models are downloaded separately and keep their own licenses.</p>`);
+  <p class="hint">Models are downloaded separately and keep their own licenses.</p>`);
 }
 $('about-btn').onclick = showAbout;
 setTimeout(() => checkFfmpeg(false), 400);
@@ -666,6 +671,76 @@ function act(name) {
 window.__TAURI__.event.listen('menu', e => act(e.payload));
 window.__TAURI__.event.listen('global-record', () => $('rec-btn').click());
 window.__TAURI__.event.listen('rec-stop-request', () => { if (recording) $('rec-btn').click(); });
+// ---------- Configurable global shortcuts ----------
+let shortcutState = { mac: IS_MAC, actions: [] };
+const scText = id => (shortcutState.actions.find(a => a.id === id) || {}).text || '';
+const withKeys = (label, id) => { const k = scText(id); return k ? `${label} (${k})` : label; };
+async function loadShortcuts() {
+  try { shortcutState = await invoke('get_shortcuts'); } catch { return; }
+  applyShortcutHints();
+}
+function applyShortcutHints() {
+  const rb = $('rec-btn');
+  rb.title = withKeys(recording ? 'Stop recording' : 'Start recording', 'record_toggle');
+  $('rec-pause').title = withKeys('Pause input capture and cut this part', 'pause');
+  $('rec-mic').title = withKeys('Record microphone', 'toggle_mic');
+  $('rec-cam').title = withKeys('Record the webcam for a picture in picture overlay', 'toggle_webcam');
+  $('rec-keys').title = withKeys('Capture key presses (off by default). Only shortcut names are kept, never what you type.', 'toggle_keys');
+  $('rec-source').title = [withKeys('Record an area', 'record_area'), withKeys('a window', 'record_window'), withKeys('the screen', 'record_screen')].join(', ') + '. Click to pick a source.';
+}
+// A shortcut fired from any app (or the menu or tray). The editor owns the
+// recording choices, so it does the work.
+async function runShortcut(id) {
+  const toggle = (btn, what) => { const b = $(btn); b.click(); status(`${what} ${b.getAttribute('aria-pressed') === 'true' ? 'on' : 'off'}${recording ? ' for the next recording' : ''}.`, 'info'); };
+  const startPicked = async tab => {
+    if (recording) return status('Already recording. Stop first.', 'info');
+    $('modal').close();
+    await openPicker(tab, { record: true });
+  };
+  try {
+    switch (id) {
+      case 'record_area': return await startPicked('area');
+      case 'record_window': return await startPicked('windows');
+      case 'record_screen':
+        if (recording) return status('Already recording. Stop first.', 'info');
+        setRecSource({ type: 'screen', display: 0 }, 'Entire screen', 'screen'); return $('rec-btn').click();
+      case 'restart':
+        if (!recording) return status('Nothing to restart. Start a recording first.', 'info');
+        await invoke('discard_recording'); setRecUi(false); $('rec-btn').disabled = false;
+        return setTimeout(() => $('rec-btn').click(), 300);
+      case 'discard':
+        if (!recording) return;
+        return void (await invoke('discard_recording'));
+      case 'toggle_mic': return toggle('rec-mic', 'Microphone');
+      case 'toggle_webcam': return toggle('rec-cam', 'Webcam');
+      case 'toggle_keys': return toggle('rec-keys', 'Keystroke capture');
+    }
+  } catch (e) { fail(e); }
+}
+window.__TAURI__.event.listen('shortcut', e => runShortcut(e.payload));
+window.__TAURI__.event.listen('rec-marker', () => { if (recording) status('Marker dropped. The editor will zoom to the cursor here.', 'success'); });
+loadShortcuts();
+
+// ---------- Glass look for the app ----------
+const reduceMq = window.matchMedia ? matchMedia('(prefers-reduced-transparency: reduce)') : { matches: false };
+let glassPref = false, osReduce = false, glassNative = false;
+async function applyGlassUi() {
+  const reduce = !!(reduceMq.matches || osReduce);
+  const on = glassPref && !reduce;
+  document.documentElement.classList.toggle('glass-ui', on);
+  if (on !== glassNative) { glassNative = on ? !!(await invoke('glass_native', { on: true }).catch(() => false)) : (await invoke('glass_native', { on: false }).catch(() => false), false); }
+  document.documentElement.classList.toggle('glass-native', glassNative && on);
+  return { on, reduce, native: glassNative };
+}
+async function loadGlassUi() {
+  try { glassPref = !!(await invoke('get_settings')).glass_ui; osReduce = !!(await invoke('os_reduce_transparency')); } catch { }
+  await applyGlassUi();
+}
+if (reduceMq.addEventListener) reduceMq.addEventListener('change', applyGlassUi);
+// The system setting can change while the app is open; look again when the window is used.
+window.addEventListener('focus', async () => { try { const v = !!(await invoke('os_reduce_transparency')); if (v !== osReduce) { osReduce = v; applyGlassUi(); } } catch { } });
+loadGlassUi();
+
 window.__TAURI__.event.listen('rec-discarded', () => { setRecUi(false); hideBusy(); status('Recording discarded. Nothing was saved.', 'info'); });
 
 window.addEventListener('keydown', e => {
@@ -842,7 +917,7 @@ async function renderDisk() {
 enableControls(); refreshModels(); loadTemplates().catch(fail);
 invoke('initial_project').then(r => { if (r) { setProject(r.project, r.path); status('Opened ' + baseName(r.path || r.project.source), 'success'); } }).catch(fail);
 
-// ---------- Privacy, cloud AI and storage ----------
+// ---------- Privacy, cloud and storage ----------
 let cloudState = { providers: [], choice: {} }, storageReady = false;
 const TASKS = { stt: 'Speech to text', llm: 'Writing docs', tts: 'Text to speech' };
 const kb = n => n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
@@ -911,7 +986,7 @@ async function showSettings(tab = 'privacy') {
   await loadCloud();
   const st = await invoke('get_settings'), recs = await invoke('list_recordings').catch(() => []);
   const s3 = await invoke('s3_get').catch(() => ({ config: {}, secret_set: false }));
-  const tabs = ['privacy', 'cloud', 'storage', 'disk'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage' }[t]}</button>`).join('');
+  const tabs = ['privacy', 'appearance', 'shortcuts', 'cloud', 'storage', 'disk'].map(t => `<button class="btn sm ${t === tab ? 'primary' : 'ghost'}" data-st="${t}">${{ privacy: 'Privacy', appearance: 'Appearance', shortcuts: 'Shortcuts', cloud: 'Cloud &amp; API keys', storage: 'Upload (S3)', disk: 'Disk usage' }[t]}</button>`).join('');
   let body = '';
   if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
     <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
@@ -923,6 +998,15 @@ async function showSettings(tab = 'privacy') {
       <div class="row">${p.info.tasks.map(t => `<label><input type="checkbox" data-p="${p.id}" data-t="${t}" ${cloudState.choice[t] === p.id ? 'checked' : ''}/> ${TASKS[t]}${p.consents[t] ? ` <small class="muted">since ${esc(p.consents[t])}</small>` : ''}</label>`).join('')}</div></div>
       <div class="row">${p.key_set ? `<code>${esc(p.key_masked)}</code><button class="btn ghost sm" data-rm="${p.id}">Remove key</button>` : `<input type="password" class="field sm" data-key="${p.id}" placeholder="API key" autocomplete="off" /><button class="btn sm" data-save="${p.id}">Save</button>`}</div></div>`).join('') +
     `<label class="stack">OpenAI compatible endpoint (for "Custom")<input id="set-base" class="field" value="${esc(cloudState.custom_base || '')}" placeholder="https://example.com/v1" /></label><div class="row"><button class="btn sm" id="set-base-save">Save endpoint</button></div>`;
+  if (tab === 'appearance') {
+    const g = await applyGlassUi();
+    body = `<label class="switch"><input type="checkbox" id="set-glass" ${st.glass_ui ? 'checked' : ''} /> Glass look</label>
+      <p class="muted small">A frosted, translucent look for the toolbar, sidebar and dialogs. ${IS_MAC ? 'On a Mac the window itself is see-through and macOS blurs what is behind it.' : 'Here it is a blur drawn in the page, so it only shows over other content, such as behind dialogs.'}</p>
+      ${g.reduce ? '<p class="warn-note">Reduce Transparency is on in your system settings, so the glass look is paused. Turn that off in the system accessibility settings to see it.</p>' : ''}
+      ${IS_MAC || /Win/i.test(navigator.platform) ? `<label class="switch"><input type="checkbox" id="set-tray" ${st.menu_bar !== false ? 'checked' : ''} /> Show DemoLens in the ${IS_MAC ? 'menu bar' : 'system tray'} for quick recording</label>` : ''}
+      <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>`;
+  }
+  if (tab === 'shortcuts') body = '<div id="sc-body"><p class="muted small">Loading...</p></div>';
   if (tab === 'disk') body = '<div id="disk-body"><p class="muted small">Measuring...</p></div>';
   if (tab === 'storage') { const c = s3.config || {}; body = `<p>Upload exports to your own S3 or Cloudflare R2 bucket. Objects are private, encrypted at rest where supported, and shared with a signed link (24 hours by default, 7 days at most). Event logs are never uploaded.</p>
     ${['endpoint', 'region', 'bucket', 'prefix', 'access_key_id'].map(k => `<label class="stack">${k.replace(/_/g, ' ')}<input class="field" data-s3="${k}" value="${esc(c[k] || '')}" /></label>`).join('')}
@@ -932,6 +1016,9 @@ async function showSettings(tab = 'privacy') {
   modal('Settings', `<div class="row">${tabs}</div>${body}`);
   document.querySelectorAll('[data-st]').forEach(b => (b.onclick = () => showSettings(b.dataset.st)));
   if (tab === 'disk') renderDisk();
+  if (tab === 'shortcuts') renderShortcutsPage();
+  if ($('set-glass')) $('set-glass').onchange = async () => { glassPref = $('set-glass').checked; await invoke('set_glass_ui', { enabled: glassPref }).catch(fail); await applyGlassUi(); status(glassPref ? 'Glass look on.' : 'Glass look off.', 'success'); };
+  if ($('set-tray')) $('set-tray').onchange = () => invoke('set_menu_bar', { enabled: $('set-tray').checked }).then(() => status('Saved.', 'success'), fail);
   const again = () => showSettings(tab);
   if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => { await invoke('delete_recording', { path: b.dataset.del }).catch(fail); again(); }));
@@ -956,6 +1043,50 @@ async function showSettings(tab = 'privacy') {
     document.querySelectorAll('[data-s3]').forEach(i => (config[i.dataset.s3] = i.value.trim()));
     try { await invoke('s3_set', { config, secret: $('s3-secret').value || null }); status('Storage saved.', 'success'); showSettings('storage'); } catch (e) { fail(e); }
   };
+}
+// Settings > Shortcuts: one row per action. Click the keys, press the new ones.
+async function renderShortcutsPage(note) {
+  const host = $('sc-body'); if (!host) return;
+  await loadShortcuts();
+  const caps = t => t ? Shortcuts.parts(t).map(p => `<kbd>${esc(p)}</kbd>`).join('') : '<span class="muted small">Not set</span>';
+  host.innerHTML = `<p class="muted small">These work from any app while DemoLens is running. Click the keys, then press the new combination. Esc cancels. A combination needs Ctrl${IS_MAC ? ', Cmd' : ''} or Alt, so it does not take over normal typing.</p>
+    <div class="sc-list">${shortcutState.actions.map(a => `<div class="sc-row" data-id="${a.id}">
+      <div class="sc-name"><b>${esc(a.label)}</b><small>${esc(a.hint)}</small>${a.error ? `<small class="sc-err">Could not be registered: another app probably has these keys. Choose different keys.</small>` : ''}<small class="sc-err" data-err="${a.id}"></small></div>
+      <button class="sc-keys${a.error ? ' bad' : ''}" data-rec="${a.id}" title="Click, then press the new keys">${caps(a.text)}</button>
+      <button class="btn ghost sm" data-clear="${a.id}" ${a.combo ? '' : 'disabled'} title="Remove the keys">Clear</button>
+      <button class="btn ghost sm" data-reset="${a.id}" ${a.custom ? '' : 'disabled'} title="Back to ${esc(a.default_text || 'no keys')}">Reset</button>
+    </div>`).join('')}</div>
+    <div class="row end"><button class="btn" id="sc-reset-all">Reset all to defaults</button></div>`;
+  if (note) status(note, 'success');
+  const fail1 = (id, msg) => { const el = host.querySelector(`[data-err="${id}"]`); if (el) el.textContent = String(msg).replace(/^Error: /, ''); };
+  const set = async (id, combo) => {
+    try { shortcutState = await invoke('set_shortcut', { action: id, combo }); applyShortcutHints(); await renderShortcutsPage('Shortcut saved.'); }
+    catch (e) { fail1(id, e); }
+  };
+  host.querySelectorAll('[data-rec]').forEach(b => (b.onclick = () => {
+    const id = b.dataset.rec, old = b.innerHTML;
+    b.classList.add('listening'); b.innerHTML = '<span class="muted small">Press the new keys...</span>'; fail1(id, '');
+    // Release the OS shortcuts while listening, or the system would swallow the combo.
+    invoke('shortcuts_pause', { paused: true }).catch(() => { });
+    let done = false;
+    const stop = () => {
+      if (done) return; done = true;
+      window.removeEventListener('keydown', onKey, true); b.removeEventListener('blur', onBlur); $('modal').removeEventListener('close', onBlur);
+      b.classList.remove('listening'); invoke('shortcuts_pause', { paused: false }).catch(() => { });
+    };
+    const onBlur = () => { stop(); if (b.isConnected) b.innerHTML = old; };
+    const onKey = ev => {
+      ev.preventDefault(); ev.stopPropagation();
+      if (ev.code === 'Escape') { onBlur(); return; }
+      const combo = Shortcuts.comboFromEvent(ev, IS_MAC);
+      if (!combo) return; // only a modifier so far
+      stop(); b.innerHTML = old; set(id, combo);
+    };
+    window.addEventListener('keydown', onKey, true); b.addEventListener('blur', onBlur); $('modal').addEventListener('close', onBlur);
+  }));
+  host.querySelectorAll('[data-clear]').forEach(b => (b.onclick = () => set(b.dataset.clear, '')));
+  host.querySelectorAll('[data-reset]').forEach(b => (b.onclick = () => { const a = shortcutState.actions.find(x => x.id === b.dataset.reset); set(a.id, a.default); }));
+  $('sc-reset-all').onclick = async () => { try { shortcutState = await invoke('reset_shortcuts'); applyShortcutHints(); await renderShortcutsPage('All shortcuts are back to their defaults.'); } catch (e) { fail(e); } };
 }
 $('settings-btn').onclick = () => showSettings();
 
@@ -993,7 +1124,7 @@ $('blur-draw').onclick = async () => {
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {
   modal('Welcome to DemoLens', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
-    <ul><li>A small REC pill shows while recording (it is not in the video). Cmd/Ctrl+Shift+P pauses and Cmd/Ctrl+Shift+R starts or stops.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud AI and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
+    <ul><li>A small pill shows while recording (it is not in the video). Its buttons pause, drop a marker, stop or discard; the keys are in Settings > Shortcuts.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud providers and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
     <div class="row end"><button class="btn primary" id="fr-ok">Got it</button></div>`);
   $('fr-ok').onclick = () => { localStorage.setItem('privacy-ack', '1'); $('modal').close(); };
 }

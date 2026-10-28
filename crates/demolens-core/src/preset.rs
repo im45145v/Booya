@@ -86,7 +86,15 @@ pub fn builtin_presets() -> Vec<Preset> {
         p.cursor.ripple_color = ripple;
         p
     };
+    // Glass looks: the recording on a frosted panel over a colourful backdrop.
+    let glass = |name: &str, bg, tint: [u8; 3], tint_opacity: f64, ripple: [u8; 3]| {
+        let mut p = mk(name, bg, 0.05, 0.016, 0.03, 1.5, ripple);
+        p.style.glass = crate::project::Glass { enabled: true, tint, tint_opacity, ..Default::default() };
+        p
+    };
     vec![
+        glass("Frosted", Gradient { from: [56, 189, 248], to: [192, 132, 252], angle_deg: 35.0 }, [255, 255, 255], 0.18, [255, 255, 255]),
+        glass("Frosted dark", Gradient { from: [30, 27, 75], to: [190, 24, 93], angle_deg: 120.0 }, [20, 24, 40], 0.30, [165, 180, 252]),
         mk("Sunset", Gradient { from: [99, 102, 241], to: [236, 72, 153], angle_deg: 35.0 }, 0.07, 0.018, 0.035, 1.5, [255, 255, 255]),
         mk("Midnight", Gradient { from: [15, 23, 42], to: [49, 46, 129], angle_deg: 120.0 }, 0.08, 0.02, 0.05, 1.6, [129, 140, 248]),
         mk("Ocean", Gradient { from: [14, 165, 233], to: [16, 185, 129], angle_deg: 60.0 }, 0.07, 0.018, 0.035, 1.5, [255, 255, 255]),

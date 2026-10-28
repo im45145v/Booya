@@ -14,6 +14,7 @@ pub mod project;
 pub mod proxy;
 pub mod render;
 pub mod sample;
+pub mod shortcuts;
 pub mod storage;
 pub mod zoom;
 

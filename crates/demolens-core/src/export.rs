@@ -185,6 +185,7 @@ pub fn passthrough_ok(p: &Project) -> bool {
         && (!p.caption_style.burn_in || p.captions.is_empty())
         && p.style.padding == 0.0
         && p.style.corner_radius == 0.0
+        && !p.style.glass.enabled
         && !p.cursor.visible
         && !p.keys.enabled
         && p.webcam.as_ref().is_none_or(|w| !w.visible)

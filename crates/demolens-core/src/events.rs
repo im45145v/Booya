@@ -40,6 +40,9 @@ pub enum EventKind {
         #[serde(default)]
         modifiers: Vec<String>,
     },
+    /// The presenter dropped a marker (a global shortcut) with the cursor at
+    /// (x, y). It is a deliberate "zoom here" point.
+    Mark { x: f64, y: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,6 +137,14 @@ impl EventLog {
         })
     }
 
+    /// Markers dropped while recording: (time, x, y).
+    pub fn marks(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
+        self.events.iter().filter_map(|e| match e.kind {
+            EventKind::Mark { x, y } => Some((e.t, x, y)),
+            _ => None,
+        })
+    }
+
     pub fn keys(&self) -> impl Iterator<Item = (f64, &str, &[String])> + '_ {
         self.events.iter().filter_map(|e| match &e.kind {
             EventKind::Key { key, modifiers } => Some((e.t, key.as_str(), modifiers.as_slice())),
@@ -146,7 +157,7 @@ impl EventLog {
         self.events
             .iter()
             .filter_map(|e| match e.kind {
-                EventKind::Move { x, y } | EventKind::Click { x, y, .. } => Some((e.t, x, y)),
+                EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Mark { x, y } => Some((e.t, x, y)),
                 _ => None,
             })
             .collect()

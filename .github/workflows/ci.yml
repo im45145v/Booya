@@ -22,6 +22,8 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config ffmpeg cmake clang libclang-dev
       - name: Test the area picker snap geometry
         run: node tests/js/snap.test.js
+      - name: Test the shortcut recorder
+        run: node tests/js/shortcuts.test.js
       - name: Test core and AI
         run: cargo test -p demolens-core -p demolens-ai
       - name: Build CLI and app

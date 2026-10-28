@@ -115,6 +115,7 @@ pub fn build_steps(p: &Project, log: Option<&EventLog>, opts: &Options, mut prog
     flat.style.padding = 0.0;
     flat.style.corner_radius = 0.0;
     flat.style.shadow = 0.0;
+    flat.style.glass.enabled = false;
     flat.cursor.visible = false;
     flat.cursor.click_ripples = false;
     flat.keys.enabled = false;

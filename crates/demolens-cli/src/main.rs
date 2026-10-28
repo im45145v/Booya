@@ -35,7 +35,7 @@ USAGE:
   demolens blur <project.json> X,Y,W,H [START_MS END_MS]
   demolens preset save <project.json> NAME | apply <project.json> NAME | list
   demolens ready <project.json> [--no-zoom] [--no-captions] [--no-cut] [--no-blur] [--no-denoise]
-                  one click demo-ready: auto zoom, captions, cuts, blur, clean audio
+                  auto edit: zoom, captions, cuts, blur and clean audio in one pass
   demolens sample <dir> [--speech]   synthetic recording + event log
                   (--speech adds espeak-ng narration and on-screen secrets)
 
