@@ -65,8 +65,9 @@
     <select id="rec-mic-dev" class="field sm mic-dev" title="Microphone" aria-label="Microphone"><option value="">Default microphone</option></select>
     <span id="mic-meter" class="mic-meter" title="Microphone level. Speak to see it move." aria-label="Microphone level" hidden><i></i><i></i><i></i><i></i><i></i><i></i></span>
     <button id="rec-sys" class="btn icon ghost toggle" aria-pressed="false" title="Record system audio" aria-label="Record system audio"><svg class="ico"><use href="#i-speaker"/></svg></button>
+    <select id="rec-res" class="field sm" title="Recording resolution. Automatic records tall screens (4K) at 1440p so motion stays smooth." aria-label="Recording resolution"><option value="">Auto resolution</option><option value="0">Native</option><option value="1440">1440p</option><option value="1080">1080p</option></select>
     <button id="rec-cam" class="btn icon ghost toggle" aria-pressed="false" title="Record the webcam for a picture in picture overlay" aria-label="Record webcam"><svg class="ico"><use href="#i-cam"/></svg></button>
-    <button id="rec-keys" class="btn icon ghost toggle" aria-pressed="false" title="Capture key presses (off by default). Only shortcut names are kept, never what you type." aria-label="Capture key presses"><svg class="ico"><use href="#i-keyboard"/></svg></button>
+    <button id="rec-keys" class="btn ghost toggle" aria-pressed="true" title="Show shortcuts and typing in the video. Only shortcut names and the timing of typing are kept, never the letters." aria-label="Capture key presses"><svg class="ico"><use href="#i-keyboard"/></svg><span>Keys</span></button>
     <button id="rec-pause" class="btn ghost" hidden title="Pause input capture and cut this part (Ctrl/Cmd+Shift+P)"><svg class="ico"><use href="#i-pause"/></svg><span>Pause</span></button>
     <button id="rec-btn" class="btn rec" title="Start recording (Ctrl+R)"><svg class="ico"><use href="#i-record"/></svg><span>Record</span></button>
   </div>
@@ -346,6 +347,7 @@
 <script src="snap.js"></script>
 <script src="picker.js"></script>
   <script src="annotate.js"></script>
+  <script src="captions-edit.js"></script>
   <script src="transcript.js"></script>
 </body>
 </html>

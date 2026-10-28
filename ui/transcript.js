@@ -28,23 +28,67 @@ function cutSourceRange(clips, a, b) {
 function renderTranscript() {
   const box = $('tr-list'); if (!box || !project) return;
   const caps = project.captions || [];
-  $('tr-hint').textContent = caps.length ? 'Fix a word by editing it. Cut line removes that part of the video.' : 'No transcript yet. Use Transcribe in the Auto edit tab.';
+  $('tr-hint').textContent = caps.length ? 'Click a word to fix it (Enter saves, Tab moves on). Split, merge and nudge the timing under each line.' : 'No transcript yet. Use Transcribe in the Auto edit tab.';
   box.innerHTML = '';
+  const redo = () => { renderTranscript(); refresh(); };
   caps.forEach((c, i) => {
+    CaptionEdit.ensureWords(c);
     const row = document.createElement('div'); row.className = 'tr-row';
     const t = document.createElement('button'); t.className = 'tr-time'; t.textContent = fmt(c.start_ms); t.title = 'Jump here';
     t.onclick = () => { tl.playhead = tl.srcToOut(c.start_ms + 1); tl.draw(); refresh(); };
-    const inp = document.createElement('textarea'); inp.className = 'field tr-text'; inp.rows = Math.max(2, Math.ceil(c.text.length / 30)); inp.value = c.text; inp.spellcheck = true; inp.setAttribute('aria-label', 'Caption ' + (i + 1));
-    inp.onchange = () => { rewordCaption(c, inp.value); refresh(); };
-    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } e.stopPropagation(); };
-    const cut = document.createElement('button'); cut.className = 'btn ghost sm'; cut.textContent = 'Cut line'; cut.title = 'Remove this part from the video';
-    cut.onclick = () => {
+    const words = document.createElement('div'); words.className = 'tr-words'; words.setAttribute('role', 'group'); words.setAttribute('aria-label', 'Caption ' + (i + 1));
+    let picked = -1; // the word split will start a new line at
+    const edit = (k) => {
+      const w = c.words[k]; if (!w) return;
+      const chip = words.children[k];
+      const inp = document.createElement('input'); inp.className = 'field tr-word-edit'; inp.value = w.text; inp.size = Math.max(3, w.text.length + 1); inp.spellcheck = true;
+      inp.setAttribute('aria-label', 'Word ' + (k + 1));
+      let done = false;
+      const commit = (next) => {
+        if (done) return; done = true;
+        if (inp.value !== w.text) CaptionEdit.setWord(c, k, inp.value);
+        picked = k;
+        redo();
+        if (next != null) { const n = $('tr-list').querySelectorAll('.tr-row')[i]; const chips = n && n.querySelector('.tr-words'); if (chips && chips.children[next]) chips.children[next].click(); }
+      };
+      inp.onkeydown = e => {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); done = true; renderTranscript(); }
+        else if (e.key === 'Tab') { e.preventDefault(); commit(e.shiftKey ? k - 1 : k + 1); }
+      };
+      inp.onblur = () => commit();
+      chip.replaceWith(inp); inp.focus(); inp.select();
+    };
+    c.words.forEach((w, k) => {
+      const chip = document.createElement('button'); chip.className = 'tr-word' + (k === picked ? ' picked' : ''); chip.textContent = w.text; chip.title = 'Click to fix this word';
+      chip.onclick = () => { picked = k; tl.playhead = tl.srcToOut(w.start_ms + 1); tl.draw(); edit(k); };
+      words.appendChild(chip);
+    });
+    const tools = document.createElement('div'); tools.className = 'tr-tools';
+    const btn = (label, title, fn) => { const b = document.createElement('button'); b.className = 'btn ghost sm'; b.textContent = label; b.title = title; b.onclick = fn; tools.appendChild(b); return b; };
+    btn('Split', 'Start a new line at the word you last clicked', () => {
+      const k = picked > 0 ? picked : Math.floor(c.words.length / 2);
+      const next = CaptionEdit.splitAt(project.captions, i, k);
+      if (next === project.captions) return status('Click the word the new line should start with, then Split.', 'info');
+      project.captions = next; redo();
+    });
+    btn('Merge next', 'Join this line with the next one', () => { project.captions = CaptionEdit.mergeNext(project.captions, i); redo(); });
+    btn('Start -0.1s', 'Show this line a little earlier', () => { CaptionEdit.nudge(project.captions, i, 'start', -100); redo(); });
+    btn('Start +0.1s', 'Show this line a little later', () => { CaptionEdit.nudge(project.captions, i, 'start', 100); redo(); });
+    btn('End -0.1s', 'Hide this line a little earlier', () => { CaptionEdit.nudge(project.captions, i, 'end', -100); redo(); });
+    btn('End +0.1s', 'Keep this line a little longer', () => { CaptionEdit.nudge(project.captions, i, 'end', 100); redo(); });
+    btn('Move -0.1s', 'Shift the whole line and its words earlier', () => { CaptionEdit.nudge(project.captions, i, 'both', -100); redo(); });
+    btn('Move +0.1s', 'Shift the whole line and its words later', () => { CaptionEdit.nudge(project.captions, i, 'both', 100); redo(); });
+    const cut = btn('Cut line', 'Remove this part from the video', () => {
       const clips = cutSourceRange(project.clips, c.start_ms, c.end_ms);
       if (!clips.length) return status('A project needs at least one clip.', 'error');
       project.clips = clips; project.captions.splice(i, 1); tl.selectedClip = 0; tl.playhead = Math.min(tl.playhead, tl.outDur());
       tl.draw(); syncSelection(); renderTranscript(); refresh(); status('Line cut from the video.', 'success');
-    };
-    row.append(t, inp, cut); box.appendChild(row);
+    });
+    cut.classList.add('danger');
+    const main = document.createElement('div'); main.append(words, tools);
+    row.append(t, main); box.appendChild(row);
   });
 }
 $('tr-replace').onclick = () => {

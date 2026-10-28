@@ -225,12 +225,23 @@ fn is_modifier_combo(mods: &[String]) -> bool {
 
 /// Turn key events into overlay labels. Typing is grouped into one growing
 /// label; shortcuts like Ctrl+S get their own label.
+/// How a modifier is named on this computer's keyboard.
+fn modifier_label(m: &str) -> String {
+    match (m, cfg!(target_os = "macos"), cfg!(target_os = "windows")) {
+        ("Meta", true, _) => "Cmd".into(),
+        ("Alt", true, _) => "Option".into(),
+        ("Meta", _, true) => "Win".into(),
+        ("Meta", _, _) => "Super".into(),
+        _ => m.to_string(),
+    }
+}
+
 pub fn build_key_labels(log: &EventLog, hold_ms: f64, shortcuts_only: bool) -> Vec<KeyLabel> {
     let mut out: Vec<KeyLabel> = Vec::new();
     let mut typing_open = false;
     for (t, key, mods) in log.keys() {
         if is_modifier_combo(mods) {
-            let mut parts: Vec<String> = mods.iter().map(|m| m.to_string()).collect();
+            let mut parts: Vec<String> = mods.iter().map(|m| modifier_label(m)).collect();
             parts.push(key.to_string());
             out.push(KeyLabel { start_ms: t, end_ms: t + hold_ms, text: parts.join(" + ") });
             typing_open = false;
@@ -659,7 +670,7 @@ impl Renderer {
             p.source_width as f64,
             p.source_height as f64,
             {
-                let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(350.0));
+                let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0));
                 t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
                 t
             },

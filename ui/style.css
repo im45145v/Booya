@@ -378,7 +378,14 @@ dialog.wide { width: min(980px, 94vw); }
 
 /* Transcript panel */
 .tr-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
-.tr-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 6px; align-items: start; }
+.tr-row { display: grid; grid-template-columns: 44px 1fr; gap: 6px; align-items: start; padding-bottom: 8px; border-bottom: 1px solid var(--line, rgba(128,128,128,.2)); }
+.tr-words { display: flex; flex-wrap: wrap; gap: 2px 3px; line-height: 1.5; }
+.tr-word { background: none; border: 1px solid transparent; border-radius: 4px; color: inherit; font: inherit; padding: 0 3px; cursor: text; }
+.tr-word:hover, .tr-word:focus-visible { border-color: var(--accent); background: rgba(128,128,128,.12); }
+.tr-word.picked { border-color: var(--accent); }
+.tr-word-edit { padding: 0 3px; height: 1.6em; width: auto; min-width: 3ch; }
+.tr-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tr-tools .danger { margin-left: auto; }
 .tr-time { font: var(--fs-sm) var(--mono); color: var(--accent); background: none; border: 0; cursor: pointer; padding: 6px 0; text-align: left; }
 .tr-text { resize: vertical; min-height: 32px; line-height: 1.35; }
 

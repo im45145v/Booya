@@ -527,7 +527,7 @@ pub struct ZoomConfigSer {
 impl Default for ZoomConfigSer {
     fn default() -> Self {
         let c = ZoomConfig::default();
-        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.65 }
+        Self { transition_ms: c.ease_in_ms, ease_in_ms: c.ease_in_ms, ease_out_ms: c.ease_out_ms, level: c.click_scale, steadiness: 0.8 }
     }
 }
 

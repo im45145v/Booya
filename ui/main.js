@@ -99,7 +99,7 @@ function syncPanel() {
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
-  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.65;
+  const zc = project.zoom_config; $('zc-ease').value = zc.ease_in_ms; $('zc-level').value = zc.level; $('zc-steady').value = zc.steadiness ?? 0.8;
   outputs();
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
@@ -284,7 +284,7 @@ $('speed').onchange = () => { const c = project?.clips[tl.selectedClip]; if (c) 
 $('zoom-scale').oninput = () => { const z = project?.zoom[tl.selectedZoom]; $('zoom-scale-out').textContent = (+$('zoom-scale').value).toFixed(1) + 'x'; if (z) { z.scale = +$('zoom-scale').value; tl.draw(); refresh(); } };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
-const ZOOM_STYLES = { subtle: { level: 1.4, ease: 1400, steady: 0.85 }, moderate: { level: 1.7, ease: 1000, steady: 0.65 }, intense: { level: 2.4, ease: 700, steady: 0.5 } };
+const ZOOM_STYLES = { subtle: { level: 1.4, ease: 1600, steady: 0.9 }, moderate: { level: 1.7, ease: 1200, steady: 0.8 }, intense: { level: 2.4, ease: 800, steady: 0.55 } };
 $('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-ease').value = z.ease; $('zc-steady').value = z.steady; readPanel(); outputs(); status('Zoom style set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
   try { project.zoom = await invoke('regenerate_zoom', { project }); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); status(project.zoom.length ? `${project.zoom.length} zooms from clicks and typing` : 'No input log for this video, so there is nothing to zoom on.'); } catch (e) { fail(e); }
@@ -349,13 +349,25 @@ function hideBusy() { $('busy-overlay').hidden = true; }
 
 // ---------- Recording ----------
 document.querySelectorAll('.toggle').forEach(b => (b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true')));
-// Turning key capture on explains what is kept and, on a Mac, which permission it needs.
-$('rec-keys').addEventListener('click', () => {
-  if ($('rec-keys').getAttribute('aria-pressed') !== 'true') return;
-  status(IS_MAC
-    ? 'Key capture is on. Only shortcuts and the timing of typing are kept, never the letters. macOS will ask for Input Monitoring: allow DemoLens in System Settings > Privacy & Security > Input Monitoring, then restart the app.'
-    : 'Key capture is on. Only shortcuts and the timing of typing are kept, never the letters. Password fields are not special-cased, so turn it off while typing secrets.', 'info');
+// Key capture is on unless it was turned off. Turning it on explains what is
+// kept and, on a Mac, asks for the Input Monitoring permission it needs.
+$('rec-keys').setAttribute('aria-pressed', localStorage.getItem('rec-keys') === '0' ? 'false' : 'true');
+async function keysPermissionCheck(prompt) {
+  if (!/Mac/i.test(navigator.platform)) return true;
+  let ok = true;
+  try { ok = await invoke('input_monitoring_status', { prompt }); } catch { return true; }
+  if (!ok) status('Keys need Input Monitoring. In System Settings > Privacy & Security > Input Monitoring switch DemoLens on, then quit and reopen DemoLens. Until then shortcuts such as Cmd+Tab are not shown.', 'error');
+  return ok;
+}
+$('rec-keys').addEventListener('click', async () => {
+  const on = $('rec-keys').getAttribute('aria-pressed') === 'true';
+  localStorage.setItem('rec-keys', on ? '1' : '0');
+  if (!on) return;
+  const ok = await keysPermissionCheck(true);
+  if (!ok) { try { await invoke('open_input_monitoring_settings'); } catch { } return; }
+  status('Key capture is on. Only shortcuts and the timing of typing are kept, never the letters.' + (IS_MAC ? '' : ' Password fields are not special-cased, so turn it off while typing secrets.'), 'info');
 });
+if (localStorage.getItem('rec-keys') !== '0') setTimeout(() => keysPermissionCheck(false), 1500);
 function setRecUi(on) {
   recording = on;
   $('rec-btn').classList.toggle('recording', on);
@@ -374,7 +386,7 @@ $('rec-btn').onclick = async () => {
       $('rec-btn').disabled = true; status('Starting in 3 seconds. Click the number to cancel. If macOS asks for permission, allow it.', 'busy');
       if (IS_WIN) meterStop();
       let warn;
-      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true', micDevice: $('rec-mic-dev').value || null, countdown: 3 }); }
+      try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true', micDevice: $('rec-mic-dev').value || null, maxHeight: $('rec-res').value === '' ? null : +$('rec-res').value, countdown: 3 }); }
       finally { $('rec-btn').disabled = false; }
       setRecUi(true); localStorage.setItem('mic-ok', '1');
       if (!IS_WIN && $('rec-mic').getAttribute('aria-pressed') === 'true') meterStart();
@@ -790,6 +802,7 @@ async function loadMics() {
   sel.value = list.includes(want) ? want : '';
   sel.hidden = !list.length;
 }
+{ const rr = $('rec-res'); rr.value = localStorage.getItem('rec-res') || ''; rr.onchange = () => localStorage.setItem('rec-res', rr.value); }
 $('rec-mic-dev').onchange = () => { localStorage.setItem('mic-dev', $('rec-mic-dev').value); if (!recording) meterStart(); };
 async function meterStart() {
   if ($('rec-mic').getAttribute('aria-pressed') !== 'true') return meterStop();

@@ -250,6 +250,20 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_word_flows_to_srt_and_vtt_with_its_timing() {
+        let mut p = Project::new("a.mp4".into(), None, 10, 10, 10_000.0);
+        p.captions = words_to_captions(&[w(1000.0, 1400.0, "Open"), w(1500.0, 1900.0, "the"), w(2000.0, 2400.0, "setings")], 42, 700.0);
+        // What the editor does when a word is fixed: new text, same times, line text rebuilt.
+        p.captions[0].words[2].text = "settings".into();
+        p.captions[0].text = p.captions[0].words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let srt = to_srt(&p);
+        assert!(srt.contains("Open the settings"), "{srt}");
+        assert!(!srt.contains("setings"));
+        assert!(srt.contains("00:00:01,000 --> 00:00:02,800"), "{srt}");
+        assert!(to_vtt(&p).contains("Open the settings"));
+    }
+
+    #[test]
     fn fillers_and_silences_become_cuts() {
         assert!(is_filler("Um,") && is_filler("uh") && !is_filler("umbrella"));
         let words = vec![w(0.0, 400.0, "Okay"), w(500.0, 800.0, "um"), w(900.0, 1200.0, "next")];

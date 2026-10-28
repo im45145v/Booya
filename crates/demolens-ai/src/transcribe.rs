@@ -93,7 +93,7 @@ fn cache_path(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str)
     h.update(std::fs::metadata(model).map(|m| m.len()).unwrap_or(0).to_le_bytes());
     h.update(language.unwrap_or("en"));
     h.update(prompt);
-    h.update(b"v2");
+    h.update(b"v3");
     let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     crate::models::models_dir().parent().map(|p| p.join("transcripts")).unwrap_or_else(|| "transcripts".into()).join(format!("{hex}.json"))
 }
@@ -150,6 +150,9 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
             return Ok(w);
         }
     }
+    // Quiet recordings are brought up to a normal level first; whisper drops
+    // words it cannot hear. The cache key above uses the original samples.
+    let audio = normalise_for_speech(audio);
     let spans = speech_spans(&audio, 16_000);
     if spans.is_empty() {
         return Ok(Vec::new());
@@ -165,6 +168,19 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
         let _ = write_private(&cache, &s);
     }
     Ok(words)
+}
+
+/// Scale quiet audio so its peak sits near 0.9, with at most 30 dB of gain.
+/// Loud audio is left alone, so this never clips or changes a good recording.
+pub fn normalise_for_speech(mut audio: Vec<f32>) -> Vec<f32> {
+    let peak = audio.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    if peak > 1e-4 && peak < 0.5 {
+        let gain = (0.9 / peak).min(31.6);
+        for x in &mut audio {
+            *x = (*x * gain).clamp(-1.0, 1.0);
+        }
+    }
+    audio
 }
 
 #[cfg(feature = "whisper")]
@@ -241,6 +257,18 @@ pub fn merge_fragments(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quiet_audio_is_lifted_and_loud_audio_is_left_alone() {
+        let quiet: Vec<f32> = (0..100).map(|i| 0.05 * ((i as f32) / 7.0).sin()).collect();
+        let up = super::normalise_for_speech(quiet.clone());
+        let peak = up.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!((peak - 0.9).abs() < 0.02, "{peak}");
+        let loud: Vec<f32> = quiet.iter().map(|x| x * 15.0).collect();
+        assert_eq!(super::normalise_for_speech(loud.clone()), loud);
+        let silent = vec![0.0f32; 10];
+        assert_eq!(super::normalise_for_speech(silent.clone()), silent);
+    }
+
     use super::*;
 
     #[test]

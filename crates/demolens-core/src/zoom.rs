@@ -52,15 +52,15 @@ impl Default for ZoomConfig {
     fn default() -> Self {
         Self {
             merge_gap_ms: 3500.0,
-            lead_in_ms: 1100.0,
+            lead_in_ms: 1300.0,
             hold_ms: 1600.0,
-            min_duration_ms: 3700.0,
+            min_duration_ms: 4100.0,
             click_scale: 1.7,
             typing_scale: 1.6,
             typing_gap_ms: 1200.0,
             typing_min_keys: 3,
-            ease_in_ms: 1000.0,
-            ease_out_ms: 1000.0,
+            ease_in_ms: 1200.0,
+            ease_out_ms: 1200.0,
             bridge_gap_ms: 1500.0,
         }
     }
@@ -187,14 +187,11 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
     merged
 }
 
-/// Smooth ease in/out (cubic).
+/// Smooth ease in/out (smootherstep). Its fastest moment is about 1.9 times
+/// the average speed, against 3 times for a cubic, so a zoom never lurches.
 pub fn ease_in_out(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
 /// Camera state: the source rectangle shown in the output.
@@ -258,7 +255,7 @@ fn follow_target(s: &ZoomSegment, tr: &CursorTrack, t: f64, timing: &CameraTimin
         return at(t).unwrap_or(pos);
     }
     let half = w / (2.0 * s.scale.max(1.0)) * timing.deadzone;
-    let tau = (smooth * 0.6).max(60.0);
+    let tau = (smooth * 0.9).max(60.0);
     let k = 1.0 - (-SIM_STEP_MS / tau).exp();
     let mut x = s.start_ms;
     while x < t {
@@ -464,6 +461,35 @@ mod tests {
         assert_eq!(c.click_scale, 2.5);
         assert_eq!(c.ease_in_ms, 600.0);
         assert_eq!(c.min_duration_ms, 600.0 + 800.0 + 1700.0);
+    }
+
+    #[test]
+    fn zoom_in_never_moves_faster_than_twice_its_average_speed() {
+        let step = 1.0 / 400.0;
+        let mut peak = 0.0f64;
+        for i in 0..400 {
+            let a = ease_in_out(i as f64 * step);
+            let b = ease_in_out((i + 1) as f64 * step);
+            peak = peak.max((b - a) / step);
+        }
+        assert!(peak < 2.0, "{peak}");
+    }
+
+    #[test]
+    fn small_cursor_moves_do_not_pan_the_camera() {
+        // Zoomed 2x on a 1920 wide source: the visible half width is 480 px. The
+        // cursor wobbling by 150 px stays inside the dead zone, so the camera
+        // does not move at all.
+        let log = log_with(vec![mv(0.0, 900.0, 500.0), mv(2500.0, 1050.0, 560.0), mv(3500.0, 880.0, 520.0), mv(4500.0, 1000.0, 540.0), mv(6000.0, 960.0, 540.0)]);
+        let track = CursorTrack::new(&log);
+        let seg = ZoomSegment { start_ms: 1000.0, end_ms: 9000.0, scale: 2.0, follow_cursor: true, focus: (960.0, 540.0), reason: "click".into() };
+        let timing = CameraTiming { ease_in_ms: 1200.0, ease_out_ms: 1200.0, follow_smoothing_ms: 600.0, deadzone: 0.48 };
+        let at = |t: f64| camera_at(t, std::slice::from_ref(&seg), Some(&track), 1920.0, 1080.0, timing);
+        let a = at(3000.0);
+        for t in [4000.0, 5000.0, 6000.0, 7000.0] {
+            let c = at(t);
+            assert!((c.cx - a.cx).abs() < 12.0 && (c.cy - a.cy).abs() < 12.0, "panned at {t}: {a:?} -> {c:?}");
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@ default-members = ["crates/demolens-core", "crates/demolens-ai", "crates/demolen
 
 [workspace.package]
 rust-version = "1.88"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 license = "MIT"
 authors = ["Ashish Malla <im45145v@users.noreply.github.com>"]

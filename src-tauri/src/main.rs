@@ -250,6 +250,7 @@ async fn start_recording(
     keys: Option<demolens_core::input::KeyLogging>,
     webcam: Option<bool>,
     mic_device: Option<String>,
+    max_height: Option<u32>,
     countdown: Option<u32>,
 ) -> R<Vec<String>> {
     let keys = keys.unwrap_or_default();
@@ -284,7 +285,7 @@ async fn start_recording(
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let out_dir = base.join(format!("recording-{stamp}"));
     let mic_device = mic_device.filter(|m| !m.is_empty());
-    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device }).map_err(e)).await;
+    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height }).map_err(e)).await;
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().unwrap();
     match res {
@@ -1259,6 +1260,23 @@ async fn mic_list() -> R<Vec<String>> {
     blocking(|| Ok(demolens_core::capture::mics::list_mics())).await
 }
 
+/// Whether macOS lets DemoLens read the keyboard state (Input Monitoring).
+/// With `prompt` the system dialog is shown the first time. Always true on
+/// other systems.
+#[tauri::command]
+fn input_monitoring_status(prompt: Option<bool>) -> bool {
+    !demolens_core::input::key_permission_missing(prompt.unwrap_or(false))
+}
+
+/// Opens the macOS settings page where Input Monitoring is granted.
+#[tauri::command]
+fn open_input_monitoring_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").spawn();
+    }
+}
+
 /// Start the level meter on a microphone (None = the default one). Levels
 /// arrive as `mic-level` events about ten times a second.
 #[tauri::command]
@@ -1730,7 +1748,7 @@ fn main() {
             initial_project,
             load_project,
             save_project,
-            regenerate_zoom, key_track,
+            regenerate_zoom, key_track, input_monitoring_status, open_input_monitoring_settings,
             preview,
             export_interactive,
             background_import,

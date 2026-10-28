@@ -12,6 +12,10 @@ pub struct TranscribeReport {
     pub words: usize,
     pub fillers: usize,
     pub lines: usize,
+    /// The speech model that produced the words ("cloud" for a provider).
+    pub model: String,
+    /// True when a small model was used and a better one would help.
+    pub weak_model: bool,
 }
 
 pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
@@ -25,7 +29,11 @@ pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
 pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&str>) -> Result<TranscribeReport> {
     let model = speech_model(model)?;
     let words = transcribe::transcribe(&p.source, &model, lang)?;
-    finish_transcript(p, words)
+    let name = model.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+    let mut r = finish_transcript(p, words)?;
+    r.weak_model = name.contains("tiny");
+    r.model = name;
+    Ok(r)
 }
 
 /// Transcribe with a cloud provider the user opted into. The audio track
@@ -42,7 +50,7 @@ fn finish_transcript(p: &mut Project, mut words: Vec<demolens_core::project::Cap
     let samples = audio::decode_mono(&p.source, 16_000)?;
     captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0));
     p.captions = captions::words_to_captions(&words, 42, 900.0);
-    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len() })
+    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false })
 }
 
 #[derive(Debug, Serialize)]

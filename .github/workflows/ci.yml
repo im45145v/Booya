@@ -24,6 +24,8 @@ jobs:
         run: node tests/js/snap.test.js
       - name: Test the shortcut recorder
         run: node tests/js/shortcuts.test.js
+      - name: Test caption editing
+        run: node tests/js/captions-edit.test.js
       - name: Test core and AI
         run: cargo test -p demolens-core -p demolens-ai
       - name: Build CLI and app
