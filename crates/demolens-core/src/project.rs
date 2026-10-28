@@ -479,6 +479,104 @@ impl Webcam {
     }
 }
 
+/// What the picture is made of at one moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SceneKind {
+    /// The recording alone.
+    Screen,
+    /// The recording with the camera floating over a corner.
+    Bubble,
+    /// The recording and the camera next to each other (above and below in
+    /// a tall picture).
+    Split,
+    /// The camera fills the picture.
+    Camera,
+}
+
+impl SceneKind {
+    pub const ALL: [SceneKind; 4] = [SceneKind::Screen, SceneKind::Bubble, SceneKind::Split, SceneKind::Camera];
+
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "screen" => SceneKind::Screen,
+            "bubble" => SceneKind::Bubble,
+            "split" | "side" | "side-by-side" => SceneKind::Split,
+            "camera" | "cam" | "fullscreen" => SceneKind::Camera,
+            _ => bail!("a layout is screen, bubble, split or camera"),
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            SceneKind::Screen => "screen",
+            SceneKind::Bubble => "bubble",
+            SceneKind::Split => "split",
+            SceneKind::Camera => "camera",
+        }
+    }
+
+    pub fn needs_camera(self) -> bool {
+        self != SceneKind::Screen
+    }
+}
+
+/// A stretch of the recording (source time) shown in one layout.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneSegment {
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub kind: SceneKind,
+}
+
+/// Which layout is on screen when, and how the picture changes between them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Layouts {
+    /// The layout outside every segment. When not set it follows the camera
+    /// settings (bubble or side by side when there is a camera, else screen).
+    #[serde(default)]
+    pub base: Option<SceneKind>,
+    #[serde(default)]
+    pub segments: Vec<SceneSegment>,
+    /// Length of the cross-fade between two layouts, ms.
+    #[serde(default = "default_scene_transition")]
+    pub transition_ms: f64,
+    /// In a tall or square picture, show the part of the screen around the
+    /// cursor instead of shrinking the whole screen to fit.
+    #[serde(default = "yes")]
+    pub follow_cursor: bool,
+}
+
+fn default_scene_transition() -> f64 {
+    450.0
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Layouts {
+    fn default() -> Self {
+        Self { base: None, segments: Vec::new(), transition_ms: default_scene_transition(), follow_cursor: true }
+    }
+}
+
+/// One layout shown from `start_ms` to `end_ms` (source time).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneRun {
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub kind: SceneKind,
+}
+
+/// The layout at one moment, and the one it is fading into or out of.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneMix {
+    pub kind: SceneKind,
+    /// The other layout and how much of it shows (0 to 1).
+    pub other: Option<(SceneKind, f64)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -504,6 +602,8 @@ pub struct Project {
     pub audio: AudioSettings,
     #[serde(default)]
     pub webcam: Option<Webcam>,
+    #[serde(default)]
+    pub layouts: Layouts,
     #[serde(default)]
     pub watermark: Option<Watermark>,
     #[serde(default)]
@@ -573,6 +673,7 @@ impl Project {
             caption_style: CaptionStyle::default(),
             audio: AudioSettings::default(),
             webcam: None,
+            layouts: Layouts::default(),
             watermark: None,
             callouts: Vec::new(),
             shapes: Vec::new(),
@@ -605,6 +706,107 @@ impl Project {
     pub fn save(&self, path: &Path) -> Result<()> {
         std::fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
+    }
+
+    /// True when the camera can be shown.
+    pub fn has_camera(&self) -> bool {
+        self.webcam.as_ref().is_some_and(|w| w.visible)
+    }
+
+    /// The layout outside every segment.
+    pub fn base_scene(&self) -> SceneKind {
+        if !self.has_camera() {
+            return SceneKind::Screen;
+        }
+        match self.layouts.base {
+            Some(k) => k,
+            None => match self.webcam.as_ref().map(|w| w.layout) {
+                Some(WebcamLayout::Side) => SceneKind::Split,
+                _ => SceneKind::Bubble,
+            },
+        }
+    }
+
+    /// Every moment of the recording in exactly one layout, in order: the
+    /// segments (clipped, the later one winning an overlap), with the base
+    /// layout between them. Without a camera everything is `Screen`.
+    pub fn scene_runs(&self) -> Vec<SceneRun> {
+        let dur = self.duration_ms.max(1.0);
+        let base = self.base_scene();
+        if !self.has_camera() {
+            return vec![SceneRun { start_ms: 0.0, end_ms: dur, kind: SceneKind::Screen }];
+        }
+        let mut segs: Vec<SceneSegment> = self.layouts.segments.iter().filter(|s| s.end_ms > s.start_ms && s.end_ms > 0.0 && s.start_ms < dur).cloned().collect();
+        segs.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+        let mut runs: Vec<SceneRun> = Vec::new();
+        let push = |runs: &mut Vec<SceneRun>, a: f64, b: f64, kind: SceneKind| {
+            if b - a < 1.0 {
+                return;
+            }
+            match runs.last_mut() {
+                Some(l) if l.kind == kind && (a - l.end_ms).abs() < 1.0 => l.end_ms = b,
+                _ => runs.push(SceneRun { start_ms: a, end_ms: b, kind }),
+            }
+        };
+        let mut at = 0.0;
+        for s in segs {
+            let (a, b) = (s.start_ms.max(at), s.end_ms.min(dur));
+            if b <= a {
+                continue;
+            }
+            push(&mut runs, at, a, base);
+            push(&mut runs, a, b, s.kind);
+            at = b;
+        }
+        push(&mut runs, at, dur, base);
+        if runs.is_empty() {
+            runs.push(SceneRun { start_ms: 0.0, end_ms: dur, kind: base });
+        }
+        runs
+    }
+
+    /// Every layout the picture ever uses.
+    pub fn scene_kinds_used(&self) -> Vec<SceneKind> {
+        let mut v: Vec<SceneKind> = Vec::new();
+        for r in self.scene_runs() {
+            if !v.contains(&r.kind) {
+                v.push(r.kind);
+            }
+        }
+        v
+    }
+
+    /// The layout at source time `t`, cross-fading around each change.
+    pub fn scene_at(&self, t: f64) -> SceneMix {
+        let runs = self.scene_runs();
+        let i = runs.iter().position(|r| t < r.end_ms).unwrap_or(runs.len() - 1);
+        let here = runs[i];
+        let tr = self.layouts.transition_ms.clamp(0.0, 3000.0);
+        if tr < 1.0 {
+            return SceneMix { kind: here.kind, other: None };
+        }
+        let smooth = |x: f64| {
+            let x = x.clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+        // The change at the end of this run: it starts fading before the edge.
+        if let Some(next) = runs.get(i + 1) {
+            let half = (tr / 2.0).min((here.end_ms - here.start_ms) / 2.0).min((next.end_ms - next.start_ms) / 2.0);
+            if half >= 1.0 && t >= here.end_ms - half {
+                let k = smooth((t - (here.end_ms - half)) / (2.0 * half));
+                return SceneMix { kind: here.kind, other: Some((next.kind, k)) };
+            }
+        }
+        // The change at the start of this run: it is still finishing.
+        if i > 0 {
+            let prev = runs[i - 1];
+            let half = (tr / 2.0).min((here.end_ms - here.start_ms) / 2.0).min((prev.end_ms - prev.start_ms) / 2.0);
+            if half >= 1.0 && t < here.start_ms + half {
+                let k = smooth((t - (here.start_ms - half)) / (2.0 * half));
+                return SceneMix { kind: prev.kind, other: Some((here.kind, k)) };
+            }
+        }
+        SceneMix { kind: here.kind, other: None }
     }
 
     /// Lengths of the intro and outro cards in ms (0 when absent or empty).

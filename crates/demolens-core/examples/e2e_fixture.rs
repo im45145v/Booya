@@ -37,7 +37,7 @@ fn main() {
     let mut t = 0.0;
     while t < p.duration_ms - 40.0 {
         let src = dec.frame(t, false).expect("frame");
-        let f = r.render(&src, t);
+        let f = r.render(&src, t, None);
         std::fs::write(frames.join(format!("f_{}.png", t as u64)), f.encode_png().expect("png")).expect("write");
         t += 500.0;
     }

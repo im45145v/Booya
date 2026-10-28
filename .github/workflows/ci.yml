@@ -216,12 +216,21 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y ffmpeg espeak-ng
-          python3 -m pip install playwright
+          python3 -m pip install playwright pillow
           google-chrome --version
       - name: Build the test recording
         run: cargo run -q -p demolens-core --example e2e_fixture -- "$RUNNER_TEMP/fx" speech
       - name: The editor can be heard
         run: python3 tests/e2e/test_audio.py "$RUNNER_TEMP/fx"
+      - name: Window sizes and splitters
+        run: python3 tests/e2e/test_layout.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
+      - name: Layout lane and controls
+        run: python3 tests/e2e/test_scenes.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
+      - name: Layouts in the real renderer and exporter
+        run: |
+          cargo run -q -p demolens-core --release --example layouts_gallery -- "$RUNNER_TEMP/gal"
+          python3 tests/e2e/check_gallery.py "$RUNNER_TEMP/gal"
+          mkdir -p "$RUNNER_TEMP/shots/layouts" && cp "$RUNNER_TEMP/gal/shots/"*.png "$RUNNER_TEMP/shots/layouts/"
       - name: Screenshots of the editor
         run: python3 tests/e2e/shots.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

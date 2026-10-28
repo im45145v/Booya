@@ -36,7 +36,7 @@ fn main() {
     }
     p.callouts.push(Callout { text: "Frosted notes match the frame".into(), x: 0.5, y: 0.9, start_ms: 0.0, end_ms: 6000.0 });
     let r = Renderer::new(p, None, 1600, 900, None);
-    let frame = r.render(&src, 1000.0);
+    let frame = r.render(&src, 1000.0, None);
     std::fs::write(out, frame.encode_png().expect("png")).expect("write");
     println!("wrote {out}");
 }

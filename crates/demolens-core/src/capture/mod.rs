@@ -8,6 +8,9 @@
 //! |         | piped to ffmpeg)          | (audio only) |                                  |
 //! | Windows | gdigrab                   | dshow        | TODO: WASAPI loopback            |
 //!
+//! The webcam sidecar (off unless asked for) uses v4l2 on Linux, avfoundation on
+//! macOS and dshow on Windows.
+//!
 //! TODO(wayland): xdg-desktop-portal ScreenCast + PipeWire stream.
 //! TODO(macos): window picker UI and system audio through SCStream.
 //! TODO(windows): Windows.Graphics.Capture backend for per-window capture.
@@ -439,7 +442,16 @@ fn webcam_input() -> Option<Vec<String>> {
         let idx = macos::camera_index()?;
         Some(vec![s("-f"), s("avfoundation"), s("-framerate"), s("30"), s("-video_size"), s("1280x720"), s("-i"), format!("{idx}:none")])
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        // DirectShow. No size or frame rate is asked for: many cameras refuse
+        // a mode they do not list, and the default always opens.
+        let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output().ok()?;
+        let names = mics::parse_dshow_video(&String::from_utf8_lossy(&out.stderr));
+        let dev = mics::pick_camera(&names, std::env::var("DEMOLENS_CAMERA").ok().as_deref())?;
+        Some(vec![s("-f"), s("dshow"), s("-rtbufsize"), s("128M"), s("-i"), format!("video={dev}")])
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         None
     }
@@ -447,7 +459,7 @@ fn webcam_input() -> Option<Vec<String>> {
 
 fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
     let Some(input) = webcam_input() else {
-        warnings.push("No webcam found (webcam capture is supported on Linux and macOS), so there is no camera overlay.".into());
+        warnings.push("No webcam found (check that a camera is connected and that DemoLens may use it), so there is no camera overlay.".into());
         return None;
     };
     let out = dir.join("webcam.mkv");

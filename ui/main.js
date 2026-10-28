@@ -62,7 +62,7 @@ const tl = new Timeline($('timeline'), {
 });
 
 function setProject(p, path = null) {
-  project = p; projectPath = path; tl.selectedZoom = -1; tl.selectedClip = 0; tl.playhead = 0; tl.setProject(p);
+  project = p; projectPath = path; tl.selectedZoom = -1; tl.selectedLayout = -1; tl.selectedClip = 0; tl.playhead = 0; tl.setProject(p);
   history = [JSON.stringify(p)]; hIdx = 0; saved = path ? history[0] : null; updUndo();
   markDone(1); $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
@@ -91,7 +91,8 @@ function syncPanel() {
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only; $('keys-sym').checked = project.keys.symbols !== false;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
-  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = w.layout || 'bubble'; $('cam-mirror').checked = !!w.mirror; }
+  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; }
+  $('lay-follow').checked = (project.layouts || {}).follow_cursor !== false;
   const wm = project.watermark || {}; $('wm-text').value = wm.text || ''; $('wm-corner').value = wm.corner || 'bottom-right'; $('wm-opacity').value = wm.opacity || 0.7;
   const ic = project.intro || {}, oc = project.outro || {};
   $('in-title').value = ic.title || ''; $('in-sub').value = ic.subtitle || ''; $('out-title').value = oc.title || ''; $('out-sub').value = oc.subtitle || '';
@@ -104,6 +105,8 @@ function syncPanel() {
   $('ex-aspect').value = project.export.aspect; $('ex-quality').value = project.export.quality; $('ex-fps').value = project.export.fps; $('ex-format').value = project.export.format;
   renderBlurList(); renderCallouts(); markTemplate(); markDestination();
 }
+// The layout of the whole recording: the chosen one, else what the older Layout setting meant.
+function baseLayout() { const w = project.webcam, b = project.layouts && project.layouts.base; return b || (w && w.layout === 'side' ? 'split' : 'bubble'); }
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
   s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%'); s('zc-hold', (+$('zc-hold').value / 1000).toFixed(1) + ' s'); s('zc-merge', (+$('zc-merge').value / 1000).toFixed(1) + ' s');
@@ -121,7 +124,9 @@ function readPanel() {
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked, symbols: $('keys-sym').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
-  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value, mirror: $('cam-mirror').checked });
+  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
+  { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; }
+  if (project.webcam) { const L = project.layouts; L.base = $('cam-layout').value; L.transition_ms = +$('lay-trans').value; $('lay-trans-out').textContent = (L.transition_ms / 1000).toFixed(2) + ' s'; }
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
     project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
@@ -222,7 +227,19 @@ function syncSelection() {
     $('zoom-scale').value = z.scale; $('zoom-follow').checked = z.follow_cursor;
   } else $('zoom-info').textContent = project.zoom.length ? 'Select a zoom on the timeline. Drag it to move it, drag its edges to resize, double click the zoom lane to add one.' : 'No zooms yet. Press Z or double click the zoom lane to add one.';
   $('zoom-scale-out').textContent = (+$('zoom-scale').value).toFixed(1) + 'x';
+  const g = project.webcam && project.layouts && (project.layouts.segments || [])[tl.selectedLayout];
+  $('lay-kind').disabled = $('lay-del').disabled = !g;
+  if (g) { $('lay-kind').value = g.kind; $('lay-info').textContent = `Layout change ${tl.selectedLayout + 1} of ${project.layouts.segments.length}: ${fmt(g.start_ms)} to ${fmt(g.end_ms)}. Drag it on the timeline to move it, drag its edges to resize.`; }
+  else if ($('lay-info')) $('lay-info').textContent = project.webcam ? 'Double click the Layout lane on the timeline to use another layout for a stretch of the recording.' : 'This recording has no camera, so there is only the screen layout.';
 }
+$('lay-kind').onchange = () => { const g = project?.layouts?.segments?.[tl.selectedLayout]; if (g) { g.kind = $('lay-kind').value; tl.draw(); refresh(); checkpoint(); } };
+$('lay-add').onclick = () => {
+  if (!project?.webcam) return status('This recording has no camera.', 'info');
+  const at = tl.outToSrc(tl.playhead);
+  if (tl.addLayout(at, baseLayout() === 'camera' ? 'screen' : 'camera') < 0) status('There is no room for a layout change here. Move the playhead to a free spot.', 'info');
+  else { syncSelection(); checkpoint(); }
+};
+$('lay-del').onclick = () => { const segs = project?.layouts?.segments; if (segs && tl.selectedLayout >= 0) { segs.splice(tl.selectedLayout, 1); tl.selectedLayout = -1; tl.draw(); syncSelection(); refresh(); checkpoint(); status('Layout change deleted.', 'success'); } };
 
 // ---------- Preview and playback ----------
 let frameLatency = null; // smoothed round trip of a preview frame, ms
@@ -280,7 +297,8 @@ function deleteSelected() {
     for (const k of ['callouts', 'shapes', 'blur']) { const i = (project[k] || []).indexOf(tl.selItem); if (i >= 0) { project[k].splice(i, 1); break; } }
     tl.selItem = null; status('Removed from the timeline'); tl.draw(); syncSelection(); refresh(); return;
   }
-  if (tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; status('Zoom deleted'); }
+  if (tl.selectedLayout >= 0 && project.layouts?.segments?.[tl.selectedLayout]) { project.layouts.segments.splice(tl.selectedLayout, 1); tl.selectedLayout = -1; status('Layout change deleted'); }
+  else if (tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; status('Zoom deleted'); }
   else if (project.clips.length > 1) { project.clips.splice(tl.selectedClip, 1); tl.selectedClip = Math.max(0, tl.selectedClip - 1); tl.playhead = Math.min(tl.playhead, tl.outDur()); status('Clip deleted'); }
   else return status('A project needs at least one clip.');
   tl.draw(); syncSelection(); refresh();
@@ -1339,7 +1357,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 if (!localStorage.getItem('privacy-ack')) {

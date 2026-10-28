@@ -60,6 +60,38 @@ pub(crate) fn parse_dshow_audio(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Video devices (cameras) in the output of `ffmpeg -list_devices true -f dshow`.
+/// Newer ffmpeg builds print `"Name" (video)`, older ones a line with the
+/// name and then one saying `Alternative name`; both are handled.
+#[allow(dead_code)]
+pub(crate) fn parse_dshow_video(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| l.contains("(video)"))
+        .filter_map(|l| {
+            let a = l.find('"')? + 1;
+            let b = l[a..].find('"')? + a;
+            Some(l[a..b].to_string())
+        })
+        .collect()
+}
+
+/// The camera to record: the one named by the user, else the first one that
+/// is a real camera (not a virtual one made by streaming software or a
+/// screen capture driver).
+#[allow(dead_code)]
+pub(crate) fn pick_camera(names: &[String], wanted: Option<&str>) -> Option<String> {
+    if let Some(w) = wanted.filter(|w| !w.trim().is_empty()) {
+        if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(w.trim())) {
+            return Some(n.clone());
+        }
+    }
+    let virt = |n: &str| {
+        let n = n.to_lowercase();
+        ["virtual", "obs", "snap camera", "manycam", "screen capture", "droidcam", "ndi ", "xsplit", "camo"].iter().any(|v| n.contains(v))
+    };
+    names.iter().find(|n| !virt(n)).or_else(|| names.first()).cloned()
+}
+
 /// ffmpeg input arguments for a microphone (`name` None = the default one).
 pub(crate) fn input_args(name: Option<&str>) -> Result<Vec<String>> {
     #[cfg(target_os = "macos")]
@@ -175,6 +207,12 @@ mod tests {
         assert_eq!(p, vec!["alsa_input.usb-Mic"]);
         let w = parse_dshow_audio("[dshow @ 0x1] \"Microphone (Realtek)\" (audio)\n[dshow @ 0x1] \"Integrated Camera\" (video)\n");
         assert_eq!(w, vec!["Microphone (Realtek)"]);
+        let cams = parse_dshow_video("[dshow @ 0x1] \"OBS Virtual Camera\" (video)\n[dshow @ 0x1]   Alternative name \"@device_sw_x\"\n[dshow @ 0x1] \"Integrated Camera\" (video)\n[dshow @ 0x1] \"Microphone (Realtek)\" (audio)\n");
+        assert_eq!(cams, vec!["OBS Virtual Camera", "Integrated Camera"]);
+        assert_eq!(pick_camera(&cams, None).as_deref(), Some("Integrated Camera"), "a virtual camera is not the default");
+        assert_eq!(pick_camera(&cams, Some("obs virtual camera")).as_deref(), Some("OBS Virtual Camera"), "unless asked for");
+        assert_eq!(pick_camera(&cams[..1], None).as_deref(), Some("OBS Virtual Camera"), "better than nothing");
+        assert_eq!(pick_camera(&[], None), None);
         assert!(is_builtin("MacBook Air Microphone"));
         assert!(!is_builtin("WH-CH520"));
     }
