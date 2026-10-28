@@ -177,6 +177,10 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     // Where the voice is clearly on but nothing was transcribed, listen again
     // to just that stretch.
     let tight = voice_onsets(&audio, 16_000);
+    // Words whisper piled up at the end of a chunk are first spread over the
+    // voice they belong to, so they are not taken for missing and heard again
+    // (a second, different hearing would only duplicate them).
+    retime_implausible(&mut words, &voiced);
     let holes = uncovered(&words, &tight, 1_500.0);
     if !holes.is_empty() {
         let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
@@ -645,6 +649,19 @@ mod tests {
         assert!(words[1].end_ms < 8500.0, "'Press' is short again: {words:?}");
         assert!(words[2].start_ms > 7000.0 && words[2].start_ms < 9500.0, "{words:?}");
         assert!(words[5].start_ms > 9000.0, "{words:?}");
+    }
+
+    #[test]
+    fn a_pile_up_at_the_end_is_not_mistaken_for_a_hole_once_it_is_spread() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let voiced = [(0.0, 5400.0), (6750.0, 11370.0)];
+        let mut words = vec![w(300.0, 900.0, "Let's"), w(900.0, 1700.0, "open"), w(1700.0, 2500.0, "the"), w(2500.0, 3300.0, "invoices"), w(3300.0, 4300.0, "page"), w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S")];
+        for t in ["to", "save", "it,", "and", "now", "it", "is"] {
+            words.push(w(11360.0, 11360.0, t));
+        }
+        assert!(!uncovered(&words, &voiced, 1_500.0).is_empty(), "before spreading it looks like a hole");
+        retime_implausible(&mut words, &voiced);
+        assert!(uncovered(&words, &voiced, 1_500.0).is_empty(), "{words:?}");
     }
 
     #[test]
