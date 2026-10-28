@@ -1,14 +1,14 @@
-# DemoLens compared with other tools
+# Booya compared with other tools
 
-Researched on 28 October 2026 from each vendor's own pricing and feature pages (links at the end). Prices change; check the vendor before you decide. This is a feature comparison, not a claim that DemoLens is better at everything: where a tool is ahead, the table says so.
+Researched on 28 October 2026 from each vendor's own pricing and feature pages (links at the end). Prices change; check the vendor before you decide. This is a feature comparison, not a claim that Booya is better at everything: where a tool is ahead, the table says so.
 
 ## The short version
 
-DemoLens is a **free, open source (MIT), local-first** recorder and editor for product demos on macOS, Windows and Linux. Nothing is uploaded unless you turn on a cloud provider or your own S3 bucket, and you are shown what would be sent first. The tools below are mostly paid subscriptions, and the ones with AI features run them in the vendor's cloud.
+Booya is a **free, open source (MIT), local-first** recorder and editor for product demos on macOS, Windows and Linux. Nothing is uploaded unless you turn on a cloud provider or your own S3 bucket, and you are shown what would be sent first. The tools below are mostly paid subscriptions, and the ones with AI features run them in the vendor's cloud.
 
 ## Comparison
 
-| | DemoLens | Screen Studio | Cap | Tella | Loom | Arcade | Descript | Supademo | FocuSee |
+| | Booya | Screen Studio | Cap | Tella | Loom | Arcade | Descript | Supademo | FocuSee |
 |---|---|---|---|---|---|---|---|---|---|
 | **Price** | Free, MIT | $29/mo or $9/mo yearly | Free personal; $29/yr or $58 once for commercial; Pro $12/user/mo | $13 to $19/user/mo yearly, 7 day trial | Free (25 videos, 5 min); $15 to $20/creator/mo yearly | Free (1 demo); $42.50/seat/mo | Creator $24/mo yearly | Free; $38/mo yearly and up | $49.99/yr; $199.99 lifetime |
 | **Platforms** | macOS, Windows, Linux | macOS only | macOS, Windows | macOS, Windows, web | macOS, Windows, web | Chrome, desktop | macOS, Windows | Chrome, desktop | macOS, Windows |
@@ -23,19 +23,19 @@ DemoLens is a **free, open source (MIT), local-first** recorder and editor for p
 | **Noise reduction and loudness** | Local RNNoise and -16 LUFS | Local | Planned | Yes | Yes | n/a | Yes | n/a | Credits |
 | **Webcam bubble and layouts** | Four layouts (screen only, bubble, side by side, camera full screen) that you can switch for any stretch of the recording, with a blend between them; mirror; a cursor following crop for 9:16 and 1:1; no cutout or face tracking yet | Yes, with cutout and split screen | Yes | Yes (many) | Yes | n/a | Yes | n/a | Yes |
 | **iPhone or iPad recording** | Not yet | Yes (USB) | No | Mobile | Mobile app | Figma, media | No | Mobile | Mobile |
-| **Instant share link** | Your own S3 or R2 bucket, signed link; no DemoLens server | Yes (30 min cap) | Yes, or self-host | Yes | Yes | Yes | Yes | Yes | No |
+| **Instant share link** | Your own S3 or R2 bucket, signed link; no Booya server | Yes (30 min cap) | Yes, or self-host | Yes | Yes | Yes | Yes | Yes | No |
 | **Interactive click-through demo** | Yes: one self-contained HTML file from the event log, blur boxes applied, no network calls, shareable by signed link | No | No | No | No | Yes (core) | No | Yes (core) | No |
 | **Export** | MP4, WebM, GIF, SRT, VTT | MP4 to 4K 60, GIF | MP4, WebM, MOV, GIF | MP4 to 4K 60 | MP4 | MP4, GIF (paid) | MP4 | MP4, GIF (paid) | MP4 to 4K 60 |
 | **Intro and outro cards, callouts** | Yes: title cards, timed text callouts | Yes | Basic | Yes | Basic | Yes | Yes | Yes | Yes |
 | **Watermark** | Optional text, off by default; never forced | No (export needs a plan) | No | No | Free plan | Free plan | Free plan | Free plan | Free plan |
 | **Team features and analytics** | No | Sharing | Pro | Yes | Yes | Yes | Yes | Yes | No |
 
-Where the others are clearly ahead today: hosted sharing with viewer analytics and comments (Loom, Tella, Cap Pro), device mockups and iPhone capture (Screen Studio), camera cutout and face tracking (Screen Studio 4, Tella), full transcript-based video editing (Descript, Tella, Screen Studio 4), and branching demos with CRM hooks (Arcade, Supademo). DemoLens has no team workspace and no hosted viewer.
+Where the others are clearly ahead today: hosted sharing with viewer analytics and comments (Loom, Tella, Cap Pro), device mockups and iPhone capture (Screen Studio), camera cutout and face tracking (Screen Studio 4, Tella), full transcript-based video editing (Descript, Tella, Screen Studio 4), and branching demos with CRM hooks (Arcade, Supademo). Booya has no team workspace and no hosted viewer.
 
-## What DemoLens does better
+## What Booya does better
 
 1. **Free and open, with nothing held back.** No plan, no watermark, no export limit, no seat count. Screen Studio will not export without a subscription; Loom's free plan stops at 25 videos of 5 minutes.
-2. **Local-first by default.** Captions (Whisper), secret detection (OCR), noise removal and doc writing all run on your computer. Screen Studio is the only other tool here that does much on-device, and it is Mac only. Cloud providers in DemoLens are off until you choose a provider, per task, and each request shows the endpoint and data first.
+2. **Local-first by default.** Captions (Whisper), secret detection (OCR), noise removal and doc writing all run on your computer. Screen Studio is the only other tool here that does much on-device, and it is Mac only. Cloud providers in Booya are off until you choose a provider, per task, and each request shows the endpoint and data first.
 3. **Automatic secret blurring.** None of the others find emails, API keys, card numbers and Indian IDs (Aadhaar, PAN, UPI) for you; they give you a blur brush.
 4. **Cross-platform.** One tool on macOS, Windows and Linux. Screen Studio is Mac only; Cap has no Linux app.
 5. **Your storage.** Share through your own S3 or Cloudflare R2 bucket with a signed, expiring link. There is no vendor server in the middle.
@@ -66,9 +66,9 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 
 ## ScreenCharm (Mac only, $99 once) and the gaps
 
-ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a one time price of $99 (regular $149) that does auto zoom, camera layouts, a cursor following vertical video and captions. It is the closest match to what DemoLens set out to do, so this table checks each of its listed features against the code in DemoLens 0.6.0.
+ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a one time price of $99 (regular $149) that does auto zoom, camera layouts, a cursor following vertical video and captions. It is the closest match to what Booya set out to do, so this table checks each of its listed features against the code in Booya 0.6.0.
 
-| ScreenCharm feature | DemoLens 0.7.0 |
+| ScreenCharm feature | Booya 0.7.0 |
 |---|---|
 | Smart auto zoom, editable per zoom | Done. Scored and selective, three styles, every zoom is a segment you can drag |
 | Smooth cursor, size and speed | Done (size and smoothing) |
@@ -83,7 +83,7 @@ ScreenCharm (screencharm.com, read on 28 October 2026) is a Mac app sold for a o
 | Motion blur on fast cursor moves and zooms | Zoom and pan blur done in 0.7.0 (a toggle). Blur on the cursor itself is not done |
 | Background music | Done in 0.7.0: import a file, volume, ducking under the voice, fades, start point and loop |
 | Mute single clips | Done in 0.7.0 (and speed per clip) |
-| Blur regions | Done, and DemoLens also finds emails, keys and cards for you |
+| Blur regions | Done, and Booya also finds emails, keys and cards for you |
 | Mic enhancement | Done (RNNoise and loudness) |
 | Canvas sizes for YouTube, LinkedIn, Shorts, Reels, TikTok | Done |
 | Trim, cut, split, per clip speed | Done |

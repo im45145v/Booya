@@ -26,7 +26,7 @@ Product Hunt, YouTube comments and the Arcade, Supademo and Tella communities we
 
 ## The needs, ranked by how many sources raised them
 
-| # | Need | Sources | Already in DemoLens before 0.5.0? | What 0.5.0 does |
+| # | Need | Sources | Already in Booya before 0.5.0? | What 0.5.0 does |
 |---|------|---------|-----------------------------------|-----------------|
 | 1 | **Sound and picture stay together** (drift, export out of sync, hover shown before the cursor gets there) | Cap #382, #593; Screen Studio board ("Hover states appear before cursor reaches them"); Screen Studio developer write up; Screen Studio board export failures | Partly. A Mac fix in 0.4.2. | Measured sound against picture at every stage, on every OS, in CI. Mic on the side for Linux and Windows too. Editor preview follows the sound. See `docs/SYNC.md`. |
 | 2 | **Do not lose work, do not crash** | Cap #1535, #1589, #342, #1920, #109; Screen Studio board ("Export is failed", background glitch); HN 47647872 (went back to Screen Studio after "many bugs and UX oddities" in two alternatives) | Partly (export has retries) | Autosave of every project every 15 s, recovery offer after a crash, projects saved as a folder with the media inside. See `docs/PROJECTS.md`. |
@@ -36,14 +36,14 @@ Product Hunt, YouTube comments and the Arcade, Supademo and Tella communities we
 | 6 | **Text you can fix**: captions, notes, titles | Screen Studio board ("manually add subtitles"); Cap #1522, #2960; HN 40338722 (post capture editing) | Captions per word, titles, watermark. Callout text could only be deleted and re added. | Callout text is now editable in place. `docs/EDITING.md` lists every text element and where to change it. |
 | 7 | **Shortcuts and key overlay that match the keyboard** (Fn, Ctrl, Alt, Option, media keys) | The owner's own request. Raised in no public source read here, so no claim is made about demand. | Mac only | Shipped in 0.5.0 (commit add325d). |
 | 8 | Sharing with links and view analytics | HN 40338722, 40338429, 40338529; Screen Studio board ("Auto-Email") | Private S3 link upload | Not built. Needs a hosted service, which conflicts with "nothing leaves your computer". |
-| 9 | Export data for other editors (cursor as its own layer, click and typing events for Resolve or Premiere) | HN 47646500; Screen Studio board ("Preserve Screen Studio's cursor in advanced editing workflows") | DemoLens already writes the event log (`.jsonl`) beside every recording | Not built. Candidate for the next round. |
+| 9 | Export data for other editors (cursor as its own layer, click and typing events for Resolve or Premiere) | HN 47646500; Screen Studio board ("Preserve Screen Studio's cursor in advanced editing workflows") | Booya already writes the event log (`.jsonl`) beside every recording | Not built. Candidate for the next round. |
 | 10 | Separate audio tracks, import a voice over | Screen Studio board (two posts) | No | Not built. |
 | 11 | 1.25x and similar playback speeds, a start countdown | HN 40338722, 40338535 | Countdown yes, 1.25x no | **1.25x** clip speed added. |
 | 12 | Long recordings and file size | HN 43816883 | Local files, no limit | Nothing to build. |
 
 ## How the top needs were chosen to build
 
-Chosen because (a) several independent sources raise them, (b) DemoLens did not already cover them, and (c) they can be built and tested without a hosted service:
+Chosen because (a) several independent sources raise them, (b) Booya did not already cover them, and (c) they can be built and tested without a hosted service:
 
 1. Sync (need 1): built, measured, and covered by CI on three OSes.
 2. Autosave and projects (need 2): built.

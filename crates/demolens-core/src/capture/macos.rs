@@ -140,7 +140,7 @@ fn plan_avfoundation(o: &RecordOptions) -> Result<CapturePlan> {
         Some(i) => i.to_string(),
         None if video.is_empty() => format!("Capture screen {display}"),
         None => bail!(
-            "No screen to capture was found. ffmpeg lists: {}. Allow DemoLens in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen it.",
+            "No screen to capture was found. ffmpeg lists: {}. Allow Booya in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen it.",
             video.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ")
         ),
     };

@@ -1,8 +1,10 @@
 /* Recording pill. Brand tokens from docs/BRAND.md. */
-:root { --rec: #ef4444; --amber: #fbbf24; --indigo: #6d6af5; --ink: 14, 14, 17; }
+:root { --rec: #FF6369; --amber: #f5b042; --indigo: #9B82FF; --ink: 20, 18, 31; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-body { font: 600 13px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", system-ui, sans-serif; color: #f4f4f7; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono.woff2") format("woff2"); font-weight: 400 600; font-display: swap; }
+body { font: 600 13px/1 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", system-ui, sans-serif; color: #f4f4f7; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
 .pill {
   position: absolute; inset: 4px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px;
   border-radius: 999px; background: rgba(var(--ink), .86); border: 1px solid rgba(255,255,255,.10);
@@ -16,10 +18,10 @@ body.mac .pill { background: rgba(var(--ink), .52); }
 .ib.flash { background: var(--indigo); transform: scale(1.08); }
 .pill.dim { opacity: .5; }
 .pill:hover { opacity: 1; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 0 rgba(239,68,68,.6); animation: pulse 1.6s ease-out infinite; flex: none; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 0 rgba(255,99,105,.6); animation: pulse 1.6s ease-out infinite; flex: none; }
 .pill.paused .dot { background: var(--amber); animation: none; box-shadow: none; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); } 70% { box-shadow: 0 0 0 9px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
-.time { font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: .01em; min-width: 38px; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,99,105,.55); } 70% { box-shadow: 0 0 0 9px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+.time { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: .01em; min-width: 38px; }
 .state { font-size: 11px; font-weight: 600; color: var(--amber); letter-spacing: .04em; text-transform: uppercase; }
 .gap { flex: 1; align-self: stretch; }
 .sep { width: 1px; height: 18px; background: rgba(255,255,255,.14); margin: 0 2px; }
@@ -34,8 +36,8 @@ body.mac .pill { background: rgba(var(--ink), .52); }
 .ib.stop { background: var(--rec); }
 .ib.stop:hover { background: #f26a6a; }
 .ib.ghost { background: transparent; color: rgba(255,255,255,.65); }
-.ib.ghost:hover { background: rgba(239,68,68,.22); color: #fff; }
-.ib:focus-visible, .txt:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 1px; }
+.ib.ghost:hover { background: rgba(255,99,105,.22); color: #fff; }
+.ib:focus-visible, .txt:focus-visible { outline: 2px solid rgba(155,130,255,.4); outline-offset: 1px; }
 .confirm { position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 18px; border-radius: 999px; background: rgb(var(--ink)); }
 .confirm[hidden] { display: none; }
 .confirm span { flex: 1; font-weight: 600; }

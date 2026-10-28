@@ -24,7 +24,7 @@ pub struct Options {
     pub title: Option<String>,
     pub cta_text: Option<String>,
     pub cta_url: Option<String>,
-    /// Show the small "Made with DemoLens" line.
+    /// Show the small "Made with Booya" line.
     pub badge: bool,
     pub max_steps: usize,
 }

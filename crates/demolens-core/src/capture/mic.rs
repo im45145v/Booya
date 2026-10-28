@@ -45,7 +45,7 @@ pub(crate) fn privacy_hint() -> &'static str {
     if cfg!(windows) {
         "On Windows also check Settings > Privacy & security > Microphone, and that \"Let desktop apps access your microphone\" is on."
     } else if cfg!(target_os = "macos") {
-        "Also check System Settings > Privacy & Security > Microphone for DemoLens."
+        "Also check System Settings > Privacy & Security > Microphone for Booya."
     } else {
         ""
     }

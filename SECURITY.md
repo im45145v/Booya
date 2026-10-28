@@ -11,7 +11,7 @@
 
 Please report privately through [GitHub security advisories](https://github.com/im45145v/DemoLens/security/advisories/new). Do not open a public issue. You can expect a reply within 7 days. Please include the version, OS and steps to reproduce.
 
-## What DemoLens does to stay safe
+## What Booya does to stay safe
 
 - No telemetry, accounts or update checks.
 - Strict Content Security Policy; the webview can only write files you picked.

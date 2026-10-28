@@ -1,10 +1,10 @@
 # Efficiency
 
-DemoLens runs on laptops, often while a call or a browser is open, so it tries to use as little CPU, memory and battery as it can without changing what you get.
+Booya runs on laptops, often while a call or a browser is open, so it tries to use as little CPU, memory and battery as it can without changing what you get.
 
-## What DemoLens does to save work
+## What Booya does to save work
 
-- **Hardware video encoding.** Recording and export use the Mac's media engine (`h264_videotoolbox`) on macOS and NVENC on NVIDIA machines. DemoLens checks once per run that the encoder actually opens, and falls back to software x264 if it does not. If a hardware export fails partway, it is redone in software automatically. Set `DEMOLENS_ENCODER=software` to force software.
+- **Hardware video encoding.** Recording and export use the Mac's media engine (`h264_videotoolbox`) on macOS and NVENC on NVIDIA machines. Booya checks once per run that the encoder actually opens, and falls back to software x264 if it does not. If a hardware export fails partway, it is redone in software automatically. Set `DEMOLENS_ENCODER=software` to force software.
 - **Faster software export preset.** When software encoding is used, export uses x264 `veryfast` at CRF 18 instead of `medium`.
 - **Decode only the pixels that are needed.** A Retina recording is decoded at the smallest size that still gives one source pixel per output pixel at the deepest zoom in the project. With no zoom, a 2880x1800 recording exported at 1080p is decoded at about 1680 wide. Zoomed projects decode at full size where needed, so zooms stay sharp. Blur boxes are scaled to match, so redaction is unchanged.
 - **The drop shadow is painted once.** It used to be recomputed for every pixel of every frame. It is now baked into the background when the renderer is created, and each frame only visits the rows and columns the recording card covers. The output is pixel identical (checked by comparing raw RGBA hashes of preview frames before and after).

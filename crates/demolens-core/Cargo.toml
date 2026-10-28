@@ -1,6 +1,6 @@
 [package]
 name = "demolens-core"
-description = "Event log, auto zoom, compositor and export pipeline for DemoLens"
+description = "Event log, auto zoom, compositor and export pipeline for Booya"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "demolens-cli"
-description = "Command line front end for DemoLens"
+description = "Command line front end for Booya"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

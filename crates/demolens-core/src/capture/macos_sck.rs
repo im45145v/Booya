@@ -5,7 +5,7 @@
 //! are fed to ffmpeg as raw BGRA on stdin. ffmpeg still encodes and muxes, so
 //! the encoder choice, the mic input and the stop logic stay as they were.
 //!
-//! The cursor is not captured (DemoLens draws its own) and the DemoLens
+//! The cursor is not captured (Booya draws its own) and the Booya
 //! process is excluded from the capture, so its window and the REC badge never
 //! appear in a recording.
 //!
@@ -137,7 +137,7 @@ extern "C" {
     fn sc_initialize_core_graphics();
 }
 
-pub const PERMISSION_MESSAGE: &str = "DemoLens needs the Screen Recording permission. Open System Settings > Privacy & Security > Screen & System Audio Recording, switch DemoLens on (when you run the demolens command line tool, switch on your terminal app instead), then quit and reopen it.";
+pub const PERMISSION_MESSAGE: &str = "Booya needs the Screen Recording permission. Open System Settings > Privacy & Security > Screen & System Audio Recording, switch Booya on (when you run the demolens command line tool, switch on your terminal app instead), then quit and reopen it.";
 
 pub fn has_permission() -> bool {
     cg::has_access()
@@ -219,7 +219,7 @@ fn even(v: u32) -> u32 {
 }
 
 fn build_source(content: &SCShareableContent, target: &CaptureTarget) -> Result<Source, String> {
-    // Leave DemoLens itself out of the recording.
+    // Leave Booya itself out of the recording.
     let me = std::process::id() as i32;
     let apps = content.applications();
     let own: Vec<&SCRunningApplication> = apps.iter().filter(|a| a.process_id() == me).collect();
@@ -533,7 +533,7 @@ fn window_skip_reason(w: &SCWindow, me: i32) -> Option<&'static str> {
     }
     let Some(app) = w.owning_application() else { return Some("no owning app") };
     if app.process_id() == me {
-        return Some("DemoLens itself");
+        return Some("Booya itself");
     }
     if app.application_name().is_empty() {
         return Some("app has no name");
@@ -562,7 +562,7 @@ pub fn window_report() -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-/// Displays and on screen windows of normal apps (not DemoLens, menu bar
+/// Displays and on screen windows of normal apps (not Booya, menu bar
 /// items or tiny helper windows).
 pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
     let content = shareable()?;
@@ -701,7 +701,7 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
 // System audio
 // ---------------------------------------------------------------------------
 
-/// Records everything the Mac plays (not DemoLens itself) with its own
+/// Records everything the Mac plays (not Booya itself) with its own
 /// ScreenCaptureKit stream, which asks for sound and for a tiny picture that
 /// is thrown away. The sound is written as a float WAV on the recording's
 /// clock (gaps become silence) and turned into the Matroska sidecar on stop.

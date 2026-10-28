@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="DemoLens">
+<meta name="generator" content="Booya">
 <title>{{TITLE}}</title>
 <style>
 :root{--bg:#0f1117;--panel:#171a23;--line:#2a2f3d;--text:#eef0f6;--dim:#9aa1b5;--accent:#7c83ff;--accent2:#ec4899;--r:12px}
@@ -72,7 +72,7 @@ var S=D.steps,i=0,timer=null;
 var $=function(id){return document.getElementById(id)};
 $('ttl').textContent=D.title;$('st-t').textContent=D.title;$('st-s').textContent=D.summary+' '+S.length+' steps. Click the pulsing dot, or press the right arrow.';
 $('en-s').textContent=D.title;
-if(D.badge){$('b1').textContent=$('b2').textContent='Made with DemoLens, free and open source'}
+if(D.badge){$('b1').textContent=$('b2').textContent='Made with Booya, free and open source'}
 if(D.cta_url&&D.cta_text){var c=$('cta');c.textContent=D.cta_text;c.href=D.cta_url;c.hidden=false}
 var dots=$('dots');
 S.forEach(function(s,k){var d=document.createElement('button');d.className='dot';d.title=(k+1)+'. '+s.title;d.setAttribute('aria-label','Go to step '+(k+1)+': '+s.title);d.onclick=function(){stop();show(k)};dots.appendChild(d)});

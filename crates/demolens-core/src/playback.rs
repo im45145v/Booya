@@ -306,7 +306,7 @@ mod output {
                             cpal::SampleFormat::F32 => build::<f32>(&dev, cfg, mixer.clone(), err2.clone())?,
                             cpal::SampleFormat::I16 => build::<i16>(&dev, cfg, mixer.clone(), err2.clone())?,
                             cpal::SampleFormat::I32 => build::<i32>(&dev, cfg, mixer.clone(), err2.clone())?,
-                            other => bail!("the sound output uses a sample format ({other:?}) DemoLens cannot write"),
+                            other => bail!("the sound output uses a sample format ({other:?}) Booya cannot write"),
                         };
                         stream.play().map_err(|e| anyhow::anyhow!("{e}"))?;
                         Ok((stream, mixer, name, rate, channels))

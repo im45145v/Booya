@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from harness import Studio
 
 MAC = [
-    dict(id="screen", title="Screen Recording", detail="Lets DemoLens see your screen so it can record it.", status="denied", required=True, note="macOS may ask you to quit and reopen DemoLens after you switch this on."),
+    dict(id="screen", title="Screen Recording", detail="Lets Booya see your screen so it can record it.", status="denied", required=True, note="macOS may ask you to quit and reopen Booya after you switch this on."),
     dict(id="mic", title="Microphone", detail="Records your voice with the video.", status="unknown", required=False, note=""),
     dict(id="input", title="Input Monitoring", detail="Shows the shortcuts you press (like Cmd+K) in the video. Never what you type.", status="unknown", required=False, note=""),
     dict(id="system-audio", title="System audio", detail="Records what your Mac plays. It uses the Screen Recording permission, and stays off until you switch it on in Record options.", status="denied", required=False, note=""),
@@ -49,8 +49,8 @@ def test_first_launch_on_a_mac(pw, fx):
         s.page.goto(s.base + "/")
         s.page.wait_for_selector("#perm-overlay")
         text = s.page.inner_text("#perm-overlay")
-        assert "Welcome to DemoLens" in text
-        assert "DemoLens never sends your recordings anywhere" in text
+        assert "Welcome to Booya" in text
+        assert "Booya never sends your recordings anywhere" in text
         assert "Accessibility permission" in text and "does not need" in text
         assert "Usage data" not in text and "telemetry" not in text.lower()
         assert text.count("REQUIRED") + text.count("Required") == 1

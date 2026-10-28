@@ -146,7 +146,7 @@ impl EventLog {
             events.push(ev);
         }
         events.sort_by(|a, b| a.t.total_cmp(&b.t));
-        // Version 1 logs (DemoLens 0.1.x) stored typed characters. Reduce
+        // Version 1 logs (Booya 0.1.x) stored typed characters. Reduce
         // them to key classes as they load, so they never reach the overlay.
         for e in &mut events {
             if let EventKind::Key { key, modifiers } = &mut e.kind {

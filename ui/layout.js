@@ -115,5 +115,5 @@
   wire(document.getElementById('split-h'), 'y');
   apply();
   // For tests and for other scripts that need the numbers.
-  window.DemoLensLayout = { apply, limits, saved: () => ({ ...saved }), KEY, PANEL, TL };
+  window.BooyaLayout = { apply, limits, saved: () => ({ ...saved }), KEY, PANEL, TL };
 })();

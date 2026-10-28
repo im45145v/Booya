@@ -171,7 +171,7 @@ pub fn require(id: &str) -> Result<PathBuf> {
     let p = path_of(&m);
     if !is_installed(&m) {
         if m.archive && p.exists() {
-            bail!("the llama.cpp runtime was installed by an older DemoLens without a checksum check. Delete and download it again: demolens models delete {id} && demolens models download {id}");
+            bail!("the llama.cpp runtime was installed by an older Booya without a checksum check. Delete and download it again: demolens models delete {id} && demolens models download {id}");
         }
         bail!("model '{id}' is not installed. Download it with: demolens models download {id} ({})", human(m.size));
     }

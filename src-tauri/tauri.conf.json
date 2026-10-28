@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DemoLens",
+  "productName": "Booya",
   "version": "0.7.0",
   "identifier": "dev.demolens.app",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "DemoLens",
+        "title": "Booya",
         "width": 1360,
         "height": 860,
         "minWidth": 1024,

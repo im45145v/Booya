@@ -185,7 +185,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(6);
 
 fn permission_hint() -> &'static str {
     if cfg!(target_os = "macos") {
-        " On macOS, allow DemoLens in System Settings > Privacy & Security > Screen & System Audio Recording (and Microphone if the mic is on), then quit and reopen DemoLens."
+        " On macOS, allow Booya in System Settings > Privacy & Security > Screen & System Audio Recording (and Microphone if the mic is on), then quit and reopen Booya."
     } else {
         ""
     }
@@ -426,7 +426,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         None
     };
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
-        warnings.push("Key capture is on, but macOS has not allowed DemoLens to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch DemoLens on, then quit and reopen DemoLens.".into());
+        warnings.push("Key capture is on, but macOS has not allowed Booya to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch Booya on, then quit and reopen Booya.".into());
     }
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
@@ -468,7 +468,7 @@ fn webcam_input() -> Option<Vec<String>> {
 
 fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
     let Some(input) = webcam_input() else {
-        warnings.push("No webcam found (check that a camera is connected and that DemoLens may use it), so there is no camera overlay.".into());
+        warnings.push("No webcam found (check that a camera is connected and that Booya may use it), so there is no camera overlay.".into());
         return None;
     };
     let out = dir.join("webcam.mkv");
@@ -882,7 +882,7 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
         let keys_ok = !crate::input::key_permission_missing(false);
         v["input_monitoring_permission"] = json!(keys_ok);
         if !keys_ok {
-            next.push("Input Monitoring is not allowed, so shortcuts and typing cannot be shown in videos. Run `demolens doctor --prompt-keys` or turn on Keys in the app to get the macOS prompt, then enable DemoLens in System Settings > Privacy & Security > Input Monitoring.".into());
+            next.push("Input Monitoring is not allowed, so shortcuts and typing cannot be shown in videos. Run `demolens doctor --prompt-keys` or turn on Keys in the app to get the macOS prompt, then enable Booya in System Settings > Privacy & Security > Input Monitoring.".into());
         }
         match macos_sck::content_info() {
             Ok(c) => v["displays"] = serde_json::to_value(&c).unwrap_or(Value::Null),

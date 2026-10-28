@@ -289,7 +289,7 @@ pub fn markdown(d: &DemoDocs) -> String {
             out.push('\n');
         }
     }
-    out.push_str(&format!("## Social post\n\n{}\n\n_Generated offline by DemoLens with the {}._\n", d.social_post, d.generated_by));
+    out.push_str(&format!("## Social post\n\n{}\n\n_Generated offline by Booya with the {}._\n", d.social_post, d.generated_by));
     out
 }
 

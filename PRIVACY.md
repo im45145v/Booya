@@ -1,9 +1,9 @@
-# DemoLens privacy notice
+# Booya privacy notice
 
-Last updated: 28 October 2026. Applies to DemoLens 0.2.0 and later.
+Last updated: 28 October 2026. Applies to Booya 0.2.0 and later.
 
 ## Who we are
-DemoLens is open source software maintained by Ashish Malla, India. Contact: open a private report at https://github.com/im45145v/DemoLens/security/advisories/new, or email im45145v@users.noreply.github.com via GitHub.
+Booya is open source software maintained by Ashish Malla, India. Contact: open a private report at https://github.com/im45145v/DemoLens/security/advisories/new, or email im45145v@users.noreply.github.com via GitHub.
 
 ## What we collect
 Nothing. The maintainer does not receive any data from the app. There is no account, telemetry, analytics, crash reporting or update check.
@@ -15,7 +15,7 @@ Nothing. The maintainer does not receive any data from the app. There is no acco
 - Settings, and the cloud provider choices with the date you turned each one on.
 - API keys and storage secrets, only in your operating system keychain.
 
-Recordings are saved under `Videos/DemoLens/` (private folders, readable only by you on Linux and macOS) or where you choose. Settings > Privacy can delete old recordings automatically, delete one recording, or delete all DemoLens data.
+Recordings are saved under `Videos/DemoLens/` (private folders, readable only by you on Linux and macOS) or where you choose. Settings > Privacy can delete old recordings automatically, delete one recording, or delete all Booya data.
 
 ## Network connections
 - **Model downloads** from huggingface.co, github.com and an Amazon S3 bucket, only when you click download. Each file is checked against a SHA-256 hash. These services see your IP address under their own privacy policies.
@@ -27,7 +27,7 @@ Recordings are saved under `Videos/DemoLens/` (private folders, readable only by
 If you record other people or their data for work, you are the controller (GDPR) or data fiduciary (DPDP Act 2023) for that recording. Tell people, get consent where needed, and keep recordings only as long as you need them. Purely personal or household use falls outside GDPR (Art 2(2)(c)) and the DPDP Act (Section 3(c)(i)). Auto blur helps but can miss text: watch every export before sharing it.
 
 ## Children
-DemoLens is not aimed at children and collects no data from anyone.
+Booya is not aimed at children and collects no data from anyone.
 
 ## Changes and questions
 Changes are listed in the release notes. Questions or security issues: see "Who we are" above.
