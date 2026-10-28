@@ -177,11 +177,14 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     // Where the voice is clearly on but nothing was transcribed, listen again
     // to just that stretch.
     let tight = voice_onsets(&audio, 16_000);
-    let holes = uncovered(&words, &tight, 2_000.0);
+    let holes = uncovered(&words, &tight, 1_500.0);
     if !holes.is_empty() {
         let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
         if let Ok(found) = run_ranges(&audio, model, language, &prompt, &ranges) {
             for ((a, b), ws) in holes.iter().zip(found) {
+                if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
+                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again {:?}", ws.iter().map(|w| (w.text.as_str(), w.start_ms.round())).collect::<Vec<_>>());
+                }
                 let mut ws: Vec<CaptionWord> = ws.into_iter().filter(|w| w.start_ms >= a - 100.0 && w.start_ms < *b && !demolens_core::captions::is_nonspeech(&w.text)).collect();
                 if ws.len() >= 2 && !only_hallucination(&ws) {
                     words.append(&mut ws);
@@ -367,20 +370,30 @@ pub fn merge_chunks(chunks: &[(usize, usize)], parts: Vec<Vec<CaptionWord>>, rat
     out.into_iter().map(|(_, w)| w).collect()
 }
 
-/// Stretches of at least `min_ms` where the voice is on (`voiced`, from
-/// `voice_onsets`) and not a single word was transcribed.
+/// Stretches between words where the voice is on for at least `min_ms` in
+/// total (`voiced`, from `voice_onsets`, which comes in many short runs for
+/// fast speech) and not a single word was transcribed. A word's end is taken
+/// as at most a second after its start, because whisper sometimes stretches
+/// one word over everything it dropped.
 pub fn uncovered(words: &[CaptionWord], voiced: &[(f64, f64)], min_ms: f64) -> Vec<(f64, f64)> {
-    let mut out = Vec::new();
-    for &(a, b) in voiced {
-        let mut at = a;
-        for w in words.iter().filter(|w| w.end_ms > a && w.start_ms < b) {
-            if w.start_ms - at >= min_ms {
-                out.push((at, w.start_ms));
-            }
-            at = at.max(w.end_ms);
+    let Some(end) = voiced.last().map(|v| v.1) else { return Vec::new() };
+    let mut gaps: Vec<(f64, f64)> = Vec::new();
+    let mut at = 0.0f64;
+    for w in words {
+        if w.start_ms > at {
+            gaps.push((at, w.start_ms));
         }
-        if b - at >= min_ms {
-            out.push((at, b));
+        at = at.max(w.end_ms.min(w.start_ms + 1_000.0));
+    }
+    if end > at {
+        gaps.push((at, end));
+    }
+    let mut out = Vec::new();
+    for (a, b) in gaps {
+        let inside: Vec<(f64, f64)> = voiced.iter().filter(|v| v.1 > a && v.0 < b).map(|v| (v.0.max(a), v.1.min(b))).collect();
+        let total: f64 = inside.iter().map(|v| v.1 - v.0).sum();
+        if total >= min_ms {
+            out.push((inside[0].0, inside[inside.len() - 1].1));
         }
     }
     out
@@ -835,5 +848,18 @@ mod tests {
         let holes = uncovered(&words, &voiced, 2_000.0);
         assert_eq!(holes, vec![(900.0, 5_200.0), (5_500.0, 10_000.0)]);
         assert!(uncovered(&words, &voiced, 5_000.0).is_empty());
+    }
+
+    #[test]
+    fn fast_speech_in_many_short_runs_still_counts_as_one_hole() {
+        // Voice on for 5.6 s in runs with short pauses, words only at the start.
+        let voiced = vec![(0.0, 1_160.0), (1_320.0, 3_820.0), (4_100.0, 4_440.0), (4_720.0, 4_900.0), (5_080.0, 6_980.0), (7_160.0, 7_880.0)];
+        let words = vec![word("you", 1_320.0, 1_410.0), word("downloads", 2_460.0, 3_000.0)];
+        let holes = uncovered(&words, &voiced, 2_000.0);
+        assert_eq!(holes, vec![(3_000.0, 7_880.0)]);
+        // A word stretched over the dropped part does not hide it.
+        let stretched = vec![word("you", 1_320.0, 7_800.0)];
+        assert_eq!(uncovered(&stretched, &voiced, 2_000.0), vec![(2_320.0, 7_880.0)]);
+        assert!(uncovered(&[], &[], 2_000.0).is_empty());
     }
 }
