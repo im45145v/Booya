@@ -2100,15 +2100,12 @@ fn main() {
             // drop the live sessions, whose Drop stops their child processes.
             if let tauri::RunEvent::Exit = event {
                 let st = app.state::<AppState>();
-                if let Ok(mut g) = st.recording.lock() {
-                    g.take();
-                }
-                if let Ok(mut g) = st.meter.lock() {
-                    g.take();
-                }
-                if let Ok(mut g) = st.decoder.lock() {
-                    g.take();
-                }
+                let rec = st.recording.lock().ok().and_then(|mut g| g.take());
+                drop(rec);
+                let meter = st.meter.lock().ok().and_then(|mut g| g.take());
+                drop(meter);
+                let dec = st.decoder.lock().ok().and_then(|mut g| g.take());
+                drop(dec);
             }
         });
 }
