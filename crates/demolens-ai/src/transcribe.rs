@@ -204,10 +204,10 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
         // The run is the bad word and what piled up after it, including a word
         // or two between them that happens to have a believable length.
         let mut j = i + 1;
-        while j < n && (collapsed(&words[j]) || (1..=2).any(|d| j + d < n && collapsed(&words[j + d]))) {
+        let stretched = |w: &CaptionWord| w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
+        while j < n && (collapsed(&words[j]) || (!stretched(&words[j]) && (1..=2).any(|d| j + d < n && collapsed(&words[j + d]) && (1..d).all(|e| !stretched(&words[j + e]))))) {
             j += 1;
         }
-        let stretched = |w: &CaptionWord| w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
         if j - i < 2 {
             // A lone word held over a pause: it ends when it has been said.
             if stretched(&words[i]) {
@@ -435,6 +435,22 @@ mod tests {
         for p in words[1..].windows(2) {
             assert!(p[0].end_ms <= p[1].start_ms + 1.0, "{words:?}");
         }
+    }
+
+    #[test]
+    fn two_stretched_words_in_a_row_are_not_one_run() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        // Third CI run: "March." held, then "Press" held, then the pile-up.
+        let mut words = vec![w(4320.0, 7050.0, "March."), w(7050.0, 11360.0, "Press")];
+        for t in ["Ctrl+Lester", "save", "it,", "and", "now", "it", "is"] {
+            words.push(w(11360.0, 11360.0, t));
+        }
+        words.push(w(11360.0, 11370.0, "saved."));
+        retime_implausible(&mut words, &[(0.0, 5400.0), (6750.0, 11370.0)]);
+        assert!(words[0].end_ms < 5300.0, "{words:?}");
+        assert!(words[1].start_ms >= 7050.0 && words[1].end_ms < 8300.0, "Press stays where it started: {words:?}");
+        assert!(words[3].start_ms > 8000.0, "{words:?}");
+        assert!(words.iter().all(|w| w.end_ms <= 11370.0), "{words:?}");
     }
 
     #[test]
