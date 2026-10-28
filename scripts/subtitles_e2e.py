@@ -22,7 +22,7 @@ MODEL = "whisper-tiny.en"
 def run(*args):
     r = subprocess.run([BIN, *map(str, args)], capture_output=True, text=True)
     print("$ demolens", *args, "->", r.returncode)
-    print(r.stdout[-1500:], r.stderr[-800:])
+    print(r.stdout[-3000:], r.stderr[-400:])
     if r.returncode != 0:
         sys.exit(f"demolens {args[0]} failed")
     return r.stdout
@@ -66,6 +66,8 @@ run("models", "download", MODEL)
 # --- speech ---
 sp = project_path(run("sample", WORK / "speech", "--speech"))
 run("transcribe", sp, "--model", MODEL)
+for c in json.loads(Path(sp).read_text())["captions"]:
+    print("  words:", [(w["text"], round(w["start_ms"]), round(w["end_ms"])) for w in c["words"]])
 run("captions", sp, "--burn", "on", "-o", WORK / "a.srt")
 run("captions", sp, "-o", WORK / "a.vtt")
 srt, vtt = read_cues(WORK / "a.srt"), read_cues(WORK / "a.vtt", True)
@@ -85,6 +87,7 @@ check(len(saved["captions"]) == len(srt) and saved["caption_style"]["burn_in"] i
 check(all(c["words"] for c in saved["captions"]), "every saved caption keeps its word timings")
 
 # --- cutting filler words keeps captions in step ---
+run("autocut", sp, "--fillers", "--dry-run")
 out = run("autocut", sp, "--fillers")
 m = re.search(r"output ([\d.]+)s -> ([\d.]+)s", out)
 check(bool(m), "autocut reports the new length")

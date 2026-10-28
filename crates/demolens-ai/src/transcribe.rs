@@ -168,6 +168,8 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
         w.end_ms = uncompact_ms(w.end_ms, &map, 16_000).max(w.start_ms);
     }
     words.retain(|w| !demolens_core::captions::is_nonspeech(&w.text));
+    let voiced: Vec<(f64, f64)> = spans.iter().map(|&(a, b)| (a as f64 * 1000.0 / 16_000.0, b as f64 * 1000.0 / 16_000.0)).collect();
+    retime_implausible(&mut words, &voiced);
     if only_hallucination(&words) {
         words.clear();
     }
@@ -175,6 +177,55 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
         let _ = write_private(&cache, &s);
     }
     Ok(words)
+}
+
+/// Word times from whisper without alignment heads are crude. The small models
+/// sometimes stretch one word over several seconds and squash the words after
+/// it into one instant at the end. A caption that starts at the very end of the
+/// video then never shows. Words with such times are spread again over the time
+/// the voice is really on (`voiced`, in ms), in proportion to their length.
+pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
+    let n = words.len();
+    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+    let collapsed = |w: &CaptionWord| w.end_ms - w.start_ms < 25.0;
+    let bad = |w: &CaptionWord| collapsed(w) || w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
+    let mut i = 0;
+    while i < n {
+        if !bad(&words[i]) {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < n && collapsed(&words[j]) {
+            j += 1;
+        }
+        let lo = words[i].start_ms;
+        let hi = if j < n { words[j].start_ms.max(words[j - 1].end_ms) } else { words[j - 1].end_ms };
+        let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(a, b)| (a.max(lo) < b.min(hi)).then(|| (a.max(lo), b.min(hi)))).collect();
+        let total: f64 = pieces.iter().map(|(a, b)| b - a).sum();
+        if j - i < 2 && !(words[i].end_ms - words[i].start_ms > 800.0 + 120.0 * chars(&words[i]) as f64) || total < 60.0 * (j - i) as f64 {
+            i = j;
+            continue;
+        }
+        let at = |mut v: f64| {
+            for (a, b) in &pieces {
+                if v <= b - a {
+                    return a + v;
+                }
+                v -= b - a;
+            }
+            pieces.last().map(|p| p.1).unwrap_or(lo)
+        };
+        let weights: Vec<f64> = (i..j).map(|k| chars(&words[k]) as f64 + 1.0).collect();
+        let sum: f64 = weights.iter().sum();
+        let mut acc = 0.0;
+        for (k, wt) in (i..j).zip(weights) {
+            words[k].start_ms = at(acc / sum * total);
+            acc += wt;
+            words[k].end_ms = at(acc / sum * total - 20.0).max(words[k].start_ms + 20.0);
+        }
+        i = j;
+    }
 }
 
 /// Quietest 30 ms window (RMS) that counts as sound at all: about -52 dBFS.
@@ -316,6 +367,32 @@ mod tests {
         assert!(!only_hallucination(&[w("Thank"), w("you"), w("for"), w("coming"), w("today")]));
         assert!(!only_hallucination(&[w("Click"), w("here")]));
         assert!(!only_hallucination(&[]));
+    }
+
+    #[test]
+    fn words_squashed_at_the_end_are_spread_over_the_voice() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        // What whisper tiny did on the CI recording: "Press" stretched over four
+        // seconds, the rest of the sentence piled up at the end of the video.
+        let mut words = vec![w(300.0, 900.0, "Let's"), w(7050.0, 11000.0, "Press"), w(12010.0, 12010.0, "Ctrl+S"), w(12010.0, 12010.0, "to"), w(12010.0, 12010.0, "save"), w(12010.0, 12010.0, "it,")];
+        retime_implausible(&mut words, &[(0.0, 1000.0), (6900.0, 11100.0)]);
+        assert_eq!((words[0].start_ms, words[0].end_ms), (300.0, 900.0), "a sane word is left alone");
+        for pair in words[1..].windows(2) {
+            assert!(pair[0].end_ms <= pair[1].start_ms + 1.0 && pair[0].start_ms < pair[0].end_ms, "{words:?}");
+        }
+        assert!(words.iter().all(|w| w.end_ms <= 11100.0), "{words:?}");
+        assert!(words[1].end_ms < 8500.0, "'Press' is short again: {words:?}");
+        assert!(words[2].start_ms > 7000.0 && words[2].start_ms < 9500.0, "{words:?}");
+        assert!(words[5].start_ms > 9000.0, "{words:?}");
+    }
+
+    #[test]
+    fn normal_timings_are_not_touched() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let orig = vec![w(0.0, 400.0, "Open"), w(400.0, 700.0, "the"), w(700.0, 1500.0, "settings")];
+        let mut words = orig.clone();
+        retime_implausible(&mut words, &[(0.0, 1500.0)]);
+        assert_eq!(words, orig);
     }
 
     #[test]
