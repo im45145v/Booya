@@ -181,16 +181,14 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     // voice they belong to, so they are not taken for missing and heard again
     // (a second, different hearing would only duplicate them).
     retime_implausible(&mut words, &voiced);
-    let holes = uncovered(&words, &tight, 1_500.0);
+    let holes: Vec<(f64, f64)> = uncovered(&words, &tight, 1_500.0).into_iter().flat_map(|h| split_hole(h, 7_000.0)).collect();
     if !holes.is_empty() {
         let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
         if let Ok(found) = run_ranges(&audio, model, language, &prompt, &ranges) {
-            for (((a, b), (from, _)), ws) in holes.iter().zip(&ranges).zip(found) {
+            for (((a, b), (from, to)), ws) in holes.iter().zip(&ranges).zip(found) {
                 // Whisper's times are from the start of the stretch it was given.
                 let off = *from as f64 * 1000.0 / 16_000.0;
-                if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
-                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again {:?}", ws.iter().map(|w| (w.text.as_str(), (w.start_ms + off).round())).collect::<Vec<_>>());
-                }
+                let end = *to as f64 * 1000.0 / 16_000.0;
                 let mut ws: Vec<CaptionWord> = ws
                     .into_iter()
                     .map(|mut w| {
@@ -198,8 +196,13 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
                         w.end_ms += off;
                         w
                     })
-                    .filter(|w| w.start_ms >= a - 100.0 && w.start_ms < *b && !demolens_core::captions::is_nonspeech(&w.text))
+                    .filter(|w| !demolens_core::captions::is_nonspeech(&w.text))
                     .collect();
+                let spread = respread_if_implausible(&mut ws, &tight, off, end);
+                if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
+                    eprintln!("transcribe: hole {a:.0}..{b:.0} heard again{} {:?}", if spread { " (times spread)" } else { "" }, ws.iter().map(|w| (w.text.as_str(), w.start_ms.round())).collect::<Vec<_>>());
+                }
+                ws.retain(|w| w.start_ms >= a - 100.0 && w.start_ms < *b);
                 if ws.len() >= 2 && !only_hallucination(&ws) {
                     words.append(&mut ws);
                 }
@@ -452,25 +455,60 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
             i = j;
             continue;
         }
-        let at = |mut v: f64| {
-            for (a, b) in &pieces {
-                if v <= b - a {
-                    return a + v;
-                }
-                v -= b - a;
-            }
-            pieces.last().map(|p| p.1).unwrap_or(lo)
-        };
-        let weights: Vec<f64> = (i..j).map(|k| chars(&words[k]) as f64 + 1.0).collect();
-        let sum: f64 = weights.iter().sum();
-        let mut acc = 0.0;
-        for (k, wt) in (i..j).zip(weights) {
-            words[k].start_ms = at(acc / sum * total);
-            acc += wt;
-            words[k].end_ms = at(acc / sum * total - 20.0).max(words[k].start_ms + 20.0);
-        }
+        spread(&mut words[i..j], &pieces, total);
         i = j;
     }
+}
+
+/// Lays `words` one after the other over the stretches in `pieces` (ms, in
+/// order, `total` ms long in all), each taking a share in proportion to its
+/// length.
+fn spread(words: &mut [CaptionWord], pieces: &[(f64, f64)], total: f64) {
+    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+    let lo = pieces.first().map(|p| p.0).unwrap_or(0.0);
+    let at = |mut v: f64| {
+        for (a, b) in pieces {
+            if v <= b - a {
+                return a + v;
+            }
+            v -= b - a;
+        }
+        pieces.last().map(|p| p.1).unwrap_or(lo)
+    };
+    let weights: Vec<f64> = words.iter().map(|w| chars(w) as f64 + 1.0).collect();
+    let sum: f64 = weights.iter().sum();
+    let mut acc = 0.0;
+    for (w, wt) in words.iter_mut().zip(weights) {
+        w.start_ms = at(acc / sum * total);
+        acc += wt;
+        w.end_ms = at(acc / sum * total - 20.0).max(w.start_ms + 20.0);
+    }
+}
+
+/// Words heard again in a stretch whose times are mostly unbelievable (held
+/// for seconds, or squashed into an instant) are laid over the voice in that
+/// stretch instead: the words are right, the times are not.
+pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)], from: f64, to: f64) -> bool {
+    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+    let bad = |w: &CaptionWord| w.end_ms - w.start_ms < 25.0 || w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
+    if words.len() < 2 || (words.iter().filter(|w| bad(w)).count() as f64) < 0.3 * words.len() as f64 {
+        return false;
+    }
+    let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(a, b)| (a.max(from) < b.min(to)).then(|| (a.max(from), b.min(to)))).collect();
+    let total: f64 = pieces.iter().map(|(a, b)| b - a).sum();
+    if total < 60.0 * words.len() as f64 {
+        return false;
+    }
+    spread(words, &pieces, total);
+    true
+}
+
+/// A voiced stretch with nothing transcribed, cut into pieces of at most
+/// `max_ms` (whisper tiny does much better on a few seconds than on ten).
+pub fn split_hole((a, b): (f64, f64), max_ms: f64) -> Vec<(f64, f64)> {
+    let n = ((b - a) / max_ms).ceil().max(1.0) as usize;
+    let step = (b - a) / n as f64;
+    (0..n).map(|i| (a + step * i as f64, a + step * (i + 1) as f64)).collect()
 }
 
 /// Quietest 30 ms window (RMS) that counts as sound at all: about -52 dBFS.
@@ -662,6 +700,31 @@ mod tests {
         assert!(!uncovered(&words, &voiced, 1_500.0).is_empty(), "before spreading it looks like a hole");
         retime_implausible(&mut words, &voiced);
         assert!(uncovered(&words, &voiced, 1_500.0).is_empty(), "{words:?}");
+    }
+
+    #[test]
+    fn words_with_unbelievable_times_are_laid_over_the_voice() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        // What whisper tiny gave for eight seconds of fast speech: a few held
+        // words, then everything else squashed at the end.
+        let mut ws = vec![w(70.0, 2030.0, "So,"), w(2030.0, 4480.0, "let's"), w(4480.0, 5460.0, "go")];
+        for t in ["back", "to", "the", "dashboard", "and"] {
+            ws.push(w(8850.0, 8850.0, t));
+        }
+        assert!(respread_if_implausible(&mut ws, &[(0.0, 8860.0)], 0.0, 8860.0));
+        assert!(ws.windows(2).all(|p| p[0].end_ms <= p[1].start_ms + 1.0), "{ws:?}");
+        assert!(ws[3].start_ms < 6000.0 && ws[7].end_ms <= 8860.0 && ws.iter().all(|w| w.end_ms - w.start_ms < 2500.0), "{ws:?}");
+        let mut fine = vec![w(0.0, 300.0, "one"), w(300.0, 700.0, "two"), w(700.0, 900.0, "three")];
+        assert!(!respread_if_implausible(&mut fine, &[(0.0, 900.0)], 0.0, 900.0), "good times stay");
+        assert_eq!(fine[1].start_ms, 300.0);
+    }
+
+    #[test]
+    fn long_holes_are_heard_in_short_pieces() {
+        assert_eq!(split_hole((0.0, 5000.0), 7000.0), vec![(0.0, 5000.0)]);
+        let p = split_hole((1000.0, 11000.0), 7000.0);
+        assert_eq!(p.len(), 2);
+        assert!(p.iter().all(|(a, b)| b - a <= 7000.0) && p[0].1 == p[1].0 && p[1].1 == 11000.0);
     }
 
     #[test]
