@@ -99,7 +99,8 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
         // A clip that starts before the (delayed) audio does gets silence first.
         let pad = ((off - c.src_start_ms / 1000.0).max(0.0) / c.speed.max(0.01) * 1000.0).round();
         let pad = if pad > 0.0 { format!(",adelay={pad:.0}:all=1") } else { String::new() };
-        f.push_str(&format!("[{idx}:a]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
+        let rebase = if project.audio.rebase_start { "asetpts=PTS-STARTPTS," } else { "" };
+        f.push_str(&format!("[{idx}:a]{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
     }
     for i in 0..n {
         f.push_str(&format!("[a{i}]"));
@@ -110,6 +111,33 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
         f.push_str(&format!("concat=n={n}:v=0:a=1[acat];[acat]{post}[aout]"));
     }
     f
+}
+
+/// The project with the source's audio lead folded in. An audio track that
+/// starts later (or earlier) than the video in the file, as in recordings made
+/// before 0.4.1 or with a slow microphone, would otherwise be shifted to start
+/// with the picture. With `zero_based` the audio comes from a file that
+/// already starts at zero (the denoised copy), so only the offset is needed.
+pub fn with_audio_lead(project: &Project, zero_based: bool) -> Project {
+    let mut p = project.clone();
+    let v = crate::finalize::stream_times(&project.source, "v:0");
+    let a = crate::finalize::stream_times(&project.source, "a:0");
+    if let (Some(v), Some(a)) = (v, a) {
+        let lead_ms = (a.0 - v.0) * 1000.0;
+        if lead_ms.abs() > 40.0 && lead_ms.abs() < 30_000.0 {
+            p.audio.offset_ms += lead_ms;
+            p.audio.rebase_start = !zero_based;
+        }
+    }
+    p
+}
+
+/// Ends an audio graph at exactly `whole_dur_s`: optional silence in front
+/// (a title card), then padding behind, so a track shorter than the picture
+/// never cuts the video short.
+pub fn pad_audio_graph(graph: &str, front_ms: f64, whole_dur_s: f64) -> String {
+    let delay = if front_ms > 0.5 { format!("adelay={front_ms:.0}:all=1,") } else { String::new() };
+    format!("{}[ao0];[ao0]{delay}apad=whole_dur={whole_dur_s:.3}[aout]", graph.trim_end_matches("[aout]"))
 }
 
 /// Gain, normalising, volume and fades after the clips are joined. With
@@ -209,8 +237,9 @@ fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f6
     if project.audio.mute || !info.has_audio {
         cmd.args(["-map", "0:v:0", "-an", "-c:v", "copy"]);
     } else {
-        let m = if project.audio.normalize { measure_export_audio(project, &project.source) } else { None };
-        let graph = audio_graph(project, 0, &post_chain(project, m.as_ref(), true));
+        let ap = with_audio_lead(project, false);
+        let m = if ap.audio.normalize { measure_export_audio(&ap, &project.source) } else { None };
+        let graph = pad_audio_graph(&audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), 0.0, project.output_duration_ms() / 1000.0);
         cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
     }
     cmd.args(["-movflags", "+faststart"]);
@@ -305,15 +334,13 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         audio_input = denoised;
     }
     let audio_graph_text = if with_audio {
-        let m = if project.audio.normalize { measure_export_audio(project, &audio_input) } else { None };
-        let g = audio_graph(project, 1, &post_chain(project, m.as_ref(), true));
-        if intro_n + outro_n > 0 {
-            // Silence under the intro, and padding so the outro is not cut short.
-            let delay = if intro_n > 0 { format!("adelay={:.0}:all=1,", intro_ms) } else { String::new() };
-            format!("{}[ao0];[ao0]{delay}apad=whole_dur={:.3}[aout]", g.trim_end_matches("[aout]"), (out_dur + intro_ms + outro_ms) / 1000.0)
-        } else {
-            g
-        }
+        // Lead of the audio track over the video, folded in (see with_audio_lead).
+        let ap = with_audio_lead(project, tmp.is_some());
+        let m = if ap.audio.normalize { measure_export_audio(&ap, &audio_input) } else { None };
+        let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
+        // Silence under the intro, and padding to the full length so neither a
+        // short microphone track nor the outro card cuts the video short.
+        pad_audio_graph(&g, if intro_n > 0 { intro_ms } else { 0.0 }, (out_dur + intro_ms + outro_ms) / 1000.0)
     } else {
         String::new()
     };
@@ -323,14 +350,14 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
                 cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
             }
-            cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest"]);
+            cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
         }
         Format::Webm => {
             if with_audio {
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
                 cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "128k"]);
             }
-            cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p", "-shortest"]);
+            cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p"]);
         }
         Format::Gif => {
             cmd.args(["-vf", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a", "-loop", "0"]);
@@ -541,6 +568,68 @@ mod tests {
         let mean = |l: &str| l.lines().find_map(|x| x.split("mean_volume:").nth(1)).and_then(|v| v.trim().trim_end_matches(" dB").parse::<f64>().ok());
         let _ = log;
         assert!(mean(&loud_log).unwrap_or(-91.0) > -40.0, "no sound after the intro: {loud_log}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn rms(x: &[f32], from_s: f64, to_s: f64, rate: f64) -> f32 {
+        let (a, b) = ((from_s * rate) as usize, ((to_s * rate) as usize).min(x.len()));
+        if b <= a {
+            return 0.0;
+        }
+        (x[a..b].iter().map(|v| v * v).sum::<f32>() / (b - a) as f32).sqrt()
+    }
+
+    fn make_source(dir: &std::path::Path, name: &str, audio_args: &[&str]) -> std::path::PathBuf {
+        let src = dir.join(name);
+        let mut args = vec!["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3"];
+        args.extend_from_slice(audio_args);
+        args.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]);
+        assert!(Command::new(ffmpeg::ffmpeg_bin()).args(&args).arg(&src).status().unwrap().success());
+        src
+    }
+
+    #[test]
+    fn a_short_audio_track_does_not_cut_the_video_short() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-short-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 3 s of picture, only 1.5 s of sound.
+        let src = make_source(&dir, "a.mkv", &["-f", "lavfi", "-i", "sine=frequency=300:d=1.5"]);
+        let mut p = Project::new(src, None, 1920, 1080, 3000.0);
+        p.export.quality = 360;
+        p.audio.normalize = false;
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let d = crate::ffmpeg::probe(&out).unwrap().duration_ms;
+        assert!((d - 3000.0).abs() < 250.0, "the export was cut to {d} ms");
+        let x = crate::audio::decode_mono(&out, 8000).unwrap();
+        assert!((x.len() as f64 / 8000.0 - 3.0).abs() < 0.3, "audio is {} s", x.len() as f64 / 8000.0);
+        assert!(rms(&x, 0.2, 1.2, 8000.0) > 0.05 && rms(&x, 2.0, 2.8, 8000.0) < 0.001);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_that_starts_late_in_the_file_stays_late_in_the_export() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-export-late-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The sound starts 1.0 s after the picture, as in a recording whose
+        // microphone took a moment to open.
+        let src = make_source(&dir, "late.mkv", &["-itsoffset", "1.0", "-f", "lavfi", "-i", "sine=frequency=300:d=2"]);
+        let mut p = Project::new(src, None, 1920, 1080, 3000.0);
+        p.export.quality = 360;
+        p.audio.normalize = false;
+        let out = dir.join("out.mp4");
+        export(&p, &out, |_| {}).unwrap();
+        let x = crate::audio::decode_mono(&out, 8000).unwrap();
+        assert!(rms(&x, 0.1, 0.8, 8000.0) < 0.001, "the sound moved to the start of the video");
+        assert!(rms(&x, 1.3, 2.7, 8000.0) > 0.05, "no sound where it was recorded");
+        let d = crate::ffmpeg::probe(&out).unwrap().duration_ms;
+        assert!((d - 3000.0).abs() < 250.0, "duration {d}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -260,6 +260,23 @@ impl Drop for FreshDir {
     }
 }
 
+/// Placeholder in a plan's input arguments for the start of the recording
+/// clock (as a negative `-itsoffset`), filled in when ffmpeg is launched.
+pub(crate) const CLOCK_START: &str = "@clock-start@";
+
+/// Moves everything logged on the recording clock earlier by `shift_ms`, for
+/// a video whose first frame was stamped that long after the clock started.
+/// Times never go below zero.
+pub(crate) fn shift_timeline(events: &mut [crate::events::Event], pauses: &mut [(f64, f64)], shift_ms: f64) {
+    for e in events.iter_mut() {
+        e.t = (e.t - shift_ms).max(0.0);
+    }
+    for p in pauses.iter_mut() {
+        p.0 = (p.0 - shift_ms).max(0.0);
+        p.1 = (p.1 - shift_ms).max(0.0);
+    }
+}
+
 pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     // Work out the capture plan first (it needs the permissions and can
     // fail), and only then create the folder, so a failed start leaves nothing
@@ -271,7 +288,12 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>)> {
         let _ = std::fs::remove_file(&video);
         let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
-        cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&plan.args);
+        // The recording clock starts now, as ffmpeg is launched, not while the
+        // plan was being made (opening the screen and listing microphones can
+        // take a second). The event log starts at the same moment.
+        let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let args: Vec<String> = plan.args.iter().map(|a| if a == CLOCK_START { format!("-{epoch:.3}") } else { a.clone() }).collect();
+        cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&args);
         cmd.args(&plan.out_args);
         cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-c:a", "aac"]);
         // Matroska is written as it goes, so even a killed recording keeps
@@ -482,17 +504,9 @@ impl RecordingSession {
             finish(c, false);
         }
         let duration = self.started.elapsed();
-        let mut log = EventLog::new(self.region.w, self.region.h);
-        log.header.origin_x = self.region.x;
-        log.header.origin_y = self.region.y;
+        // Stop logging input now, before the remux takes its time.
         let logger = std::mem::replace(&mut self.logger, InputLogger::idle());
         let logged = logger.stop();
-        log.events = logged.events;
-        log.save(&self.events)?;
-        // Paused stretches are cut out when the project is created.
-        if !logged.pauses.is_empty() {
-            let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&logged.pauses)?);
-        }
         let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
         if size == 0 {
             let e = self.stderr.lock().unwrap().clone();
@@ -504,15 +518,37 @@ impl RecordingSession {
         if killed {
             eprintln!("demolens: ffmpeg did not stop on q, it was killed");
         }
-        // Matroska is safe while recording but has no duration and no fast
-        // start, so the finished file is remuxed to MP4 (no re-encode).
-        let video = match crate::finalize::remux_to_mp4(&self.video) {
-            Ok(mp4) => mp4,
+        let remuxed = crate::finalize::remux_to_mp4_info(&self.video);
+        let (video, video_start_s) = match remuxed {
+            Ok(r) => (r.path, r.video_start_s),
             Err(e) => {
                 eprintln!("demolens: could not remux to MP4, keeping the MKV: {e:#}");
-                self.video.clone()
+                (self.video.clone(), 0.0)
             }
         };
+        // On macOS every frame is stamped with the wall clock since ffmpeg
+        // started, and the MP4 starts its video at 0. Input events were logged
+        // on that same clock, so they move earlier by the video's lead-in.
+        let shift_ms = if cfg!(target_os = "macos") && video_start_s > 0.15 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
+        let mut log = EventLog::new(self.region.w, self.region.h);
+        log.header.origin_x = self.region.x;
+        log.header.origin_y = self.region.y;
+        let mut pauses = logged.pauses;
+        log.events = logged.events;
+        if shift_ms > 0.0 {
+            shift_timeline(&mut log.events, &mut pauses, shift_ms);
+            // The webcam offset was measured on the same clock.
+            let wc = self.dir.join("webcam.offset");
+            if let Some(ms) = std::fs::read_to_string(&wc).ok().and_then(|t| t.trim().parse::<f64>().ok()) {
+                let _ = std::fs::write(&wc, format!("{:.0}", ms - shift_ms));
+            }
+        }
+        log.save(&self.events)?;
+        // Paused stretches are cut out when the project is created.
+        if !pauses.is_empty() {
+            let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&pauses)?);
+        }
+
         Ok(Recording { video, events: self.events.clone(), duration })
     }
 }
@@ -555,6 +591,17 @@ pub fn screen_index(video: &[AvDevice], display: u32) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_timeline_shift_moves_events_and_pauses_and_stops_at_zero() {
+        use crate::events::{Event, EventKind};
+        let mv = |t| Event { t, kind: EventKind::Move { x: 1.0, y: 2.0 } };
+        let mut ev = vec![mv(100.0), mv(1500.0)];
+        let mut pauses = vec![(900.0, 2000.0)];
+        shift_timeline(&mut ev, &mut pauses, 800.0);
+        assert_eq!((ev[0].t, ev[1].t), (0.0, 700.0));
+        assert_eq!(pauses[0], (100.0, 1200.0));
+    }
+
     use super::*;
 
     const LIST: &str = "[AVFoundation indev @ 0x7fa] AVFoundation video devices:

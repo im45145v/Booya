@@ -77,7 +77,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // where it really happened relative to the first frame instead of both
     // tracks being shifted to start at zero. The event log uses the same
     // origin, so clicks, zoom and sound all line up.
-    let t0 = epoch_secs();
+    let t0 = super::CLOCK_START;
     let mut out_args = vec![s("-fps_mode"), s("cfr"), s("-r"), s(fps)];
     let region = match &o.target {
         CaptureTarget::Area { x, y, w: aw, h: ah } => {
@@ -94,7 +94,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         s("-copyts"),
         s("-thread_queue_size"), s("64"),
         s("-use_wallclock_as_timestamps"), s("1"),
-        s("-itsoffset"), format!("-{t0:.3}"),
+        s("-itsoffset"), s(t0),
         s("-f"), s("rawvideo"),
         s("-pixel_format"), s("bgra"),
         s("-video_size"), format!("{w}x{h}"),
@@ -108,7 +108,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
                 args.extend([
                     s("-thread_queue_size"), s("1024"),
                     s("-use_wallclock_as_timestamps"), s("1"),
-                    s("-itsoffset"), format!("-{t0:.3}"),
+                    s("-itsoffset"), s(t0),
                     s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index),
                 ]);
                 // Smooths the jitter of wall clock stamps without moving the start.
@@ -119,11 +119,6 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     }
     let feed: Feed = Box::new(move |stdin| Box::new(macos_sck::feed(cap, stdin, fps)));
     Ok(CapturePlan { region, args, out_args, warnings, feed: Some(feed) })
-}
-
-/// Seconds since the Unix epoch, with millisecond precision.
-fn epoch_secs() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 /// Fallback: ffmpeg's avfoundation screen input (does not work on recent macOS).

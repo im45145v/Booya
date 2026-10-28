@@ -42,8 +42,19 @@ mod cg {
         pub size: CGSize,
     }
 
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFArrayGetCount(a: *const c_void) -> isize;
+        fn CFArrayGetValueAtIndex(a: *const c_void, i: isize) -> *const c_void;
+        fn CFDictionaryGetValue(d: *const c_void, key: *const c_void) -> *const c_void;
+        fn CFNumberGetValue(n: *const c_void, kind: i32, out: *mut c_void) -> bool;
+        fn CFRelease(o: *const c_void);
+    }
+
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *const c_void;
+        static kCGWindowNumber: *const c_void;
         fn CGPreflightScreenCaptureAccess() -> bool;
         fn CGRequestScreenCaptureAccess() -> bool;
         fn CGMainDisplayID() -> u32;
@@ -52,6 +63,36 @@ mod cg {
         fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
         fn CGDisplayModeGetPixelHeight(mode: *const c_void) -> usize;
         fn CGDisplayModeRelease(mode: *mut c_void);
+    }
+
+    /// Window numbers of everything on screen, frontmost first. This is the
+    /// window server's own stacking order (CGWindowListCopyWindowInfo with
+    /// on screen only, desktop elements excluded), which ScreenCaptureKit's
+    /// window list does not promise. Empty when the call fails.
+    pub fn on_screen_front_to_back() -> Vec<u32> {
+        const ON_SCREEN_ONLY: u32 = 1;
+        const EXCLUDE_DESKTOP: u32 = 16;
+        const SINT32: i32 = 3;
+        let mut out = Vec::new();
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP, 0);
+            if list.is_null() {
+                return out;
+            }
+            for i in 0..CFArrayGetCount(list) {
+                let dict = CFArrayGetValueAtIndex(list, i);
+                if dict.is_null() {
+                    continue;
+                }
+                let num = CFDictionaryGetValue(dict, kCGWindowNumber);
+                let mut id: i32 = 0;
+                if !num.is_null() && CFNumberGetValue(num, SINT32, &mut id as *mut i32 as *mut c_void) && id > 0 {
+                    out.push(id as u32);
+                }
+            }
+            CFRelease(list);
+        }
+        out
     }
 
     /// Is the Screen Recording permission granted right now?
@@ -445,6 +486,51 @@ pub fn screenshot_png() -> Result<(Vec<u8>, u32, u32), String> {
 
 use super::sources::{encode_png, sort_sources, SourceInfo, Thumb, THUMB_W};
 
+/// Why a window is left out of the picker, or None when it is listed. Windows
+/// of other spaces, minimised windows, menu bar items, the Dock and tiny
+/// helper windows are skipped on purpose.
+fn window_skip_reason(w: &SCWindow, me: i32) -> Option<&'static str> {
+    let f = w.frame();
+    if !w.is_on_screen() {
+        return Some("not on screen (minimised, hidden or on another space)");
+    }
+    if w.window_layer() != 0 {
+        return Some("not a normal window (menu bar, Dock or overlay layer)");
+    }
+    if f.size.width < 120.0 || f.size.height < 80.0 {
+        return Some("smaller than 120x80 points");
+    }
+    let Some(app) = w.owning_application() else { return Some("no owning app") };
+    if app.process_id() == me {
+        return Some("DemoLens itself");
+    }
+    if app.application_name().is_empty() {
+        return Some("app has no name");
+    }
+    None
+}
+
+/// One line per ScreenCaptureKit window saying whether the picker lists it,
+/// for `demolens sources --all`.
+pub fn window_report() -> Result<Vec<String>, String> {
+    let content = shareable()?;
+    let me = std::process::id() as i32;
+    let order = cg::on_screen_front_to_back();
+    let mut lines = Vec::new();
+    for w in content.windows().iter() {
+        let f = w.frame();
+        let app = w.owning_application().map(|a| a.application_name()).unwrap_or_default();
+        let title = w.title().unwrap_or_default();
+        let verdict = window_skip_reason(w, me).map(|r| format!("hidden: {r}")).unwrap_or_else(|| "listed".into());
+        let stack = order.iter().position(|x| *x == w.window_id()).map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+        lines.push(format!(
+            "{}\tid={}\tlayer={}\tonscreen={}\tstack={}\t{}x{}\t{} | {}",
+            verdict, w.window_id(), w.window_layer(), w.is_on_screen(), stack, f.size.width as i32, f.size.height as i32, app, title
+        ));
+    }
+    Ok(lines)
+}
+
 /// Displays and on screen windows of normal apps (not DemoLens, menu bar
 /// items or tiny helper windows).
 pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
@@ -468,20 +554,14 @@ pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
         });
     }
     let scale = ordered_displays(&content).first().map(|d| display_info(0, d).scale).unwrap_or(1.0);
-    // ScreenCaptureKit returns windows front to back, so the index is the stacking order.
-    for (z, w) in content.windows().iter().enumerate() {
-        let f = w.frame();
-        if !w.is_on_screen() || w.window_layer() != 0 || f.size.width < 120.0 || f.size.height < 80.0 {
+    let first_window = v.len();
+    for (sck_index, w) in content.windows().iter().enumerate() {
+        if window_skip_reason(w, me).is_some() {
             continue;
         }
         let Some(app) = w.owning_application() else { continue };
-        if app.process_id() == me {
-            continue;
-        }
+        let f = w.frame();
         let name = app.application_name();
-        if name.is_empty() {
-            continue;
-        }
         let title = w.title().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| name.clone());
         v.push(SourceInfo {
             kind: "window".into(),
@@ -493,8 +573,27 @@ pub fn list_sources() -> Result<Vec<SourceInfo>, String> {
             y: (f.origin.y * scale) as i32,
             w: (f.size.width * scale) as u32,
             h: (f.size.height * scale) as u32,
-            z: z as u32,
+            z: sck_index as u32,
         });
+    }
+    // The stacking order comes from the window server (frontmost first), not
+    // from the order ScreenCaptureKit happens to list windows in.
+    let order = cg::on_screen_front_to_back();
+    let ids: Vec<u32> = v[first_window..].iter().map(|s| s.id.parse().unwrap_or(0)).collect();
+    let ranks = if order.is_empty() {
+        // No window server list: fall back to ScreenCaptureKit's order.
+        let mut by_z: Vec<usize> = (0..ids.len()).collect();
+        by_z.sort_by_key(|i| v[first_window + *i].z);
+        let mut r = vec![0u32; ids.len()];
+        for (rank, i) in by_z.into_iter().enumerate() {
+            r[i] = rank as u32;
+        }
+        r
+    } else {
+        super::sources::stacking_ranks(&ids, &order)
+    };
+    for (i, r) in ranks.into_iter().enumerate() {
+        v[first_window + i].z = r;
     }
     sort_sources(&mut v);
     Ok(v)

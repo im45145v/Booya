@@ -232,11 +232,17 @@ pub struct AudioSettings {
     /// Delay the audio by this many ms (negative = earlier). Fine tuning for a
     /// microphone that lags the picture, such as a Bluetooth headset.
     pub offset_ms: f64,
+    /// Set by the exporter, never saved: the source's audio track starts at a
+    /// different time than its video (an older recording, or a microphone that
+    /// started late), so the audio is re-based to zero and `offset_ms` carries
+    /// the difference.
+    #[serde(skip)]
+    pub rebase_start: bool,
 }
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { denoise: false, mute: false, normalize: true, gain_db: 0.0, volume: 1.0, fade_in_ms: 0.0, fade_out_ms: 0.0, offset_ms: 0.0 }
+        Self { denoise: false, mute: false, normalize: true, gain_db: 0.0, volume: 1.0, fade_in_ms: 0.0, fade_out_ms: 0.0, offset_ms: 0.0, rebase_start: false }
     }
 }
 

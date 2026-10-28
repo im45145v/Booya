@@ -18,7 +18,7 @@ USAGE:
   demolens record [--screen N | --window ID | --area X,Y,W,H] [--mic] [--system-audio]
                   [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
-  demolens sources [--thumbs dir]   list the screens and windows the picker shows (and save previews)
+  demolens sources [--thumbs dir] [--all]   list the screens and windows the picker shows (and save previews); --all also prints hidden windows and why
   demolens doctor [--seconds 3]     check permissions, displays and ffmpeg, run a short
                   test capture and print the result as JSON (exit 1 if it failed)
   demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
@@ -129,7 +129,14 @@ fn run() -> Result<()> {
             // What the app's picker shows. With --thumbs <dir> also writes the previews.
             use demolens_core::capture::sources;
             let dir = a.opt(&["--thumbs"]).map(PathBuf::from);
+            let all = a.flag("--all");
             let list = sources::list_sources()?;
+            if all {
+                // Every window the system reports and why the picker hides it.
+                for line in sources::window_report()? {
+                    eprintln!("{line}");
+                }
+            }
             if let Some(d) = &dir {
                 std::fs::create_dir_all(d)?;
                 for (i, s) in list.iter().enumerate() {

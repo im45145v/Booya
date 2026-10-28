@@ -67,6 +67,19 @@ pub fn list_sources() -> Result<Vec<SourceInfo>> {
     }
 }
 
+/// Every window the system knows about and whether the picker lists it (and
+/// why not). Only macOS keeps such a report for now.
+pub fn window_report() -> Result<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        super::macos_sck::window_report().map_err(|e| anyhow::anyhow!(e))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(vec!["The window report is only available on macOS. `demolens sources` shows what the picker lists.".to_string()])
+    }
+}
+
 pub fn thumbnail(src: &SourceInfo) -> Result<Thumb> {
     #[cfg(target_os = "macos")]
     {
@@ -145,6 +158,21 @@ pub fn parse_win_lines(text: &str) -> Vec<SourceInfo> {
     out
 }
 
+/// Stacking rank (0 = frontmost) for each id, given the window ids of the
+/// system's own front to back list. Ids missing from that list go behind all
+/// listed ones, in their input order. Ranks are consecutive, so they stay
+/// small and stable whatever the system's numbering looks like.
+pub fn stacking_ranks(ids: &[u32], front_to_back: &[u32]) -> Vec<u32> {
+    let key = |i: usize| (front_to_back.iter().position(|w| *w == ids[i]).unwrap_or(usize::MAX), i);
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by_key(|i| key(*i));
+    let mut ranks = vec![0u32; ids.len()];
+    for (rank, i) in order.into_iter().enumerate() {
+        ranks[i] = rank as u32;
+    }
+    ranks
+}
+
 /// Sorts a picker list: displays first, then windows by app and title.
 pub fn sort_sources(v: &mut [SourceInfo]) {
     v.sort_by(|a, b| {
@@ -175,6 +203,15 @@ mod tests {
         assert_eq!(v.len(), 2, "{v:?}");
         assert_eq!((v[0].app.as_str(), v[0].x, v[0].y, v[0].w, v[0].h, v[0].z), ("chrome", 100, 50, 1280, 800, 0));
         assert_eq!((v[1].title.as_str(), v[1].x, v[1].w, v[1].z), ("notes.txt - Notepad", -5, 605, 1));
+    }
+
+    #[test]
+    fn the_frontmost_window_gets_the_lowest_rank() {
+        // The system lists 90 first (front), then 7. Our own list order is the reverse.
+        let ranks = stacking_ranks(&[7, 90, 55], &[90, 31, 7]);
+        assert_eq!(ranks, [1, 0, 2], "unlisted windows go last");
+        // Without any system order the input order is kept.
+        assert_eq!(stacking_ranks(&[5, 6, 7], &[]), [0, 1, 2]);
     }
 
     #[test]
