@@ -34,7 +34,9 @@ def test_plays_and_is_audible(pw, fx):
         assert s.page.text_content("#audio-chip").startswith("Sound on")
         s.page.click("#play")
         s.page.wait_for_timeout(1800)
-        st = s.page.evaluate(STATE)
+        # read the sound clock and the playhead in the same instant
+        both = s.page.evaluate("() => { const st = (" + STATE + ")(); st.tl = tl.outToSrc(tl.playhead) / 1000; return st; }")
+        st, tl_src = both, both["tl"]
         print("playing:", st)
         assert not st["paused"], st
         assert st["t"] > 0.8, f"the sound clock did not move: {st}"
@@ -44,8 +46,7 @@ def test_plays_and_is_audible(pw, fx):
         print("signal peak:", peak)
         assert peak > 0.01, "the sound element is playing silence"
         # the sound follows the picture
-        tl_src = s.page.evaluate("tl.outToSrc(tl.playhead) / 1000")
-        assert abs(tl_src - st["t"]) < 1.5, (tl_src, st)
+        assert abs(tl_src - st["t"]) < 1.0, (tl_src, st)
         # Mute and the volume control are visible and work, only for the preview
         s.page.click("#vol-btn")
         assert s.page.evaluate("pa.muted") is True
