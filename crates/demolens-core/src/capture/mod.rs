@@ -65,6 +65,29 @@ pub struct RecordOptions {
     /// quality call mode by accident.
     #[serde(default)]
     pub mic_device: Option<String>,
+    /// Tallest picture to record, in pixels. A 4K screen pushes 33 MB per
+    /// frame into the encoder, which is more than a laptop can do at 30 fps,
+    /// so frames get dropped and motion stutters. None is automatic (screens
+    /// taller than 1600 px are recorded at 1440 px high), Some(0) is native
+    /// resolution, Some(n) caps the height at n.
+    #[serde(default)]
+    pub max_height: Option<u32>,
+}
+
+/// Stream pixels per screen pixel for a screen `height` pixels tall (1.0 when
+/// no scaling is needed).
+pub fn capture_scale(height: u32, max_height: Option<u32>) -> f64 {
+    let cap = match max_height {
+        Some(0) => return 1.0,
+        Some(n) => n.max(240),
+        None if height > 1600 => 1440,
+        None => return 1.0,
+    };
+    if height <= cap {
+        1.0
+    } else {
+        cap as f64 / height as f64
+    }
 }
 
 /// Geometry of what will be captured, used to make event coordinates relative.
@@ -222,7 +245,7 @@ pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
 
 #[cfg(not(target_os = "macos"))]
 fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
     let plan = plan(&opts)?;
     let out = Command::new(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-v", "error", "-nostdin"])
@@ -355,6 +378,9 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         Some(input) => start_mic_sidecar(&input, epoch, &mic_file, &mut warnings),
         None => None,
     };
+    if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
+        warnings.push("Key capture is on, but macOS has not allowed DemoLens to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch DemoLens on, then quit and reopen DemoLens.".into());
+    }
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
     let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
@@ -602,6 +628,18 @@ impl RecordingSession {
                 let _ = std::fs::write(&wc, format!("{:.0}", ms - shift_ms));
             }
         }
+        // A screen recorded below its own resolution (see `max_height`): the
+        // pointer was logged in screen pixels, the video is smaller.
+        if let Ok(info) = crate::ffmpeg::probe(&video) {
+            if self.region.w > 0 && info.width > 0 {
+                let k = info.width as f64 / self.region.w as f64;
+                if k < 0.98 && k > 0.1 {
+                    crate::events::scale_coords(&mut log.events, k);
+                    log.header.width = info.width;
+                    log.header.height = info.height;
+                }
+            }
+        }
         log.save(&self.events)?;
         // Paused stretches are cut out when the project is created.
         if !pauses.is_empty() {
@@ -650,6 +688,25 @@ pub fn screen_index(video: &[AvDevice], display: u32) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn events_follow_a_video_that_was_recorded_smaller() {
+        use crate::events::{scale_coords, Event, EventKind};
+        let mut ev = vec![Event { t: 1.0, kind: EventKind::Move { x: 3000.0, y: 1500.0 } }, Event { t: 2.0, kind: EventKind::Key { key: "S".into(), modifiers: vec![] } }];
+        scale_coords(&mut ev, 0.5);
+        assert_eq!(ev[0].kind, EventKind::Move { x: 1500.0, y: 750.0 });
+    }
+
+    #[test]
+    fn tall_screens_are_scaled_down_while_capturing() {
+        assert_eq!(capture_scale(2160, None), 1440.0 / 2160.0);
+        assert_eq!(capture_scale(1912, None), 1440.0 / 1912.0);
+        assert_eq!(capture_scale(1080, None), 1.0);
+        assert_eq!(capture_scale(1440, None), 1.0);
+        assert_eq!(capture_scale(2160, Some(0)), 1.0);
+        assert_eq!(capture_scale(2160, Some(1080)), 0.5);
+        assert_eq!(capture_scale(900, Some(1080)), 1.0);
+    }
+
     #[test]
     fn the_timeline_shift_moves_events_and_pauses_and_stops_at_zero() {
         use crate::events::{Event, EventKind};
@@ -763,6 +820,11 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     #[cfg(target_os = "macos")]
     {
         v["screen_recording_permission"] = json!(macos_sck::has_permission());
+        let keys_ok = !crate::input::key_permission_missing(false);
+        v["input_monitoring_permission"] = json!(keys_ok);
+        if !keys_ok {
+            next.push("Input Monitoring is not allowed, so shortcuts and typing cannot be shown in videos. Run `demolens doctor --prompt-keys` or turn on Keys in the app to get the macOS prompt, then enable DemoLens in System Settings > Privacy & Security > Input Monitoring.".into());
+        }
         match macos_sck::content_info() {
             Ok(c) => v["displays"] = serde_json::to_value(&c).unwrap_or(Value::Null),
             Err(e) => {
@@ -775,7 +837,7 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     }
 
     let dir = std::env::temp_dir().join(format!("demolens-doctor-{}", std::process::id()));
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
     let t0 = Instant::now();
     let mut test = serde_json::Map::new();
     match start(&opts) {

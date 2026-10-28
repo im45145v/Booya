@@ -19,7 +19,7 @@ USAGE:
                   [--keys on] [--webcam]   (key logging is off by default)
                   [--fps 30] [--seconds N] [--out DIR]
   demolens sources [--thumbs dir] [--all]   list the screens and windows the picker shows (and save previews); --all also prints hidden windows and why
-  demolens doctor [--seconds 3]     check permissions, displays and ffmpeg, run a short
+  demolens doctor [--seconds 3] [--prompt-keys]  check permissions, displays and ffmpeg, run a short
                   test capture and print the result as JSON (exit 1 if it failed)
   demolens bench [--seconds 8] [--size 2940x1912] [--fps 30] [--json]
                   measure decode, proxy and export speed on a synthetic recording of that size
@@ -97,6 +97,9 @@ fn run() -> Result<()> {
         "record" => record(a),
         "doctor" => {
             let secs: f64 = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?.unwrap_or(3.0);
+            if a.flag("--prompt-keys") {
+                demolens_core::input::key_permission_missing(true);
+            }
             let mut report = capture::doctor(secs);
             if a.flag("--no-ai") {
                 // capture only
@@ -321,6 +324,7 @@ fn record(mut a: Args) -> Result<()> {
         },
         webcam: a.flag("--webcam"),
         mic_device: a.opt(&["--mic-device"]),
+        max_height: a.opt(&["--max-height"]).map(|v| v.parse()).transpose().context("--max-height needs a number of pixels (0 for native)")?,
     };
     let seconds: Option<f64> = a.opt(&["--seconds"]).map(|v| v.parse()).transpose()?;
     let session = capture::start(&opts)?;

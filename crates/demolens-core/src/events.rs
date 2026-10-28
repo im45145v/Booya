@@ -78,6 +78,20 @@ pub struct EventLog {
     pub events: Vec<Event>,
 }
 
+/// Multiplies every pointer coordinate by `k` (used when a screen was
+/// recorded smaller than it is, so events match the pixels of the video).
+pub fn scale_coords(events: &mut [Event], k: f64) {
+    for e in events.iter_mut() {
+        match &mut e.kind {
+            EventKind::Move { x, y } | EventKind::Click { x, y, .. } | EventKind::Mark { x, y } => {
+                *x *= k;
+                *y *= k;
+            }
+            EventKind::Key { .. } => {}
+        }
+    }
+}
+
 impl EventLog {
     pub fn new(width: u32, height: u32) -> Self {
         Self {

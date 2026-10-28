@@ -70,8 +70,12 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         warnings.push("System audio on macOS needs a loopback device such as BlackHole for now.".into());
     }
     let fps = o.fps.clamp(1, 60);
-    let cap = macos_sck::open(&o.target, fps, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
-    let (w, h) = (cap.width, cap.height);
+    let cap = macos_sck::open(&o.target, fps, o.max_height, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
+    // (w, h) is the size of the screen in capture pixels, which is what events
+    // and area picks use; the stream may be smaller (see `scale`).
+    let scale = cap.scale.clamp(0.1, 1.0);
+    let (sw, sh) = (cap.width, cap.height);
+    let (w, h) = if scale < 1.0 { ((sw as f64 / scale).round() as u32, (sh as f64 / scale).round() as u32) } else { (sw, sh) };
     // Every input is stamped with the wall clock minus the moment recording
     // began, and the timestamps are kept (`-copyts`), so the microphone lands
     // where it really happened relative to the first frame instead of both
@@ -85,19 +89,25 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
             if aw < 2 || ah < 2 || *x < 0 || *y < 0 || *x as u32 + aw > w || *y as u32 + ah > h {
                 bail!("The selected area ({x},{y} {aw}x{ah}) is outside the screen ({w}x{h}). Pick the area again.");
             }
-            out_args.extend([s("-vf"), format!("crop={aw}:{ah}:{x}:{y}")]);
+            let (cx, cy, cw, ch) = if scale < 1.0 {
+                (((*x as f64 * scale).round() as u32) & !1, ((*y as f64 * scale).round() as u32) & !1, ((aw as f64 * scale).round() as u32 & !1).max(2), ((ah as f64 * scale).round() as u32 & !1).max(2))
+            } else {
+                (*x as u32, *y as u32, aw, ah)
+            };
+            let (cw, ch) = (cw.min(sw.saturating_sub(cx)).max(2) & !1, ch.min(sh.saturating_sub(cy)).max(2) & !1);
+            out_args.extend([s("-vf"), format!("crop={cw}:{ch}:{cx}:{cy}")]);
             Region { x: *x, y: *y, w: aw, h: ah }
         }
         _ => Region { x: cap.origin.0, y: cap.origin.1, w, h },
     };
     let mut args = vec![
         s("-copyts"),
-        s("-thread_queue_size"), s("64"),
+        s("-thread_queue_size"), s("8"),
         s("-use_wallclock_as_timestamps"), s("1"),
         s("-itsoffset"), s(t0),
         s("-f"), s("rawvideo"),
         s("-pixel_format"), s("bgra"),
-        s("-video_size"), format!("{w}x{h}"),
+        s("-video_size"), format!("{sw}x{sh}"),
         s("-framerate"), s(fps),
         s("-i"), s("pipe:0"),
     ];

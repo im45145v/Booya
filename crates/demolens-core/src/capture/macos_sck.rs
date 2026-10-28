@@ -268,7 +268,8 @@ fn build_source(content: &SCShareableContent, target: &CaptureTarget) -> Result<
 /// The newest frame, tightly packed BGRA.
 #[derive(Default)]
 struct Latest {
-    data: Vec<u8>,
+    /// Shared, so the feeder takes the frame without copying 30 MB under the lock.
+    data: Arc<Vec<u8>>,
     w: usize,
     h: usize,
     seq: u64,
@@ -288,6 +289,10 @@ pub struct Capture {
     pub height: u32,
     /// Top left of the captured rectangle in global capture pixels.
     pub origin: (i32, i32),
+    /// Stream pixels per capture pixel: 1.0 for native, below 1.0 when the
+    /// screen is scaled down while it is captured (the frames and the pipe
+    /// to ffmpeg get smaller, which is what keeps 4K smooth).
+    pub scale: f64,
 }
 
 impl Drop for Capture {
@@ -300,10 +305,19 @@ impl Drop for Capture {
 
 const BGRA: u32 = 0x4247_5241; // 'BGRA'
 
-fn stream_thread(target: CaptureTarget, fps: u32, shared: Arc<Shared>, ready: Sender<Result<(u32, u32, (i32, i32)), String>>, stop: mpsc::Receiver<()>) {
-    let setup = || -> Result<(SCStream, Source), String> {
+type Ready = Result<(u32, u32, (i32, i32), f64), String>;
+
+fn stream_thread(target: CaptureTarget, fps: u32, max_height: Option<u32>, shared: Arc<Shared>, ready: Sender<Ready>, stop: mpsc::Receiver<()>) {
+    let setup = || -> Result<(SCStream, Source, f64), String> {
         let content = shareable()?;
-        let src = build_source(&content, &target)?;
+        let mut src = build_source(&content, &target)?;
+        let scale = super::capture_scale(src.height, max_height);
+        let native = (src.width, src.height);
+        if scale < 1.0 {
+            src.width = even((src.width as f64 * scale).round() as u32);
+            src.height = even((src.height as f64 * scale).round() as u32);
+        }
+        let _ = native;
         let config = SCStreamConfiguration::new()
             .with_width(src.width)
             .with_height(src.height)
@@ -331,14 +345,23 @@ fn stream_thread(target: CaptureTarget, fps: u32, shared: Arc<Shared>, ready: Se
                     if w == 0 || h == 0 || stride < w * 4 || src.len() < stride * (h - 1) + w * 4 {
                         return;
                     }
+                    {
+                        let l = sh.latest.lock().unwrap();
+                        if l.seq > 0 && (l.w != w || l.h != h) {
+                            return; // the size is fixed once ffmpeg has been told
+                        }
+                    }
+                    // Copy outside the lock, then swap the pointer in.
+                    let mut frame = Vec::with_capacity(w * h * 4);
+                    if stride == w * 4 {
+                        frame.extend_from_slice(&src[..w * h * 4]);
+                    } else {
+                        for y in 0..h {
+                            frame.extend_from_slice(&src[y * stride..y * stride + w * 4]);
+                        }
+                    }
                     let mut l = sh.latest.lock().unwrap();
-                    if l.seq > 0 && (l.w != w || l.h != h) {
-                        return; // the size is fixed once ffmpeg has been told
-                    }
-                    l.data.resize(w * h * 4, 0);
-                    for y in 0..h {
-                        l.data[y * w * 4..(y + 1) * w * 4].copy_from_slice(&src[y * stride..y * stride + w * 4]);
-                    }
+                    l.data = Arc::new(frame);
                     l.w = w;
                     l.h = h;
                     l.seq += 1;
@@ -353,14 +376,14 @@ fn stream_thread(target: CaptureTarget, fps: u32, shared: Arc<Shared>, ready: Se
                 PERMISSION_MESSAGE.to_string()
             }
         })?;
-        Ok((stream, src))
+        Ok((stream, src, scale))
     };
     match setup() {
         Err(e) => {
             let _ = ready.send(Err(e));
         }
-        Ok((stream, src)) => {
-            let _ = ready.send(Ok((src.width, src.height, src.origin)));
+        Ok((stream, src, scale)) => {
+            let _ = ready.send(Ok((src.width, src.height, src.origin, scale)));
             // Park until told to stop (or the Capture is dropped).
             let _ = stop.recv();
             let _ = stream.stop_capture();
@@ -369,22 +392,22 @@ fn stream_thread(target: CaptureTarget, fps: u32, shared: Arc<Shared>, ready: Se
 }
 
 /// Starts a capture and waits for the first frame.
-pub fn open(target: &CaptureTarget, fps: u32, timeout: Duration) -> Result<Capture, String> {
+pub fn open(target: &CaptureTarget, fps: u32, max_height: Option<u32>, timeout: Duration) -> Result<Capture, String> {
     let shared = Arc::new(Shared { latest: Mutex::new(Latest::default()), problem: Mutex::new(None) });
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
     let (t, sh) = (target.clone(), shared.clone());
     std::thread::Builder::new()
         .name("demolens-sck".into())
-        .spawn(move || stream_thread(t, fps, sh, ready_tx, stop_rx))
+        .spawn(move || stream_thread(t, fps, max_height, sh, ready_tx, stop_rx))
         .map_err(|e| e.to_string())?;
     let t0 = Instant::now();
     // Dropping `cap` on any error below stops the stream.
-    let (w, h, origin) = ready_rx.recv_timeout(timeout).map_err(|_| {
+    let (w, h, origin, scale) = ready_rx.recv_timeout(timeout).map_err(|_| {
         let _ = stop_tx.send(());
         if cg::has_access() { "ScreenCaptureKit did not start in time.".to_string() } else { PERMISSION_MESSAGE.to_string() }
     })??;
-    let mut cap = Capture { shared, stop: Some(stop_tx), width: w, height: h, origin };
+    let mut cap = Capture { shared, stop: Some(stop_tx), width: w, height: h, origin, scale };
     loop {
         {
             let l = cap.shared.latest.lock().unwrap();
@@ -434,24 +457,27 @@ pub fn feed(cap: Capture, mut stdin: ChildStdin, fps: u32) -> FeedGuard {
     std::thread::Builder::new()
         .name("demolens-sck-feed".into())
         .spawn(move || {
-            let mut buf: Vec<u8> = Vec::new();
             let mut next = Instant::now();
+            let (mut written, mut late) = (0u64, 0u64);
             while !flag.load(Ordering::SeqCst) {
-                {
-                    let l = shared.latest.lock().unwrap();
-                    buf.clear();
-                    buf.extend_from_slice(&l.data);
-                }
-                if stdin.write_all(&buf).is_err() {
+                let frame = shared.latest.lock().unwrap().data.clone();
+                if stdin.write_all(&frame).is_err() {
                     break;
                 }
+                written += 1;
                 next += interval;
                 let now = Instant::now();
                 if next > now {
                     std::thread::sleep(next - now);
-                } else if now - next > interval * 4 {
-                    next = now; // fell behind: do not burst to catch up
+                } else {
+                    late += 1;
+                    if now - next > interval * 4 {
+                        next = now; // fell behind: do not burst to catch up
+                    }
                 }
+            }
+            if late * 20 > written.max(1) {
+                eprintln!("demolens: the capture pipe was late for {late} of {written} frames. Recording at a lower resolution (--max-height 1440) avoids this.");
             }
             // stdin drops here, which ends ffmpeg's video input.
         })
@@ -461,10 +487,10 @@ pub fn feed(cap: Capture, mut stdin: ChildStdin, fps: u32) -> FeedGuard {
 
 /// One PNG of display 0 for the area picker: (png, width, height).
 pub fn screenshot_png() -> Result<(Vec<u8>, u32, u32), String> {
-    let cap = open(&CaptureTarget::Screen { display: 0 }, 5, Duration::from_secs(8))?;
+    let cap = open(&CaptureTarget::Screen { display: 0 }, 5, Some(0), Duration::from_secs(8))?;
     let (w, h, rgba) = {
         let l = cap.shared.latest.lock().unwrap();
-        let mut rgba = l.data.clone();
+        let mut rgba = l.data.to_vec();
         for px in rgba.chunks_exact_mut(4) {
             px.swap(0, 2);
             px[3] = 255;

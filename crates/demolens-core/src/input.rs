@@ -41,6 +41,21 @@ impl KeyLogging {
     }
 }
 
+/// True on macOS when key logging was asked for but Input Monitoring is not
+/// granted, so typing and shortcuts would silently read as "no keys". With
+/// `prompt` the system permission dialog is shown (once).
+pub fn key_permission_missing(prompt: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        !mac::input_monitoring(prompt)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = prompt;
+        false
+    }
+}
+
 /// Reduce one key press to what auto zoom and the shortcut overlay need.
 /// A printable key without Ctrl/Alt/Meta becomes [`crate::events::PRINTABLE`].
 pub fn classify(key: &str, modifiers: &[String]) -> String {
@@ -555,14 +570,17 @@ mod mac {
         }
     }
 
-    /// Is the key with this virtual key code held right now?
+    /// Is the key with this virtual key code held right now (hardware state)?
     pub fn key_down(code: u16) -> bool {
-        unsafe { CGEventSourceKeyState(0, code) }
+        unsafe { CGEventSourceKeyState(1, code) }
     }
 
-    /// Modifier flags of the combined session state.
+    /// Modifier flags of the hardware state. The hardware (HID) state sees
+    /// what was physically pressed, including combos the system keeps for
+    /// itself such as Cmd+Tab and Cmd+Space, which never reach an app or a
+    /// session level event tap. The combined session state does not.
     pub fn flags() -> u64 {
-        unsafe { CGEventSourceFlagsState(0) }
+        unsafe { CGEventSourceFlagsState(1) }
     }
 
     /// Whether Input Monitoring is granted. Without it key state reads as "up".
