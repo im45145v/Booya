@@ -144,6 +144,39 @@ pub fn denoise_file(video: &Path, out_wav: &Path) -> Result<()> {
     write_wav_f32(out_wav, &denoise(&s), 48_000)
 }
 
+/// Runs of exact digital silence in the middle of sound, as (start_ms,
+/// length_ms). Real speech and room noise are never exactly zero, so a run
+/// like this is a dropout: samples the recorder lost or replaced with silence.
+/// Silence at the very start or end (padding, a muted start) is not reported,
+/// and neither is a stretch where the track is quiet on both sides for longer
+/// than `quiet_ms` (a muted microphone).
+pub fn dropouts(samples: &[f32], rate: u32, min_ms: f64) -> Vec<(f64, f64)> {
+    let ms = |n: usize| n as f64 * 1000.0 / rate as f64;
+    let min_run = ((min_ms / 1000.0) * rate as f64).ceil() as usize;
+    let eps = 1e-6f32;
+    let first = samples.iter().position(|v| v.abs() > eps);
+    let last = samples.iter().rposition(|v| v.abs() > eps);
+    let (Some(first), Some(last)) = (first, last) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut i = first;
+    while i < last {
+        if samples[i].abs() <= eps {
+            let mut j = i;
+            while j < last && samples[j].abs() <= eps {
+                j += 1;
+            }
+            // Ignore the single zero crossing samples of a clean tone.
+            if j - i >= min_run.max(1) {
+                out.push((ms(i), ms(j - i)));
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Find silent stretches: windows of 20 ms whose RMS is below
 /// `threshold_db` dBFS, at least `min_ms` long. Returns (start_ms, end_ms).
 pub fn detect_silences(samples: &[f32], rate: u32, threshold_db: f32, min_ms: f64) -> Vec<(f64, f64)> {
@@ -267,5 +300,25 @@ mod tests {
         assert_eq!(out.len(), noise.len());
         let e = |v: &[f32]| v[4800..].iter().map(|s| s * s).sum::<f32>();
         assert!(e(&out) < e(&noise) * 0.5);
+    }
+}
+
+#[cfg(test)]
+mod dropout_tests {
+    use super::dropouts;
+
+    #[test]
+    fn digital_silence_inside_sound_is_a_dropout_but_padding_is_not() {
+        let rate = 16_000;
+        let tone = |n: usize| (0..n).map(|i| 0.3 * (i as f32 * 0.3).sin() + 0.05).collect::<Vec<_>>();
+        let mut x = vec![0.0; 2 * rate as usize]; // leading silence: not a dropout
+        x.extend(tone(rate as usize));
+        x.extend(vec![0.0; (0.12 * rate as f64) as usize]); // 120 ms hole
+        x.extend(tone(rate as usize));
+        x.extend(vec![0.0; rate as usize]); // trailing padding
+        let d = dropouts(&x, rate, 20.0);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!((d[0].0 - 3000.0).abs() < 5.0 && (d[0].1 - 120.0).abs() < 5.0, "{d:?}");
+        assert!(dropouts(&tone(rate as usize), rate, 20.0).is_empty());
     }
 }

@@ -86,6 +86,11 @@ pub(crate) struct CapturePlan {
     pub warnings: Vec<String>,
     /// Backends that push frames into ffmpeg's stdin (macOS) provide this.
     pub feed: Option<Feed>,
+    /// Input arguments of a separate ffmpeg that records the microphone to
+    /// its own file (`recording.mic.mkv`) while the screen is encoded. The two
+    /// are joined when the recording stops, so a busy video encoder can never
+    /// starve the microphone.
+    pub mic_sidecar: Option<Vec<String>>,
 }
 
 /// Starts feeding frames into ffmpeg's stdin. The returned guard stops the
@@ -111,6 +116,8 @@ pub struct RecordingSession {
     /// Frame source for backends that feed ffmpeg (stopped first on `stop`).
     feed: Option<Box<dyn Send>>,
     webcam: Option<Child>,
+    /// Separate microphone recorder (see `CapturePlan::mic_sidecar`).
+    mic: Option<Child>,
     logger: InputLogger,
     started: Instant,
     stderr: Arc<Mutex<String>>,
@@ -285,8 +292,10 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let mut fresh = FreshDir::create(&opts.out_dir)?;
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
-    let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>)> {
+    let mic_file = opts.out_dir.join("recording.mic.mkv");
+    let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
+        let _ = std::fs::remove_file(&mic_file);
         let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
         // The recording clock starts now, as ffmpeg is launched, not while the
         // plan was being made (opening the screen and listing microphones can
@@ -313,10 +322,10 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             Some(f) => child.stdin.take().map(f),
             None => None,
         };
-        Ok((child, err, feed))
+        Ok((child, err, feed, epoch))
     };
     let mut started = Instant::now();
-    let (mut child, mut err, mut feed) = spawn(&mut plan)?;
+    let (mut child, mut err, mut feed, mut epoch) = spawn(&mut plan)?;
     if let Err(e) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
         // A missing or blocked microphone should not cost the user the
         // recording, so retry once with video only and say so.
@@ -331,7 +340,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             retry.warnings.push(format!("Could not open the {}, so this recording has no sound ({why}).", if opts.mic { "microphone" } else { "system audio" }));
             plan = retry;
             started = Instant::now();
-            (child, err, feed) = spawn(&mut plan)?;
+            (child, err, feed, epoch) = spawn(&mut plan)?;
             if let Err(e2) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
                 return Err(start_error(&e2));
             }
@@ -339,16 +348,58 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             return Err(start_error(&e));
         }
     }
+    let mut warnings = plan.warnings;
+    // The microphone is recorded by its own ffmpeg, stamped with the same
+    // clock as the screen, and joined to it when the recording stops.
+    let mic = match plan.mic_sidecar.take() {
+        Some(input) => start_mic_sidecar(&input, epoch, &mic_file, &mut warnings),
+        None => None,
+    };
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
-    let mut warnings = plan.warnings;
     let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
     if webcam.is_some() {
         // When the camera's first frame landed, relative to the screen's.
         let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
     }
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
+    Ok(RecordingSession { child, feed, webcam, mic, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
+}
+
+/// Records the microphone on its own, as uncompressed samples, so nothing
+/// that happens to the video encoder (a 4K frame backlog, a slow disk) can
+/// make it drop or repeat audio. Every packet is stamped with the wall clock
+/// since `epoch` (the start of the shared recording clock) so the start time
+/// of the first samples is known; no timestamp based resampling is applied,
+/// so every sample the device delivered ends up in the file.
+fn start_mic_sidecar(input: &[String], epoch: f64, out: &Path, warnings: &mut Vec<String>) -> Option<Child> {
+    let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
+    cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
+    cmd.args(input);
+    cmd.args(["-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut c = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            warnings.push("Could not start the microphone recorder, so this recording has no sound.".into());
+            return None;
+        }
+    };
+    let err = drain_stderr(&mut c);
+    match wait_until_writing(&mut c, out, &err, FIRST_OUTPUT_TIMEOUT) {
+        Ok(()) => Some(c),
+        Err(e) => {
+            let why = if e.starts_with("TIMEOUT") { "it did not respond".to_string() } else { first_line(&e) };
+            warnings.push(format!("Could not open the microphone, so this recording has no sound ({why})."));
+            None
+        }
+    }
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -434,7 +485,7 @@ impl Drop for RecordingSession {
     /// A session dropped without `stop` (app quit, panic) must not leave
     /// ffmpeg recording the screen in the background.
     fn drop(&mut self) {
-        for c in std::iter::once(&mut self.child).chain(self.webcam.as_mut()) {
+        for c in std::iter::once(&mut self.child).chain(self.webcam.as_mut()).chain(self.mic.as_mut()) {
             if let Ok(None) = c.try_wait() {
                 let _ = c.kill();
                 let _ = c.wait();
@@ -484,11 +535,14 @@ impl RecordingSession {
         if let Some(c) = self.webcam.as_mut() {
             finish(c, false);
         }
+        if let Some(c) = self.mic.as_mut() {
+            finish(c, false);
+        }
         let _ = std::mem::replace(&mut self.logger, InputLogger::idle()).stop();
         if self.created {
             std::fs::remove_dir_all(&self.dir)?;
         } else {
-            for f in [&self.video, &self.events] {
+            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv")] {
                 let _ = std::fs::remove_file(f);
             }
         }
@@ -499,6 +553,11 @@ impl RecordingSession {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.
         let fed = self.feed.take().is_some(); // stops the capture, closes ffmpeg's stdin
+        // The microphone stops first, so the screen's flush does not leave it
+        // running past the end of the video by much.
+        if let Some(c) = self.mic.as_mut() {
+            finish(c, false);
+        }
         let killed = finish(&mut self.child, fed);
         if let Some(c) = self.webcam.as_mut() {
             finish(c, false);

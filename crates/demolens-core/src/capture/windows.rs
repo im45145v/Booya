@@ -36,7 +36,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     if o.system_audio {
         warnings.push("system audio on Windows needs WASAPI loopback (TODO)".into());
     }
-    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar: None })
 }
 
 /// PowerShell that lists visible top level windows front to back with their

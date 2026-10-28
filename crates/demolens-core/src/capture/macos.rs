@@ -101,24 +101,20 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         s("-framerate"), s(fps),
         s("-i"), s("pipe:0"),
     ];
+    // The microphone is NOT an input of this ffmpeg. Timestamp based
+    // resampling of a wall clock stamped device (aresample async) inserted
+    // runs of digital silence and cut samples whenever the 4K video path was
+    // busy. It is recorded by its own ffmpeg and joined at the end.
+    let mut mic_sidecar = None;
     if o.mic {
         let (_, audio) = list_devices();
         match pick_mic(&audio, o.mic_device.as_deref()) {
-            Some(d) => {
-                args.extend([
-                    s("-thread_queue_size"), s("1024"),
-                    s("-use_wallclock_as_timestamps"), s("1"),
-                    s("-itsoffset"), s(t0),
-                    s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index),
-                ]);
-                // Smooths the jitter of wall clock stamps without moving the start.
-                out_args.extend([s("-af"), s("aresample=async=1:min_hard_comp=0.2")]);
-            }
+            Some(d) => mic_sidecar = Some(vec![s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index)]),
             None => warnings.push("No microphone was found, so this recording has no sound.".into()),
         }
     }
     let feed: Feed = Box::new(move |stdin| Box::new(macos_sck::feed(cap, stdin, fps)));
-    Ok(CapturePlan { region, args, out_args, warnings, feed: Some(feed) })
+    Ok(CapturePlan { region, args, out_args, warnings, feed: Some(feed), mic_sidecar })
 }
 
 /// Fallback: ffmpeg's avfoundation screen input (does not work on recent macOS).
@@ -164,7 +160,7 @@ fn plan_avfoundation(o: &RecordOptions) -> Result<CapturePlan> {
     if let Some(r) = crop {
         args.extend([s("-vf"), format!("crop={}:{}:{}:{}", r.w, r.h, r.x, r.y)]);
     }
-    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None })
+    Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar: None })
 }
 
 /// avfoundation index of the first camera (not a screen), if any.

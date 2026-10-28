@@ -100,7 +100,7 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
         let pad = ((off - c.src_start_ms / 1000.0).max(0.0) / c.speed.max(0.01) * 1000.0).round();
         let pad = if pad > 0.0 { format!(",adelay={pad:.0}:all=1") } else { String::new() };
         let rebase = if project.audio.rebase_start { "asetpts=PTS-STARTPTS," } else { "" };
-        f.push_str(&format!("[{idx}:a]{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
+        f.push_str(&format!("[{idx}:a]aresample=48000,{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
     }
     for i in 0..n {
         f.push_str(&format!("[a{i}]"));
@@ -240,7 +240,7 @@ fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f6
         let ap = with_audio_lead(project, false);
         let m = if ap.audio.normalize { measure_export_audio(&ap, &project.source) } else { None };
         let graph = pad_audio_graph(&audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), 0.0, project.output_duration_ms() / 1000.0);
-        cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
+        cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]);
     }
     cmd.args(["-movflags", "+faststart"]);
     cmd.arg(ffmpeg::file_url(out));
@@ -348,14 +348,14 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         Format::Mp4 => {
             if with_audio {
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
-                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]);
+                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]);
             }
             cmd.args(enc.export_args(ow, oh, fps)).args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
         }
         Format::Webm => {
             if with_audio {
                 cmd.arg("-i").arg(ffmpeg::file_url(&audio_input));
-                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "128k"]);
+                cmd.args(["-filter_complex", &audio_graph_text, "-map", "0:v", "-map", "[aout]", "-c:a", "libopus", "-b:a", "160k", "-ar", "48000"]);
             }
             cmd.args(ffmpeg::Encoder::webm_args()).args(["-pix_fmt", "yuv420p"]);
         }
@@ -607,6 +607,8 @@ mod tests {
         let x = crate::audio::decode_mono(&out, 8000).unwrap();
         assert!((x.len() as f64 / 8000.0 - 3.0).abs() < 0.3, "audio is {} s", x.len() as f64 / 8000.0);
         assert!(rms(&x, 0.2, 1.2, 8000.0) > 0.05 && rms(&x, 2.0, 2.8, 8000.0) < 0.001);
+        let rate = crate::finalize::audio_rate(&out);
+        assert_eq!(rate, Some(48_000));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

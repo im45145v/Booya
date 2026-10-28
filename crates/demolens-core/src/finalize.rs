@@ -40,14 +40,35 @@ pub fn audio_align_filter(video: (f64, f64), audio: (f64, f64)) -> Option<String
     if lead.abs() <= LEAD_TOLERANCE_S && !short {
         return None;
     }
-    let mut f = String::from("asetpts=PTS-STARTPTS");
+    let mut f = String::from(ALIGN_BASE);
     if lead > LEAD_TOLERANCE_S {
         f.push_str(&format!(",adelay={:.0}:all=1", lead * 1000.0));
     } else if lead < -LEAD_TOLERANCE_S {
-        f.push_str(&format!(",atrim=start={:.3},asetpts=PTS-STARTPTS", -lead));
+        f.push_str(&format!(",atrim=start={:.3},{ALIGN_REBASE}", -lead));
     }
     f.push_str(",apad");
     Some(f)
+}
+
+/// Samples are laid out by their count, never by their (jittery) packet
+/// stamps, at the 48 kHz every export and player handles well.
+const ALIGN_REBASE: &str = "asetpts=N/SR/TB";
+const ALIGN_BASE: &str = "aresample=48000,asetpts=N/SR/TB";
+
+/// The filter for audio that needs no alignment but still has to be brought
+/// to 48 kHz and padded to the end of the video.
+fn audio_plain_filter() -> String {
+    format!("{ALIGN_BASE},apad")
+}
+
+/// Sample rate of the first audio stream.
+pub(crate) fn audio_rate(path: &Path) -> Option<u32> {
+    let out = Command::new(ffprobe_bin())
+        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate", "-of", "csv=p=0"])
+        .arg(ffmpeg::file_url(path))
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// The result of a remux: the MP4 and how long after the recording clock
@@ -65,6 +86,12 @@ pub fn remux_to_mp4(mkv: &Path) -> Result<PathBuf> {
     Ok(remux_to_mp4_info(mkv)?.path)
 }
 
+/// The separate microphone file that goes with `recording.mkv`, when the
+/// capture recorded one.
+pub fn mic_sidecar(mkv: &Path) -> PathBuf {
+    mkv.with_extension("mic.mkv")
+}
+
 /// Remux `recording.mkv` into `recording.mp4` next to it (video is copied,
 /// with `+faststart`) and remove the MKV once the MP4 is verified. On any
 /// problem the MKV is left alone and an error is returned.
@@ -80,7 +107,9 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
     let tmp = mkv.with_extension("mp4.part");
     let _ = std::fs::remove_file(&tmp);
     let video = stream_times(mkv, "v:0");
-    let audio = stream_times(mkv, "a:0");
+    let side = mic_sidecar(mkv);
+    let has_side = std::fs::metadata(&side).map(|m| m.len() > 4096).unwrap_or(false);
+    let audio = if has_side { stream_times(&side, "a:0") } else { stream_times(mkv, "a:0") };
     let mut cmd = Command::new(ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y"]);
     let mut video_start_s = 0.0;
@@ -88,7 +117,19 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
         video_start_s = vs.max(0.0);
     }
     let mut align: Option<String> = None;
-    if let (Some(v), Some(a)) = (video, audio) {
+    if let (true, Some(v), Some(a)) = (has_side, video, audio) {
+        // Video and microphone are separate files on the same clock. Silence
+        // goes in front of a microphone that opened late; the video is not
+        // touched.
+        let a_start = if (a.0 - v.0).abs() > 30.0 + v.1 { v.0 } else { a.0 };
+        let mut f = audio_align_filter(v, (a_start, a.1)).unwrap_or_else(audio_plain_filter);
+        if a_start < v.0 && !f.contains("atrim") {
+            f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
+        }
+        align = Some(f);
+        cmd.arg("-i").arg(ffmpeg::file_url(mkv)).arg("-i").arg(ffmpeg::file_url(&side));
+        cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
+    } else if let (Some(v), Some(a)) = (video, audio) {
         let (vs, vd) = v;
         let a_start = a.0;
         // An audio clock far away from the video's means it was not aligned.
@@ -99,6 +140,9 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
             cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
         } else {
             align = audio_align_filter(v, a);
+            if align.is_none() && audio_rate(mkv).is_some_and(|r| r != 48_000) {
+                align = Some(audio_plain_filter());
+            }
             // ffmpeg starts the output at the earliest stream. When the audio
             // starts before the video, hold the video back so it still begins at 0.
             if a_start < vs {
@@ -133,6 +177,7 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
     }
     std::fs::rename(&tmp, &mp4)?;
     let _ = std::fs::remove_file(mkv);
+    let _ = std::fs::remove_file(&side);
     Ok(Remuxed { path: mp4, video_start_s })
 }
 
@@ -148,6 +193,10 @@ pub struct SyncReport {
     pub events: Option<usize>,
     pub last_event_ms: Option<f64>,
     pub clicks: Option<usize>,
+    /// Sample rate of the audio track.
+    pub audio_rate: Option<u32>,
+    /// Stretches of exact digital silence in the middle of the sound (lost samples).
+    pub dropouts: Option<usize>,
     /// Plain language findings, empty when everything lines up.
     pub issues: Vec<String>,
 }
@@ -165,8 +214,24 @@ pub fn sync_report(video: &Path, events: Option<&Path>) -> Result<SyncReport> {
         events: None,
         last_event_ms: None,
         clicks: None,
+        audio_rate: None,
+        dropouts: None,
         issues: Vec::new(),
     };
+    if a.is_some() {
+        r.audio_rate = audio_rate(video);
+        if let Ok(samples) = crate::audio::decode_mono(video, 16_000) {
+            let d = crate::audio::dropouts(&samples, 16_000, 20.0);
+            if d.len() >= 2 {
+                let worst = d.iter().map(|x| x.1).fold(0.0, f64::max);
+                r.issues.push(format!("The audio has {} dropouts (the longest {worst:.0} ms, the first at {:.1} s). Speech will sound broken up.", d.len(), d[0].0 / 1000.0));
+            }
+            r.dropouts = Some(d.len());
+        }
+    }
+    if let Some(rate) = r.audio_rate.filter(|r| *r != 48_000 && *r != 44_100) {
+        r.issues.push(format!("The audio is {rate} Hz, not 48000 Hz."));
+    }
     if vs.abs() > 100.0 {
         r.issues.push(format!("The video track starts at {vs:.0} ms instead of 0."));
     }
@@ -269,6 +334,45 @@ mod tests {
         let x = crate::audio::decode_mono(&r.path, 8000).unwrap();
         let rms = |a: f64, b: f64| ((x[(a * 8000.0) as usize..(b * 8000.0) as usize].iter().map(|v| v * v).sum::<f32>()) / ((b - a) * 8000.0) as f32).sqrt();
         assert!(rms(0.1, 0.7) < 0.001 && rms(1.0, 2.5) > 0.05);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_separate_microphone_file_is_joined_at_48k_without_gaps() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-sidecar");
+        let mkv = d.join("recording.mkv");
+        // The screen has no audio. The microphone was recorded on its own at
+        // 96 kHz, opened 0.8 s late, with jittery packet stamps like a wall
+        // clock stamped device gives.
+        let ok = Command::new(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"])
+            .arg(&mkv)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let ok = Command::new(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-itsoffset", "0.8", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=96000:d=2.1", "-af", "asetpts='PTS+0.003*sin(N)/TB'", "-c:a", "pcm_f32le"])
+            .arg(mic_sidecar(&mkv))
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        assert!(!mic_sidecar(&mkv).exists(), "the sidecar is removed once it is joined");
+        let rep = sync_report(&r.path, None).unwrap();
+        assert_eq!(rep.audio_rate, Some(48_000));
+        assert!(rep.audio_offset_ms.unwrap().abs() < 100.0, "{rep:?}");
+        assert_eq!(rep.dropouts, Some(0), "{rep:?}");
+        assert!(rep.issues.is_empty(), "{:?}", rep.issues);
+        let x = crate::audio::decode_mono(&r.path, 16_000).unwrap();
+        let rms = |a: f64, b: f64| ((x[(a * 16000.0) as usize..(b * 16000.0) as usize].iter().map(|v| v * v).sum::<f32>()) / ((b - a) * 16000.0) as f32).sqrt();
+        assert!(rms(0.1, 0.7) < 0.001, "silence in front of the late microphone");
+        assert!(rms(1.0, 2.8) > 0.05, "the sound is where it was recorded");
+        assert!(crate::audio::dropouts(&x, 16_000, 5.0).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
