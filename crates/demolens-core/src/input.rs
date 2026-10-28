@@ -258,7 +258,7 @@ mod keyhook {
     use crate::events::EventKind;
     use rdev::{listen, EventType, Key};
     use std::io::{BufRead, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<std::process::Child> {
         let exe = std::env::current_exe().ok()?;

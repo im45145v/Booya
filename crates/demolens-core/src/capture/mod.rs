@@ -32,6 +32,8 @@ mod macos;
 mod macos_sck;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+pub(crate) mod winapi;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -335,8 +337,10 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000);
+            // gdigrab reads the screen in the pixels the process is told
+            // about. Without this a 125% or 150% display is captured at its
+            // scaled size and the pointer lands in the wrong place.
+            cmd.env("__COMPAT_LAYER", "HIGHDPIAWARE");
         }
         let mut child = cmd.spawn().context("failed to start ffmpeg. Is ffmpeg installed?")?;
         let err = drain_stderr(&mut child);
@@ -405,11 +409,6 @@ fn start_mic_sidecar(input: &[String], epoch: f64, out: &Path, warnings: &mut Ve
     cmd.args(input);
     cmd.args(["-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
     let mut c = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => {
