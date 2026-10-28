@@ -917,7 +917,7 @@ loadMics().then(() => { if (localStorage.getItem('mic-ok')) meterStart(); });
 // the sound is played by a normal audio element on the proxy, in step with the
 // timeline. The proxy's loudness is already evened out.
 const pa = new Audio(); pa.preload = 'auto';
-let proxyFor = null, audioBlob = null, audioState = 'none', audioText = '';
+let proxyFor = null, audioBlob = null, audioState = 'none', audioText = '', audioIsWav = false, audioWatch = 0;
 // The video proxy only speeds up the picture. The sound has its own small
 // file (built in seconds, loudness already evened out) that is played from a
 // blob, so it works the same in every web view and never waits for the proxy.
@@ -955,9 +955,51 @@ function loadAudio(url) {
     pa.src = url; pa.load();
   });
 }
+// The WAV copy of the sound: bigger, but plain PCM that every web view plays.
+async function loadWav(src) {
+  const path = await invoke('audio_preview_wav', { source: src });
+  const blob = URL.createObjectURL(new Blob([await invoke('audio_bytes', { path })], { type: 'audio/wav' }));
+  try { await loadAudio(blob); } catch (e) { URL.revokeObjectURL(blob); throw e; }
+  if (audioBlob) URL.revokeObjectURL(audioBlob);
+  audioBlob = blob; audioIsWav = true;
+}
+// A web view can say it loaded the AAC sound and then play nothing. A second
+// after playing starts the clock must be moving and bytes must be decoded; if
+// not, switch to the WAV copy and carry on from the same place.
+function watchAudio() {
+  clearTimeout(audioWatch);
+  if (audioIsWav || audioState !== 'ready') return;
+  const src = project?.source, t0 = pa.currentTime;
+  audioWatch = setTimeout(async () => {
+    if (!playing || audioIsWav || project?.source !== src || pa.paused) return;
+    const stuck = pa.currentTime - t0 < 0.2 * (pa.playbackRate || 1);
+    const silent = typeof pa.webkitAudioDecodedByteCount === 'number' && pa.webkitAudioDecodedByteCount === 0;
+    if (!stuck && !silent) return;
+    setAudioState('building', 'Switching the sound to a compatible format...');
+    try { await loadWav(src); } catch (e) { return setAudioState('error', 'Sound unavailable'); }
+    if (project?.source !== src) return;
+    applyVolume(); setAudioState('ready', 'Sound on (compatible format)');
+    if (playing) syncAudio(true);
+  }, 1300);
+}
+// Browsers only let a media element start after a click or key press. The
+// first one anywhere in the editor "unlocks" the element with a muted blip,
+// so pressing Play later (even after a slow frame request) is never refused.
+let audioPrimed = false;
+function primeAudio() {
+  if (audioPrimed || audioState !== 'ready' || pa.readyState < 2 || !pa.paused) return;
+  audioPrimed = true;
+  const keep = pa.currentTime;
+  pa.muted = true;
+  const p = pa.play();
+  // If Play was pressed in the same instant, the sound is already meant to run.
+  const done = () => { if (playing) { applyVolume(); watchAudio(); return; } pa.pause(); try { pa.currentTime = keep; } catch { } applyVolume(); };
+  if (p && p.then) p.then(done, () => { audioPrimed = false; applyVolume(); }); else done();
+}
+['pointerdown', 'keydown', 'touchend'].forEach(ev => document.addEventListener(ev, primeAudio, true));
 async function prepareAudio() {
   const src = project?.source; if (!src) return;
-  pa.pause(); pa.removeAttribute('src'); pa.load();
+  pa.pause(); pa.removeAttribute('src'); pa.load(); audioIsWav = false; clearTimeout(audioWatch);
   if (audioBlob) { URL.revokeObjectURL(audioBlob); audioBlob = null; }
   tl.peaks = null; setAudioState('building', 'Preparing sound...');
   let r;
@@ -970,7 +1012,10 @@ async function prepareAudio() {
     try { audioBlob = URL.createObjectURL(new Blob([await invoke('audio_bytes', { path: r.path })], { type: 'audio/mp4' })); await loadAudio(audioBlob); }
     catch (first) {
       // Second try: let the web view fetch the file itself through the asset protocol.
-      await loadAudio(window.__TAURI__.core.convertFileSrc(r.path)).catch(() => { throw first; });
+      try { await loadAudio(window.__TAURI__.core.convertFileSrc(r.path)); }
+      catch { // Third: plain WAV, which every web view can play (WKWebView on a Mac may not decode the AAC file).
+        try { await loadWav(src); } catch { throw first; }
+      }
     }
   } catch (e) {
     if (project?.source !== src) return;
@@ -1003,8 +1048,8 @@ function syncAudio(start) {
   const fix = start ? { seek: true, rate: speed } : AvSync.audioCorrection(want, pa.currentTime, speed);
   if (fix.seek) pa.currentTime = Math.max(0, want);
   pa.playbackRate = Math.max(0.0625, Math.min(4.25, fix.rate));
-  if (pa.paused) pa.play().catch(err => {
-    if (err?.name === 'NotAllowedError') { setAudioState('blocked', 'Sound blocked: press Play again'); status('The system blocked the sound until you press Play. Press Play once more.', 'info'); }
+  if (pa.paused) pa.play().then(() => { audioPrimed = true; watchAudio(); }).catch(err => {
+    if (err?.name === 'NotAllowedError') { audioPrimed = false; setAudioState('blocked', 'Sound blocked: press Play again'); status('The system blocked the sound until you press Play. Press Play once more.', 'info'); }
     else if (err?.name !== 'AbortError') { setAudioState('error', 'Sound error'); status('Could not play the sound: ' + (err?.message || err), 'error'); }
   });
 }

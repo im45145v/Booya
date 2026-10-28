@@ -80,7 +80,7 @@ def test_says_so_when_the_sound_cannot_load(pw, fx):
     bad = fx / "not-audio.m4a"
     bad.write_bytes(b"this is not an audio file" * 100)
     pv = lambda self, a: {**Studio.cmd_audio_preview(self, a), "path": str(bad)}
-    s = Studio(pw, fx, extra={"audio_preview": pv})
+    s = Studio(pw, fx, extra={"audio_preview": pv, "audio_preview_wav": lambda self, a: {"__error": "no wav either"}})
     try:
         s.open(); s.load_sample()
         wait_state(s.page, "error", 12000)
@@ -88,6 +88,40 @@ def test_says_so_when_the_sound_cannot_load(pw, fx):
         assert "sound" in s.page.text_content("#status").lower()
         s.page.click("#play")  # editing still works without sound
         s.page.wait_for_timeout(500)
+    finally:
+        s.close()
+
+
+def test_falls_back_to_wav_when_the_web_view_cannot_decode_the_aac(pw, fx):
+    # What a WKWebView that refuses the AAC file looks like: it cannot load it.
+    bad = fx / "undecodable.m4a"
+    bad.write_bytes(b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 4000)
+    pv = lambda self, a: {**Studio.cmd_audio_preview(self, a), "path": str(bad)}
+    s = Studio(pw, fx, extra={"audio_preview": pv})
+    try:
+        s.open(); s.load_sample()
+        wait_state(s.page, "ready", 15000)
+        assert s.page.evaluate("audioIsWav") is True
+        s.page.click("#play")
+        s.page.wait_for_timeout(1800)
+        st = s.page.evaluate(STATE)
+        assert not st["paused"] and st["t"] > 0.8 and not st["muted"], st
+        assert s.page.evaluate(ENERGY) > 0.01, "the WAV copy is playing silence"
+        assert not s.errors, s.errors
+    finally:
+        s.close()
+
+
+def test_the_first_click_unlocks_sound_and_leaves_it_unmuted(pw, fx):
+    s = Studio(pw, fx)
+    try:
+        s.open(); s.load_sample()
+        wait_state(s.page, "ready")
+        s.page.click("#vol-btn"); s.page.click("#vol-btn")  # any click is a gesture
+        s.page.wait_for_timeout(300)
+        st = s.page.evaluate(STATE)
+        assert st["paused"] and not st["muted"] and st["vol"] > 0, st
+        assert s.page.evaluate("audioPrimed") is True
     finally:
         s.close()
 

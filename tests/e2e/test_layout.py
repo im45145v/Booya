@@ -127,6 +127,7 @@ with sync_playwright() as pw:
       ev('pointerdown', x, y); ev('pointermove', x + dx / 2, y + dy / 2); ev('pointermove', x + dx, y + dy); ev('pointerup', x + dx, y + dy);
     }"""
     b4 = panel_w()
+    p.wait_for_timeout(450)  # not a double tap with the click before
     p.evaluate(touch, ["#split-v", -80, 0]); p.wait_for_timeout(500)
     assert abs(panel_w() - (b4 + 80)) <= 2, ("touch drag", b4, panel_w())
     p.evaluate(touch, ["#split-v", 0, 0]); p.evaluate(touch, ["#split-v", 0, 0]); p.wait_for_timeout(100)

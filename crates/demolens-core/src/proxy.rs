@@ -178,6 +178,39 @@ pub fn audio_path(cache_dir: &Path, src: &Path) -> PathBuf {
     cache_dir.join("proxies").join(format!("{}.audio.m4a", cache_key(src)))
 }
 
+pub fn audio_wav_path(cache_dir: &Path, src: &Path) -> PathBuf {
+    cache_dir.join("proxies").join(format!("{}.audio.wav", cache_key(src)))
+}
+
+/// The same preview sound as plain 16 bit PCM in a WAV file (mono, 24 kHz,
+/// loudness evened out the same way). Every web view plays it, so it is the
+/// fallback when a web view cannot decode the AAC file (macOS WKWebView in
+/// particular). About 3 MB a minute, built only when the AAC one fails.
+pub fn build_audio_wav(cache_dir: &Path, src: &Path) -> Result<PathBuf> {
+    let out = audio_wav_path(cache_dir, src);
+    if out.metadata().map(|m| m.len() > 512).unwrap_or(false) {
+        return Ok(out);
+    }
+    std::fs::create_dir_all(out.parent().unwrap())?;
+    let part = out.with_extension("wav.part");
+    let _ = std::fs::remove_file(&part);
+    let loud = crate::audio::measure_file(src).ok().flatten();
+    let norm = crate::audio::normalize_chain(loud.as_ref());
+    let mut c = crate::proc::command(ffmpeg::ffmpeg_bin());
+    c.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(src)).arg("-vn");
+    if !norm.is_empty() {
+        c.args(["-af", &norm]);
+    }
+    c.args(["-c:a", "pcm_s16le", "-ac", "1", "-ar", "24000", "-f", "wav"]).arg(&part);
+    let o = c.output().context("run ffmpeg")?;
+    if !o.status.success() {
+        let _ = std::fs::remove_file(&part);
+        bail!("could not build the compatible preview sound: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or(""));
+    }
+    std::fs::rename(&part, &out)?;
+    Ok(out)
+}
+
 /// Peaks of mono samples at `rate`: the loudest value per bucket, scaled so the
 /// loudest bucket is 255 (square rooted, so quiet speech is still visible).
 pub fn peaks(samples: &[f32], rate: u32) -> Vec<u8> {
@@ -292,6 +325,31 @@ mod tests {
         assert!(crate::proc::command(ffmpeg::ffmpeg_bin()).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&mute).status().unwrap().success());
         let m = build_audio(&dir, &mute).unwrap();
         assert!(!m.has_audio && m.path.is_none() && m.peaks.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_compatible_preview_sound_is_plain_pcm_wav() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-awav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.mp4");
+        assert!(crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=300:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        let p = build_audio_wav(&dir, &src).unwrap();
+        assert!(p.to_string_lossy().ends_with(".audio.wav"));
+        let b = std::fs::read(&p).unwrap();
+        assert_eq!(&b[0..4], b"RIFF");
+        assert_eq!(&b[8..12], b"WAVE");
+        assert!(b.len() > 24_000 * 2 * 2 - 4000, "{}", b.len());
+        // Built once, reused.
+        assert_eq!(build_audio_wav(&dir, &src).unwrap(), p);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

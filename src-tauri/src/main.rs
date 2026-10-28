@@ -1488,6 +1488,18 @@ async fn audio_preview(app: tauri::AppHandle, source: String) -> R<serde_json::V
     .await
 }
 
+/// The preview sound again as plain WAV, for web views that cannot decode the
+/// AAC file. Returns the path to read with `audio_bytes`.
+#[tauri::command]
+async fn audio_preview_wav(app: tauri::AppHandle, source: String) -> R<String> {
+    let src = PathBuf::from(source);
+    blocking(move || {
+        let p = demolens_core::proxy::build_audio_wav(&cache_dir(&app), &src).map_err(e)?;
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+}
+
 /// The bytes of a preview sound file this app built. The editor plays them
 /// from a blob, which behaves the same in every web view (no asset protocol,
 /// no range requests, no scope rules to trip over).
@@ -1497,7 +1509,7 @@ async fn audio_bytes(app: tauri::AppHandle, path: String) -> R<tauri::ipc::Respo
     blocking(move || {
         let p = PathBuf::from(&path).canonicalize().map_err(e)?;
         let ok_dir = dir.canonicalize().map(|d| p.starts_with(d)).unwrap_or(false);
-        if !ok_dir || !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".audio.m4a")) {
+        if !ok_dir || !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".audio.m4a") || n.ends_with(".audio.wav")) {
             return Err("That is not a preview sound file made by DemoLens".to_string());
         }
         let bytes = std::fs::read(&p).map_err(e)?;
@@ -2139,6 +2151,7 @@ fn main() {
             proxy_path,
             audio_preview,
             audio_bytes,
+            audio_preview_wav,
             mic_list,
             mic_meter_start,
             mic_meter_stop,

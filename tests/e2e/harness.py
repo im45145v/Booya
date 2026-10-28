@@ -185,6 +185,12 @@ class Studio:
         peaks = [round((v / top) ** 0.5 * 255) for v in pk]
         return {"has_audio": True, "path": str(out), "duration_ms": 12000, "bucket_ms": 50.0, "peaks": peaks, "faint": False}
 
+    def cmd_audio_preview_wav(self, a):
+        out = self.fx / "audio_preview.wav"
+        if not out.exists():
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(a["source"]), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", str(out)], check=True)
+        return str(out)
+
     def cmd_audio_bytes(self, a):
         return {"__bytes": self.base + "/asset?path=" + urllib.parse.quote(a["path"], safe="")}
 
