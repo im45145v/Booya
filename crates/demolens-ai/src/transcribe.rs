@@ -169,7 +169,13 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     }
     words.retain(|w| !demolens_core::captions::is_nonspeech(&w.text));
     let voiced: Vec<(f64, f64)> = spans.iter().map(|&(a, b)| (a as f64 * 1000.0 / 16_000.0, b as f64 * 1000.0 / 16_000.0)).collect();
+    if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
+        eprintln!("transcribe: voiced {voiced:?}\ntranscribe: raw {:?}", words.iter().map(|w| (w.text.as_str(), w.start_ms.round(), w.end_ms.round())).collect::<Vec<_>>());
+    }
     retime_implausible(&mut words, &voiced);
+    if std::env::var_os("DEMOLENS_DEBUG_TRANSCRIBE").is_some() {
+        eprintln!("transcribe: retimed {:?}", words.iter().map(|w| (w.text.as_str(), w.start_ms.round(), w.end_ms.round())).collect::<Vec<_>>());
+    }
     if only_hallucination(&words) {
         words.clear();
     }
@@ -384,6 +390,19 @@ mod tests {
         assert!(words[1].end_ms < 8500.0, "'Press' is short again: {words:?}");
         assert!(words[2].start_ms > 7000.0 && words[2].start_ms < 9500.0, "{words:?}");
         assert!(words[5].start_ms > 9000.0, "{words:?}");
+    }
+
+    #[test]
+    fn ci_recording_with_the_whole_tail_collapsed() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let mut words = vec![w(4650.0, 5100.0, "march."), w(7050.0, 11040.0, "Press")];
+        for t in ["Ctrl-Lester", "Save", "it,", "and", "now", "it", "is"] {
+            words.push(w(12011.0, 12012.0, t));
+        }
+        words.push(w(12011.0, 12021.0, "saved."));
+        retime_implausible(&mut words, &[(300.0, 5200.0), (7050.0, 11040.0)]);
+        assert!(words.iter().all(|w| w.end_ms <= 11040.0), "{words:?}");
+        assert!(words[1].end_ms < 8500.0, "{words:?}");
     }
 
     #[test]
