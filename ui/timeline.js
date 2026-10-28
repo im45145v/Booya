@@ -243,6 +243,9 @@ class Timeline {
   }
   wheel(e) {
     if (!this.project) return;
+    // A short timeline panel scrolls up and down on a plain vertical wheel.
+    const wrap = this.c.parentElement;
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && wrap && wrap.scrollHeight > wrap.clientHeight + 1) { wrap.scrollTop += e.deltaY; e.preventDefault(); return; }
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) { const [x] = this.pos(e); this.zoomBy(e.deltaY < 0 ? 1.25 : 0.8, this.ms(x)); }
     else this.pan(((e.deltaX || e.deltaY) / this.width()) * (this.view[1] - this.view[0]));

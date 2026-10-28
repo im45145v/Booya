@@ -13,7 +13,7 @@
         "title": "DemoLens",
         "width": 1360,
         "height": 860,
-        "minWidth": 1000,
+        "minWidth": 1024,
         "minHeight": 640,
         "label": "main"
       }

@@ -77,7 +77,7 @@ def build_fixture(fx: Path, speech=False):
 class Studio:
     """One browser page on the editor, with a fake backend."""
 
-    def __init__(self, pw, fx: Path, extra=None, headless=True, viewport=(1440, 900), touch=False):
+    def __init__(self, pw, fx: Path, extra=None, headless=True, viewport=(1440, 900), touch=False, dsf=1):
         self.fx = fx.resolve()
         self.calls = []
         self.requests = []
@@ -94,7 +94,7 @@ class Studio:
         if CHROME:
             launch["executable_path"] = CHROME
         self.browser = pw.chromium.launch(**launch)
-        self.ctx = self.browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, has_touch=touch, is_mobile=False)
+        self.ctx = self.browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, has_touch=touch, is_mobile=False, device_scale_factor=dsf)
         self.page = self.ctx.new_page()
         self.page.on("pageerror", lambda e: self.errors.append(str(e) + " @ " + " | ".join((e.stack or "").splitlines()[1:3])))
         self.page.on("console", lambda m: self.errors.append("console: " + m.text) if m.type == "error" else None)

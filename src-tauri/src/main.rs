@@ -1990,6 +1990,58 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     app.restart()
 }
 
+/// The size the user left the window at last time, in logical pixels.
+fn window_size_file(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("window-size.json")
+}
+
+/// Put the main window inside the monitor's work area: at most 90% of it,
+/// at least 1024x640 when there is room, centred. A size saved on a bigger
+/// screen is clamped the same way. Without this the window of an M-series
+/// MacBook Air ran off the right and bottom edge.
+fn fit_main_window(app: &tauri::AppHandle) {
+    use demolens_core::windowfit::{fit_window, min_size, Rect};
+    let Some(w) = app.get_webview_window("main") else { return };
+    let monitor = w.current_monitor().ok().flatten().or_else(|| w.primary_monitor().ok().flatten());
+    let Some(m) = monitor else { return };
+    let sf = m.scale_factor();
+    let wa = m.work_area();
+    let work = Rect {
+        x: wa.position.x as f64 / sf,
+        y: wa.position.y as f64 / sf,
+        w: wa.size.width as f64 / sf,
+        h: wa.size.height as f64 / sf,
+    };
+    // The saved size, else the size from tauri.conf.json.
+    let saved = std::fs::read(window_size_file(app))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<(f64, f64)>(&b).ok())
+        .filter(|(sw, sh)| *sw > 100.0 && *sh > 100.0);
+    let wanted = saved.unwrap_or_else(|| match w.inner_size() {
+        Ok(s) => (s.width as f64 / sf, s.height as f64 / sf),
+        Err(_) => (1360.0, 860.0),
+    });
+    let r = fit_window(wanted, work);
+    let (mw, mh) = min_size(work.w, work.h);
+    let _ = w.set_min_size(Some(tauri::LogicalSize::new(mw, mh)));
+    let _ = w.set_size(tauri::LogicalSize::new(r.w, r.h));
+    let _ = w.set_position(tauri::PhysicalPosition::new((r.x * sf).round() as i32, (r.y * sf).round() as i32));
+}
+
+/// Remember the window size for the next start (not when maximised).
+fn remember_main_window(window: &tauri::Window) {
+    if window.label() != "main" || window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(size), Ok(sf)) = (window.inner_size(), window.scale_factor()) else { return };
+    let app = window.app_handle();
+    let path = window_size_file(app);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, serde_json::to_vec(&(size.width as f64 / sf, size.height as f64 / sf)).unwrap_or_default());
+}
+
 fn main() {
     demolens_core::input::run_keyhook_if_requested();
     use tauri_plugin_global_shortcut::ShortcutState;
@@ -2037,7 +2089,13 @@ fn main() {
                 }
             }
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                remember_main_window(window);
+            }
+        })
         .setup(move |app| {
+            fit_main_window(app.handle());
             // Bound shortcuts work from any app. A failure (another app owns the
             // keys) is shown on Settings > Shortcuts.
             apply_shortcuts(app.handle());

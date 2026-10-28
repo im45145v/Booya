@@ -12,6 +12,7 @@ pub mod text;
 pub mod input;
 pub mod keycombo;
 pub mod keylabels;
+pub mod windowfit;
 pub mod preset;
 pub mod project;
 pub mod proxy;
