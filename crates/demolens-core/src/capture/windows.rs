@@ -7,7 +7,7 @@ use super::{s, CapturePlan, CaptureTarget, RecordOptions, Region};
 use anyhow::Result;
 
 pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
-    let mut warnings = Vec::new();
+    let warnings: Vec<String> = Vec::new();
     let mut args = vec![s("-f"), s("gdigrab"), s("-draw_mouse"), s("0"), s("-framerate"), s(o.fps)];
     let region = match &o.target {
         CaptureTarget::Screen { .. } => {
@@ -38,10 +38,8 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // The microphone is recorded in process through WASAPI (DirectShow is the
     // fallback); see `capture::mic`. The marker only says "record one".
     let mic_sidecar = if o.mic { Some(Vec::new()) } else { None };
-    if o.system_audio {
-        warnings.push("system audio on Windows needs WASAPI loopback (TODO)".into());
-    }
-    if mic_sidecar.is_some() {
+    // System audio is also recorded on the side (WASAPI loopback), on the same clock.
+    if mic_sidecar.is_some() || o.system_audio {
         // Keep the screen's own (wall clock) timestamps, relative to the start
         // of the recording, so the sound recorded on the side lands where it
         // really happened relative to the first frame.

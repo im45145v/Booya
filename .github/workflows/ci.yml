@@ -246,6 +246,8 @@ jobs:
         run: python3 tests/e2e/test_audio.py "$RUNNER_TEMP/fx"
       - name: Permissions screen
         run: python3 tests/e2e/test_permissions.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
+      - name: Frames, music and clip mute controls
+        run: python3 tests/e2e/test_editing_ui.py "$RUNNER_TEMP/fx"
       - name: Window sizes and splitters
         run: python3 tests/e2e/test_layout.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layout lane and controls

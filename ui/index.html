@@ -222,6 +222,8 @@
       <label class="slider">Padding <input id="padding" type="range" min="0" max="0.3" step="0.005" /></label>
       <label class="slider">Corners <input id="radius" type="range" min="0" max="0.06" step="0.002" /></label>
       <label class="slider">Shadow <input id="shadow" type="range" min="0" max="0.1" step="0.002" /></label>
+      <label class="stack" title="Put the recording inside a simple drawn device. They are plain shapes, not any maker's artwork.">Device frame<select id="frame-sel" class="field"><option value="none">None</option><option value="laptop">Laptop</option><option value="browser">Browser window</option><option value="phone">Phone</option></select></label>
+      <label class="switch" title="Blur the picture a little while the camera zooms or pans, like a real lens. Slower to preview and export while the camera moves."><input type="checkbox" id="motion-blur" /> Motion blur on zooms and pans</label>
 
       <h3 class="section">Glass</h3>
       <label class="switch" title="Put the recording on a frosted, blurred glass panel, and make captions, notes and keys frosted too"><input type="checkbox" id="gl-on" /> Frosted glass frame</label>
@@ -298,6 +300,18 @@
       <label class="slider">Volume <input id="aud-volume" type="range" min="0" max="1.5" step="0.05" /><output id="aud-volume-out">100%</output></label>
       <label class="slider">Fade in <input id="aud-fadein" type="range" min="0" max="3000" step="100" /><output id="aud-fadein-out">0 s</output></label>
       <label class="slider">Fade out <input id="aud-fadeout" type="range" min="0" max="3000" step="100" /><output id="aud-fadeout-out">0 s</output></label>
+      <h3 class="section">Music</h3>
+      <div class="row"><button class="btn needs-project" id="mu-pick">Add music...</button><span class="muted small grow" id="mu-name">No music</span><button class="btn ghost" id="mu-remove" hidden>Remove</button></div>
+      <div id="mu-opts" hidden>
+        <label class="slider">Volume <input id="mu-volume" type="range" min="0" max="1" step="0.01" /><output id="mu-volume-out">25%</output></label>
+        <label class="switch" title="Lower the music while someone is talking, and bring it back after."><input type="checkbox" id="mu-duck" /> Lower under the voice</label>
+        <label class="slider">Lower by <input id="mu-duck-db" type="range" min="3" max="24" step="1" /><output id="mu-duck-db-out">12 dB</output></label>
+        <label class="slider">Fade in <input id="mu-fadein" type="range" min="0" max="5000" step="100" /><output id="mu-fadein-out">1.0 s</output></label>
+        <label class="slider">Fade out <input id="mu-fadeout" type="range" min="0" max="5000" step="100" /><output id="mu-fadeout-out">1.5 s</output></label>
+        <label class="slider" title="When in the finished video the music begins.">Starts at <input id="mu-start" type="range" min="0" max="60000" step="500" /><output id="mu-start-out">0.0 s</output></label>
+        <label class="switch" title="Play the file again from the start when it is shorter than the video."><input type="checkbox" id="mu-loop" /> Repeat if shorter than the video</label>
+      </div>
+
       <label class="slider" title="Move the sound earlier (negative) or later (positive) if it is slightly out of step with the picture.">Sync nudge <input id="aud-offset" type="range" min="-1000" max="1000" step="10" /><output id="aud-offset-out">0 ms</output></label>
     </div>
 
@@ -306,6 +320,7 @@
       <p class="muted small" id="clip-info">Click a clip on the timeline.</p>
       <label class="inline">Speed
         <select id="speed" class="field sm"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select></label>
+      <label class="switch" title="Silence the voice during this clip. Music keeps playing."><input type="checkbox" id="clip-mute" /> Mute this clip</label>
       <div class="row"><button id="split2" class="btn needs-project"><svg class="ico"><use href="#i-scissors"/></svg><span>Split at playhead</span></button><button id="del-clip" class="btn needs-project"><svg class="ico"><use href="#i-trash"/></svg><span>Delete clip</span></button></div>
 
       <h3 class="section">Zoom</h3>

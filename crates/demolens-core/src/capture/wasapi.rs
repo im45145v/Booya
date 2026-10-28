@@ -252,17 +252,7 @@ impl Recorder {
             bail!("the device delivered no audio");
         }
         let _ = (f.rate, f.channels);
-        let st = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
-            .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-itsoffset", &format!("{:.3}", f.offset_s), "-i"])
-            .arg(&self.wav)
-            .args(["-c:a", "pcm_f32le", "-f", "matroska"])
-            .arg(out)
-            .output()?;
-        if !st.status.success() {
-            bail!("ffmpeg could not convert the audio: {}", String::from_utf8_lossy(&st.stderr).trim());
-        }
-        let _ = std::fs::remove_file(&self.wav);
-        Ok(())
+        super::audiosink::wav_to_mkv(&self.wav, out, f.offset_s)
     }
 }
 

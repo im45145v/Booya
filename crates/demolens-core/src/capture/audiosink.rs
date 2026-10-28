@@ -149,6 +149,47 @@ impl Probe {
 /// microphone is that quiet, a blocked or muted one is exactly zero.
 pub const SILENT_DB: f32 = -80.0;
 
+/// Turns what ScreenCaptureKit hands over into interleaved stereo f32. Each
+/// item is one buffer's bytes (little endian f32) and its channel count.
+/// ScreenCaptureKit gives either one buffer per channel (planar) or a single
+/// interleaved buffer; mono is copied to both sides. Anything else is skipped.
+pub fn interleave_stereo(buffers: &[(&[u8], usize)]) -> Vec<f32> {
+    let f = |b: &[u8]| -> Vec<f32> { b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect() };
+    match buffers {
+        [] => Vec::new(),
+        [(b, ch)] => {
+            let v = f(b);
+            match ch {
+                2 => v,
+                1 => v.iter().flat_map(|x| [*x, *x]).collect(),
+                _ => Vec::new(),
+            }
+        }
+        [(l, 1), (r, 1), ..] => {
+            let (l, r) = (f(l), f(r));
+            l.iter().zip(r.iter()).flat_map(|(a, b)| [*a, *b]).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Converts a float WAV into the Matroska sidecar the recording is joined
+/// with: the samples are stamped `offset_s` seconds after the recording clock
+/// started (when the first sample was taken).
+pub fn wav_to_mkv(wav: &std::path::Path, out: &std::path::Path, offset_s: f64) -> anyhow::Result<()> {
+    let st = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
+        .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-itsoffset", &format!("{:.3}", offset_s), "-i"])
+        .arg(wav)
+        .args(["-c:a", "pcm_f32le", "-f", "matroska"])
+        .arg(out)
+        .output()?;
+    if !st.status.success() {
+        anyhow::bail!("ffmpeg could not convert the audio: {}", String::from_utf8_lossy(&st.stderr).trim());
+    }
+    let _ = std::fs::remove_file(wav);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +236,17 @@ mod tests {
         assert!(p.peak_db() < SILENT_DB && p.frames() == 480);
         p.feed(&[0.0, 0.1, -0.2], 3);
         assert!((p.peak_db() + 13.98).abs() < 0.1, "{}", p.peak_db());
+    }
+
+    #[test]
+    fn screencapturekit_buffers_become_stereo() {
+        let bytes = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let (l, r) = (bytes(&[0.1, 0.2]), bytes(&[-0.1, -0.2]));
+        assert_eq!(interleave_stereo(&[(&l, 1), (&r, 1)]), vec![0.1, -0.1, 0.2, -0.2], "planar");
+        let both = bytes(&[0.1, -0.1, 0.2, -0.2]);
+        assert_eq!(interleave_stereo(&[(&both, 2)]), vec![0.1, -0.1, 0.2, -0.2], "interleaved");
+        assert_eq!(interleave_stereo(&[(&l, 1)]), vec![0.1, 0.1, 0.2, 0.2], "mono");
+        assert!(interleave_stereo(&[]).is_empty() && interleave_stereo(&[(&l, 6)]).is_empty());
+        assert_eq!(interleave_stereo(&[(&[1u8, 2, 3][..], 1), (&[1u8][..], 1)]), Vec::<f32>::new(), "a torn buffer yields nothing");
     }
 }

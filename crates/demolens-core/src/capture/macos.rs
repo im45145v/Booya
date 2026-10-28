@@ -9,8 +9,7 @@
 //! Devices are looked up by listing them first (`-list_devices true`), because
 //! the index of a device depends on what is attached.
 //!
-//! TODO(macos): system audio through SCStream (capturesAudio) and the
-//! microphone through SCStream on macOS 15+.
+//! TODO(macos): record the microphone through SCStream on macOS 15+.
 
 use super::{macos_sck, parse_avfoundation_devices, s, screen_index, AvDevice, CapturePlan, CaptureTarget, Feed, RecordOptions, Region};
 use anyhow::{anyhow, bail, Result};
@@ -65,10 +64,8 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     if std::env::var("DEMOLENS_MAC_CAPTURE").as_deref() == Ok("avfoundation") {
         return plan_avfoundation(o);
     }
+    // System audio comes from a ScreenCaptureKit audio stream, recorded on the side.
     let mut warnings = Vec::new();
-    if o.system_audio {
-        warnings.push("System audio on macOS needs a loopback device such as BlackHole for now.".into());
-    }
     let fps = o.fps.clamp(1, 60);
     let cap = macos_sck::open(&o.target, fps, o.max_height, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
     // (w, h) is the size of the screen in capture pixels, which is what events

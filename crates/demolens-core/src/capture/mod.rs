@@ -4,15 +4,15 @@
 //! | OS      | Video                     | Mic          | System audio                     |
 //! |---------|---------------------------|--------------|----------------------------------|
 //! | Linux   | x11grab (X11)             | PulseAudio   | Pulse/PipeWire monitor source    |
-//! | macOS   | ScreenCaptureKit (frames  | avfoundation | TODO: SCStream audio             |
+//! | macOS   | ScreenCaptureKit (frames  | avfoundation | SCStream audio (sidecar)         |
 //! |         | piped to ffmpeg)          | (audio only) |                                  |
-//! | Windows | gdigrab                   | dshow        | TODO: WASAPI loopback            |
+//! | Windows | gdigrab                   | WASAPI, dshow| WASAPI loopback (sidecar)        |
 //!
 //! The webcam sidecar (off unless asked for) uses v4l2 on Linux, avfoundation on
 //! macOS and dshow on Windows.
 //!
 //! TODO(wayland): xdg-desktop-portal ScreenCast + PipeWire stream.
-//! TODO(macos): window picker UI and system audio through SCStream.
+//! TODO(macos): window picker UI.
 //! TODO(windows): Windows.Graphics.Capture backend for per-window capture.
 
 use crate::events::EventLog;
@@ -29,6 +29,7 @@ pub mod mics;
 pub mod mic;
 #[allow(dead_code)]
 mod audiosink;
+mod sysaudio;
 #[cfg(target_os = "windows")]
 mod wasapi;
 pub mod sources;
@@ -153,6 +154,8 @@ pub struct RecordingSession {
     mic: Option<mic::MicRec>,
     /// What the microphone did, once it has been stopped.
     mic_verdict: Option<mic::MicState>,
+    /// System audio sidecar (Windows, macOS; see `sysaudio`).
+    sys: Option<sysaudio::SysAudio>,
     logger: InputLogger,
     started: Instant,
     stderr: Arc<Mutex<String>>,
@@ -364,6 +367,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         Ok((child, err, feed, epoch))
     };
     let mut started = Instant::now();
+    let mut audio_dropped = false;
     let (mut child, mut err, mut feed, mut epoch) = spawn(&mut plan)?;
     if let Err(e) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
         // A missing or blocked microphone should not cost the user the
@@ -378,6 +382,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             let why = if e.starts_with("TIMEOUT") { "it did not respond".to_string() } else { first_line(&e) };
             retry.warnings.push(format!("Could not open the {}, so this recording has no sound ({why}).", if opts.mic { "microphone" } else { "system audio" }));
             plan = retry;
+            audio_dropped = true;
             started = Instant::now();
             (child, err, feed, epoch) = spawn(&mut plan)?;
             if let Err(e2) = wait_until_writing(&mut child, &video, &err, FIRST_OUTPUT_TIMEOUT) {
@@ -405,6 +410,21 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
         None => None,
     };
+    // System audio is a sidecar on the same clock, and only when asked for
+    // (and not when the video-only retry dropped all sound).
+    let sys_file = crate::finalize::sys_sidecar(&video);
+    let sys = if opts.system_audio && sysaudio::supported() && !audio_dropped {
+        match sysaudio::SysAudio::start(epoch, &sys_file, &audio_log) {
+            Ok(s) => Some(s),
+            Err(reason) => {
+                mic::log_line(&audio_log, &format!("system audio could not start: {reason}"));
+                warnings.push(format!("System audio not recorded: {reason}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
         warnings.push("Key capture is on, but macOS has not allowed DemoLens to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch DemoLens on, then quit and reopen DemoLens.".into());
     }
@@ -416,7 +436,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
     }
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
+    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -572,11 +592,14 @@ impl RecordingSession {
         if let Some(m) = self.mic.take() {
             m.stop();
         }
+        if let Some(s) = self.sys.take() {
+            s.discard();
+        }
         let _ = std::mem::replace(&mut self.logger, InputLogger::idle()).stop();
         if self.created {
             std::fs::remove_dir_all(&self.dir)?;
         } else {
-            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv")] {
+            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv"), &self.video.with_extension("sys.mkv")] {
                 let _ = std::fs::remove_file(f);
             }
         }
@@ -592,6 +615,7 @@ impl RecordingSession {
         if let Some(m) = self.mic.take() {
             self.mic_verdict = Some(m.stop());
         }
+        let sys_result = self.sys.take().map(|s| s.stop());
         let killed = finish(&mut self.child, fed);
         if let Some(c) = self.webcam.as_mut() {
             finish(c, false);
@@ -615,6 +639,18 @@ impl RecordingSession {
         let mut warnings: Vec<String> = Vec::new();
         if let Some(w) = self.mic_verdict.as_ref().and_then(|v| v.message()) {
             warnings.push(w);
+        }
+        // Fold the system audio into the sound file the remux joins to the screen.
+        match sys_result {
+            Some(Err(e)) => warnings.push(format!("System audio not recorded: {e}")),
+            Some(Ok(())) => match crate::finalize::merge_system_audio(&self.video) {
+                Ok(_) => {}
+                Err(e) => {
+                    mic::log_line(&audio_log, &format!("system audio could not be mixed in: {e:#}"));
+                    warnings.push(format!("System audio not recorded in the video: {}", first_line(&format!("{e:#}"))));
+                }
+            },
+            None => {}
         }
         let remuxed = crate::finalize::remux_to_mp4_info(&self.video);
         let (video, video_start_s) = match remuxed {

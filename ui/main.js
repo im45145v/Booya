@@ -84,6 +84,7 @@ function syncPanel() {
   if (b.type === 'image') $('bg-image').value = b.path;
   setFit(project.style.bg_fit || 'fill'); $('bg-dim').value = project.style.bg_dim || 0;
   $('padding').value = s.padding; $('radius').value = s.corner_radius; $('shadow').value = s.shadow;
+  $('frame-sel').value = s.frame || 'none'; $('motion-blur').checked = !!s.motion_blur;
   { const g = s.glass || {}; $('gl-on').checked = !!g.enabled; $('gl-blur').value = g.blur ?? 0.018; $('gl-tint-op').value = g.tint_opacity ?? 0.16; $('gl-tint').value = hex(g.tint || [255, 255, 255]);
     $('gl-hi').value = g.highlight ?? 0.7; $('gl-radius').value = g.radius ?? 0.04; $('gl-inset').value = g.inset ?? 0.022; $('gl-over').checked = g.overlays ?? true; $('gl-opts').classList.toggle('off', !g.enabled); }
   const c = project.cursor;
@@ -97,6 +98,7 @@ function syncPanel() {
   const ic = project.intro || {}, oc = project.outro || {};
   $('in-title').value = ic.title || ''; $('in-sub').value = ic.subtitle || ''; $('out-title').value = oc.title || ''; $('out-sub').value = oc.subtitle || '';
   $('card-len').value = ((ic.duration_ms || oc.duration_ms || 2500) / 1000);
+  loadMusicPanel();
   const au = project.audio;
   $('aud-denoise').checked = au.denoise; $('aud-mute').checked = au.mute; $('aud-normalize').checked = au.normalize;
   $('aud-gain').value = au.gain_db; $('aud-volume').value = au.volume; $('aud-fadein').value = au.fade_in_ms; $('aud-fadeout').value = au.fade_out_ms; $('aud-offset').value = au.offset_ms;
@@ -107,10 +109,37 @@ function syncPanel() {
 }
 // The layout of the whole recording: the chosen one, else what the older Layout setting meant.
 function baseLayout() { const w = project.webcam, b = project.layouts && project.layouts.base; return b || (w && w.layout === 'side' ? 'split' : 'bubble'); }
+// ---------- Music ----------
+const MUSIC_EXT = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'flac', 'opus'];
+function loadMusicPanel() {
+  const m = project.music, has = !!(m && m.path);
+  $('mu-opts').hidden = !has; $('mu-remove').hidden = !has;
+  $('mu-name').textContent = has ? String(m.path).split(/[\\/]/).pop() : 'No music';
+  $('mu-pick').textContent = has ? 'Change...' : 'Add music...';
+  if (!has) return;
+  $('mu-volume').value = m.volume; $('mu-duck').checked = !!m.duck; $('mu-duck-db').value = m.duck_db; $('mu-fadein').value = m.fade_in_ms; $('mu-fadeout').value = m.fade_out_ms; $('mu-start').value = m.start_ms; $('mu-loop').checked = !!m.looped;
+}
+let lastMusic = null;
+function readMusicPanel() {
+  const m = project.music; if (!m || !m.path) return;
+  Object.assign(m, { volume: +$('mu-volume').value, duck: $('mu-duck').checked, duck_db: +$('mu-duck-db').value, fade_in_ms: +$('mu-fadein').value, fade_out_ms: +$('mu-fadeout').value, start_ms: +$('mu-start').value, looped: $('mu-loop').checked });
+  const j = JSON.stringify(m); if (j !== lastMusic) { lastMusic = j; nativeMusicChanged(); }
+}
+$('mu-pick').onclick = async () => {
+  if (!project) return;
+  const p = await dialog.open({ multiple: false, filters: [{ name: 'Music', extensions: MUSIC_EXT }] });
+  if (!p) return;
+  project.music = { path: p, volume: 0.25, duck: true, duck_db: 12, fade_in_ms: 1000, fade_out_ms: 1500, start_ms: 0, looped: true, ...(project.music?.path ? { ...project.music, path: p } : {}) };
+  loadMusicPanel(); outputs(); lastMusic = null; readMusicPanel(); refresh(); checkpoint(); status('Music added. It lowers under your voice by default.', 'success');
+};
+$('mu-remove').onclick = () => { if (!project) return; project.music = null; lastMusic = null; loadMusicPanel(); nativeMusicChanged(); refresh(); checkpoint(); status('Music removed'); };
+$('clip-mute').onchange = () => { const c = project?.clips[tl.selectedClip]; if (c) { c.mute = $('clip-mute').checked; refresh(); checkpoint(); if (audioState === 'ready' && playing) syncAudio(true); } };
+
 function outputs() {
   const s = (id, t) => ($(id + '-out').textContent = t);
   s('zc-ease', (+$('zc-ease').value / 1000).toFixed(1) + ' s'); s('zc-level', (+$('zc-level').value).toFixed(1) + 'x'); s('zc-steady', Math.round(+$('zc-steady').value * 100) + '%'); s('zc-hold', (+$('zc-hold').value / 1000).toFixed(1) + ' s'); s('zc-merge', (+$('zc-merge').value / 1000).toFixed(1) + ' s'); s('zc-clicks', (+$('zc-clicks').value) + ' clicks'); s('zc-window', (+$('zc-window').value / 1000).toFixed(1) + ' s');
   s('card-len', (+$('card-len').value).toFixed(1) + ' s'); s('aud-gain', (+$('aud-gain').value) + ' dB'); s('aud-volume', Math.round(+$('aud-volume').value * 100) + '%');
+  s('mu-volume', Math.round(+$('mu-volume').value * 100) + '%'); s('mu-duck-db', (+$('mu-duck-db').value) + ' dB'); s('mu-fadein', (+$('mu-fadein').value / 1000).toFixed(1) + ' s'); s('mu-fadeout', (+$('mu-fadeout').value / 1000).toFixed(1) + ' s'); s('mu-start', (+$('mu-start').value / 1000).toFixed(1) + ' s');
   s('aud-fadein', (+$('aud-fadein').value / 1000).toFixed(1) + ' s'); s('aud-fadeout', (+$('aud-fadeout').value / 1000).toFixed(1) + ' s'); s('aud-offset', (+$('aud-offset').value) + ' ms');
 }
 function readPanel() {
@@ -119,6 +148,8 @@ function readPanel() {
   s.background = t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
     : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : t === 'mesh' ? s.background : { type: t, path: $('bg-image').value };
   s.padding = +$('padding').value; s.corner_radius = +$('radius').value; s.shadow = +$('shadow').value;
+  s.frame = $('frame-sel').value; s.motion_blur = $('motion-blur').checked;
+  readMusicPanel();
   s.glass = { ...(s.glass || {}), enabled: $('gl-on').checked, blur: +$('gl-blur').value, tint: rgb($('gl-tint').value), tint_opacity: +$('gl-tint-op').value, highlight: +$('gl-hi').value, radius: +$('gl-radius').value, inset: +$('gl-inset').value, overlays: $('gl-over').checked };
   $('gl-opts').classList.toggle('off', !s.glass.enabled);
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
@@ -219,7 +250,7 @@ $('co-add').onclick = () => {
 function syncSelection() {
   if (!project) return;
   const c = project.clips[tl.selectedClip];
-  if (c) { $('clip-info').textContent = `Clip ${tl.selectedClip + 1} of ${project.clips.length}: ${fmt(c.src_start_ms)} to ${fmt(c.src_end_ms)} of the recording.`; $('speed').value = String(c.speed); }
+  if (c) { $('clip-info').textContent = `Clip ${tl.selectedClip + 1} of ${project.clips.length}: ${fmt(c.src_start_ms)} to ${fmt(c.src_end_ms)} of the recording.`; $('speed').value = String(c.speed); $('clip-mute').checked = !!c.mute; }
   const z = project.zoom[tl.selectedZoom];
   $('zoom-scale').disabled = $('zoom-follow').disabled = !z;
   if (z) {
@@ -289,7 +320,7 @@ function split() {
   const at = tl.outToSrc(tl.playhead), i = project.clips.findIndex(c => at > c.src_start_ms + 50 && at < c.src_end_ms - 50);
   if (i < 0) return status('Move the playhead inside a clip to split it.');
   const c = project.clips[i];
-  project.clips.splice(i + 1, 0, { src_start_ms: at, src_end_ms: c.src_end_ms, speed: c.speed });
+  project.clips.splice(i + 1, 0, { src_start_ms: at, src_end_ms: c.src_end_ms, speed: c.speed, mute: !!c.mute });
   c.src_end_ms = at; tl.selectedClip = i + 1; tl.draw(); syncSelection(); refresh(); status('Split clip ' + (i + 1));
 }
 function deleteSelected() {
@@ -1194,7 +1225,7 @@ function syncAudio(start) {
   if (nat.on) return syncNative(start);
   const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
   const want = (srcMs - (a.offset_ms || 0)) / 1000;
-  applyVolume();
+  applyVolume(); if (clip?.mute) pa.muted = true;
   pa.playbackRate = Math.max(0.25, Math.min(4, clip?.speed || 1)); pa.preservesPitch = true;
   // Above 4x the browser cannot keep up with the sound, so it is skipped.
   if ((clip?.speed || 1) > 4) { pa.pause(); return; }
@@ -1498,7 +1529,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['frame-sel', 'card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 // The permissions screen comes first (a Mac's first launch, or a permission that went off), then the privacy note.
