@@ -2,6 +2,10 @@ name: CI
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  # whisper.cpp otherwise builds with -march=native: a build made on one runner
+  # CPU can crash (illegal instruction) on another CPU, and so can an installer.
+  GGML_NATIVE: "OFF"
 jobs:
   build:
     strategy:
@@ -14,6 +18,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: portable-ggml
       - name: Linux deps
         if: runner.os == 'Linux'
         timeout-minutes: 15
@@ -144,7 +150,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: capture-sync
+          key: capture-sync-portable-ggml
       - name: Deps
         timeout-minutes: 15
         run: |
@@ -179,7 +185,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: subtitles
+          key: subtitles-portable-ggml
       - name: Deps
         timeout-minutes: 15
         run: |
@@ -205,7 +211,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: editor-e2e
+          key: editor-e2e-portable-ggml
       - name: Deps
         run: |
           sudo apt-get -o Acquire::Retries=3 update

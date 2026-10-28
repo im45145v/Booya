@@ -11,6 +11,10 @@ on:
 
 permissions:
   contents: read
+env:
+  # whisper.cpp otherwise builds with -march=native: a build made on one runner
+  # CPU can crash (illegal instruction) on another CPU, and so can an installer.
+  GGML_NATIVE: "OFF"
 
 jobs:
   build:
@@ -31,6 +35,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: portable-ggml
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
