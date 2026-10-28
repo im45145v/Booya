@@ -58,7 +58,7 @@ function updTitle() {
 const tl = new Timeline($('timeline'), {
   onChange: () => { syncSelection(); refresh(); },
   onSeek: t => { tl.playhead = t; refresh(); },
-  onSelect: () => syncSelection(),
+  onSelect: () => { syncSelection(); showInspector(); },
 });
 
 function setProject(p, path = null) {
@@ -130,6 +130,7 @@ function readPanel() {
   outputs();
   Object.assign(project.export, { aspect: $('ex-aspect').value, quality: +$('ex-quality').value, fps: +$('ex-fps').value, format: $('ex-format').value });
 }
+$('aud-mute').addEventListener('input', () => { if (audioState === 'ready') setAudioState('ready', audioText); });
 document.querySelectorAll('#pane-style input, #pane-export select').forEach(el => el.addEventListener('input', () => { if (project) { readPanel(); markTemplate(); markDestination(); refresh(); } }));
 
 function setBgType(t) {
@@ -446,6 +447,15 @@ $('rec-btn').onclick = async () => {
   } catch (e) { setRecUi(false); hideBusy(); if (typeof clearTakePlan === 'function') clearTakePlan(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
 };
 
+// Selecting a zoom or a note on the timeline opens its settings (the Edit tab),
+// so the controls for what you clicked are never hidden.
+let lastPicked = null;
+function showInspector() {
+  const pick = tl.selectedZoom >= 0 ? 'z' + tl.selectedZoom : tl.selItem ? 'i' + ['callouts', 'shapes', 'blur'].map(k => (tl.project[k] || []).indexOf(tl.selItem)).join(':') : null;
+  if (pick && pick !== lastPicked && typeof selectTab === 'function') selectTab('edit');
+  lastPicked = pick;
+}
+
 // ---------- Tabs ----------
 function selectTab(name) {
   document.querySelectorAll('.tab').forEach(t => { const on = t.id === 'tab-' + name; t.setAttribute('aria-selected', on); t.tabIndex = on ? 0 : -1; });
@@ -699,9 +709,9 @@ setTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: li
 
 // ---------- Keyboard shortcuts ----------
 const SHORTCUTS = [
-  ['Playback', [['Space / K', 'Play or pause'], ['Left / Right', 'Step 0.1 s (Shift: 1 s)'], ['Home / End', 'Go to start or end'], ['J / L', 'Jump 5 s back or forward']]],
+  ['Playback', [['Space / K', 'Play or pause'], ['Left / Right', 'Step 0.1 s (Shift: 1 s)'], ['Home / End', 'Go to start or end'], ['J / L', 'Jump 5 s back or forward'], ['M', 'Mute or unmute the preview sound']]],
   ['Editing', [['S', 'Split clip at playhead'], ['Z', 'Add zoom at playhead'], ['Delete', 'Delete selected zoom or clip'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo'], ['D', 'Run auto edit']]],
-  ['Timeline', [['+ / -', 'Zoom timeline in or out'], ['0', 'Fit timeline'], ['Ctrl Wheel', 'Zoom around the mouse'], ['Wheel', 'Pan when zoomed in'], ['Double-click', 'Add a zoom on the zoom lane']]],
+  ['Timeline', [['+ / -', 'Zoom timeline in or out'], ['0', 'Fit timeline'], ['Ctrl Wheel', 'Zoom around the mouse'], ['Wheel', 'Pan when zoomed in'], ['Double-click', 'Add a zoom on the zoom lane'], ['Drag', 'Move a zoom, note or blur. Drag its edges to resize it']]],
   ['File', [['Ctrl O', 'Open'], ['Ctrl S', 'Save'], ['Ctrl Shift S', 'Save as'], ['Ctrl E', 'Export'], ['Ctrl ,', 'Settings'], ['Ctrl /', 'This list (also ?)']]],
 ];
 const IS_MAC = /Mac/i.test(navigator.platform);
@@ -858,6 +868,7 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'End') { e.preventDefault(); seek(tl.outDur()); }
   else if (k === 'j') seek(tl.playhead - 5000);
   else if (k === 'k') setPlaying(!playing);
+  else if (k === 'm') $('vol-btn').click();
   else if (k === 'l') seek(tl.playhead + 5000);
   else if (k === 's') split();
   else if (k === 'z') addZoom();
@@ -905,30 +916,85 @@ loadMics().then(() => { if (localStorage.getItem('mic-ok')) meterStart(); });
 // the sound is played by a normal audio element on the proxy, in step with the
 // timeline. The proxy's loudness is already evened out.
 const pa = new Audio(); pa.preload = 'auto';
-let proxyFor = null, proxyReady = false;
+let proxyFor = null, audioBlob = null, audioState = 'none', audioText = '';
+// The video proxy only speeds up the picture. The sound has its own small
+// file (built in seconds, loudness already evened out) that is played from a
+// blob, so it works the same in every web view and never waits for the proxy.
 async function prepareProxy() {
   const src = project?.source; if (!src) return;
-  proxyReady = false; pa.removeAttribute('src'); pa.load();
+  prepareAudio();
   const have = await invoke('proxy_path', { source: src }).catch(() => null);
-  if (have) return useProxy(src, have);
+  if (have) return (proxyFor = src);
   $('proxy-note')?.remove();
-  invoke('proxy_ensure', { source: src }).then(r => useProxy(src, r.path)).catch(() => { });
+  invoke('proxy_ensure', { source: src }).then(() => { proxyFor = src; }).catch(() => { });
 }
-function useProxy(src, path) {
+const volPref = () => ({ muted: localStorage.getItem('preview-muted') === '1', volume: Math.max(0, Math.min(1, +(localStorage.getItem('preview-volume') ?? 1))) });
+function applyVolume() {
+  const v = volPref(), exp = Math.min(1, Math.max(0, project?.audio?.volume ?? 1));
+  pa.muted = v.muted; pa.volume = Math.max(0, Math.min(1, v.volume * exp));
+  $('vol').value = v.muted ? 0 : v.volume;
+  const b = $('vol-btn'); b.setAttribute('aria-pressed', String(v.muted || v.volume === 0)); b.setAttribute('aria-label', v.muted ? 'Unmute preview sound' : 'Mute preview sound');
+}
+function setAudioState(state, text) {
+  audioState = state; audioText = text; tl.audioState = state;
+  const c = $('audio-chip'); c.dataset.state = state; c.textContent = text;
+  const muted = project?.audio?.mute;
+  c.classList.toggle('warn', !!muted && state === 'ready');
+  if (muted && state === 'ready') { c.textContent = 'Sound on, but the export is muted'; c.title = 'Mute is switched on under Style > Audio, so the exported video will have no sound.'; }
+  else c.title = 'The sound you hear while editing. It is the recording\'s own microphone track.';
+  tl.draw();
+}
+function loadAudio(url) {
+  return new Promise((res, rej) => {
+    const clean = () => { pa.removeEventListener('canplay', ok); pa.removeEventListener('error', bad); clearTimeout(t); };
+    const ok = () => { clean(); res(); };
+    const bad = () => { clean(); rej(new Error(pa.error?.message || 'the sound file could not be decoded')); };
+    const t = setTimeout(() => { clean(); rej(new Error('the sound file took too long to load')); }, 8000);
+    pa.addEventListener('canplay', ok); pa.addEventListener('error', bad);
+    pa.src = url; pa.load();
+  });
+}
+async function prepareAudio() {
+  const src = project?.source; if (!src) return;
+  pa.pause(); pa.removeAttribute('src'); pa.load();
+  if (audioBlob) { URL.revokeObjectURL(audioBlob); audioBlob = null; }
+  tl.peaks = null; setAudioState('building', 'Preparing sound...');
+  let r;
+  try { r = await invoke('audio_preview', { source: src }); }
+  catch (e) { if (project?.source !== src) return; setAudioState('error', 'Sound unavailable'); return status('Could not prepare the sound for the preview: ' + humanError(e), 'error'); }
   if (project?.source !== src) return;
-  proxyFor = src; pa.src = window.__TAURI__.core.convertFileSrc(path); proxyReady = true;
+  if (!r.has_audio) { setAudioState('none', 'No sound in this recording'); return; }
+  tl.peaks = { data: r.peaks, bucket: r.bucket_ms };
+  try {
+    try { audioBlob = URL.createObjectURL(new Blob([await invoke('audio_bytes', { path: r.path })], { type: 'audio/mp4' })); await loadAudio(audioBlob); }
+    catch (first) {
+      // Second try: let the web view fetch the file itself through the asset protocol.
+      await loadAudio(window.__TAURI__.core.convertFileSrc(r.path)).catch(() => { throw first; });
+    }
+  } catch (e) {
+    if (project?.source !== src) return;
+    setAudioState('error', 'Sound unavailable');
+    return status('The sound could not be loaded into the preview (' + humanError(e) + '). Editing and export still work.', 'error');
+  }
+  if (project?.source !== src) return;
+  applyVolume();
+  setAudioState('ready', r.faint ? 'Sound: very quiet recording' : 'Sound on');
+  if (playing) syncAudio(true);
 }
+$('vol').oninput = () => { const v = +$('vol').value; localStorage.setItem('preview-volume', String(v)); localStorage.setItem('preview-muted', v === 0 ? '1' : '0'); applyVolume(); };
+$('vol-btn').onclick = () => { const v = volPref(); const mute = !(v.muted || v.volume === 0); localStorage.setItem('preview-muted', mute ? '1' : '0'); if (!mute && v.volume === 0) localStorage.setItem('preview-volume', '1'); applyVolume(); status(mute ? 'Preview sound muted. The export is not affected.' : 'Preview sound on.', 'info'); };
+applyVolume();
 window.__TAURI__.event.listen('proxy-progress', e => {
   const p = e.payload; if (p.source !== project?.source) return;
   if (p.error) status('Could not build the faster preview copy. Editing still works. ' + p.error, 'info');
-  else if (p.done) { useProxy(p.source, p.path); if (!playing) refresh(); }
+  else if (p.done) { proxyFor = p.source; if (!playing) refresh(); }
 });
 function audioClip(srcMs) { return project.clips.find(c => srcMs >= c.src_start_ms && srcMs < c.src_end_ms) || project.clips[project.clips.length - 1]; }
 function syncAudio(start) {
-  if (!proxyReady || !project) return;
+  if (audioState !== 'ready' || !project) return;
   const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
   const want = (srcMs - (a.offset_ms || 0)) / 1000;
-  pa.muted = !!a.mute; pa.volume = Math.max(0, Math.min(1, a.volume ?? 1));
+  applyVolume();
   pa.playbackRate = Math.max(0.25, Math.min(4, clip?.speed || 1)); pa.preservesPitch = true;
   // Above 4x the browser cannot keep up with the sound, so it is skipped.
   if ((clip?.speed || 1) > 4) { pa.pause(); return; }
@@ -936,11 +1002,14 @@ function syncAudio(start) {
   const fix = start ? { seek: true, rate: speed } : AvSync.audioCorrection(want, pa.currentTime, speed);
   if (fix.seek) pa.currentTime = Math.max(0, want);
   pa.playbackRate = Math.max(0.0625, Math.min(4.25, fix.rate));
-  if (pa.paused) pa.play().catch(() => { });
+  if (pa.paused) pa.play().catch(err => {
+    if (err?.name === 'NotAllowedError') { setAudioState('blocked', 'Sound blocked: press Play again'); status('The system blocked the sound until you press Play. Press Play once more.', 'info'); }
+    else if (err?.name !== 'AbortError') { setAudioState('error', 'Sound error'); status('Could not play the sound: ' + (err?.message || err), 'error'); }
+  });
 }
 // Resolves once the sound is playing (or there is none, or it takes too long).
 function audioStarted() {
-  if (!proxyReady || !project || project.audio?.mute || (audioClip(tl.outToSrc(tl.playhead))?.speed || 1) > 4) return Promise.resolve();
+  if (audioState !== 'ready' || !project || (audioClip(tl.outToSrc(tl.playhead))?.speed || 1) > 4) return Promise.resolve();
   return new Promise(res => {
     const done = () => { pa.removeEventListener('playing', done); clearTimeout(t); res(); };
     const t = setTimeout(done, 700);

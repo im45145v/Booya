@@ -151,6 +151,78 @@ pub fn build(cache_dir: &Path, src: &Path, mut progress: impl FnMut(f64)) -> Res
     Ok(ProxyStats { path: out, width: w, height: h, seconds: t0.elapsed().as_secs_f64(), encoder: enc.name().into(), hwaccel_decode: used_hw, cached: false })
 }
 
+// ---------- Preview sound ----------
+//
+// The editor does not play the sound out of the 720p video proxy: that file
+// takes as long to build as the video is long, and until it exists the editor
+// would be silent. The sound gets its own small file, built in seconds, with
+// the loudness already evened out, 48 kHz stereo AAC so every web view plays it.
+
+/// Length of one waveform bucket in the peaks the editor draws.
+pub const PEAK_BUCKET_MS: f64 = 50.0;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioPreview {
+    /// False when the recording has no sound track at all.
+    pub has_audio: bool,
+    pub path: Option<PathBuf>,
+    pub duration_ms: f64,
+    pub bucket_ms: f64,
+    /// Waveform: the loudest sample in each bucket, 0 to 255.
+    pub peaks: Vec<u8>,
+    /// True when the track is only a noise floor (nothing to hear).
+    pub faint: bool,
+}
+
+pub fn audio_path(cache_dir: &Path, src: &Path) -> PathBuf {
+    cache_dir.join("proxies").join(format!("{}.audio.m4a", cache_key(src)))
+}
+
+/// Peaks of mono samples at `rate`: the loudest value per bucket, scaled so the
+/// loudest bucket is 255 (square rooted, so quiet speech is still visible).
+pub fn peaks(samples: &[f32], rate: u32) -> Vec<u8> {
+    let n = ((PEAK_BUCKET_MS / 1000.0) * rate as f64).max(1.0) as usize;
+    let raw: Vec<f32> = samples.chunks(n).map(|c| c.iter().fold(0.0f32, |m, x| m.max(x.abs()))).collect();
+    let top = raw.iter().cloned().fold(0.0f32, f32::max);
+    if top <= 1e-5 {
+        return vec![0; raw.len()];
+    }
+    raw.iter().map(|v| ((v / top).sqrt() * 255.0).round().clamp(0.0, 255.0) as u8).collect()
+}
+
+/// Build (or reuse) the preview sound for `src`.
+pub fn build_audio(cache_dir: &Path, src: &Path) -> Result<AudioPreview> {
+    let info = ffmpeg::probe(src).context("probe source")?;
+    if !info.has_audio {
+        return Ok(AudioPreview { has_audio: false, path: None, duration_ms: info.duration_ms, bucket_ms: PEAK_BUCKET_MS, peaks: vec![], faint: false });
+    }
+    let samples = crate::audio::decode_mono(src, 8000)?;
+    let pk = peaks(&samples, 8000);
+    let loud = crate::audio::measure_file(src).ok().flatten();
+    let faint = loud.map(|l| l.input_i < crate::audio::SILENT_LUFS).unwrap_or(true);
+    let out = audio_path(cache_dir, src);
+    if out.metadata().map(|m| m.len() > 512).unwrap_or(false) {
+        return Ok(AudioPreview { has_audio: true, path: Some(out), duration_ms: info.duration_ms, bucket_ms: PEAK_BUCKET_MS, peaks: pk, faint });
+    }
+    std::fs::create_dir_all(out.parent().unwrap())?;
+    let part = out.with_extension("m4a.part");
+    let _ = std::fs::remove_file(&part);
+    let norm = crate::audio::normalize_chain(loud.as_ref());
+    let mut c = crate::proc::command(ffmpeg::ffmpeg_bin());
+    c.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(src)).arg("-vn");
+    if !norm.is_empty() {
+        c.args(["-af", &norm]);
+    }
+    c.args(["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-movflags", "+faststart", "-f", "mp4"]).arg(&part);
+    let o = c.output().context("run ffmpeg")?;
+    if !o.status.success() {
+        let _ = std::fs::remove_file(&part);
+        bail!("could not build the preview sound: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or(""));
+    }
+    std::fs::rename(&part, &out)?;
+    Ok(AudioPreview { has_audio: true, path: Some(out), duration_ms: info.duration_ms, bucket_ms: PEAK_BUCKET_MS, peaks: pk, faint })
+}
+
 /// Delete proxies not used for `max_age_days`, returning the bytes freed.
 pub fn prune(cache_dir: &Path, max_age_days: u64) -> u64 {
     let mut freed = 0;
@@ -168,6 +240,60 @@ pub fn prune(cache_dir: &Path, max_age_days: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peaks_are_scaled_to_the_loudest_bucket() {
+        let mut s = vec![0.0f32; 400];
+        s[10] = 0.5;
+        s[210] = 0.125;
+        let p = peaks(&s, 8000);
+        assert_eq!(p.len(), 1);
+        let mut s2 = vec![0.0f32; 800];
+        s2[10] = 0.5;
+        s2[410] = 0.125;
+        let p = peaks(&s2, 8000);
+        assert_eq!(p, vec![255, 128]);
+        assert_eq!(peaks(&[0.0; 800], 8000), vec![0, 0]);
+    }
+
+    #[test]
+    fn preview_sound_is_48k_stereo_aac_and_has_a_waveform() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-asound-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.mp4");
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-af", "volume=-14dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let r = build_audio(&dir, &src).unwrap();
+        assert!(r.has_audio && !r.faint);
+        let p = r.path.clone().unwrap();
+        assert!(p.metadata().unwrap().len() > 1000);
+        assert!((r.peaks.len() as i64 - 60).abs() <= 2, "{}", r.peaks.len());
+        assert!(r.peaks.iter().filter(|v| **v > 200).count() > 40, "a steady tone fills the waveform");
+        let out = crate::proc::command(ffmpeg::ffprobe_bin()).args(["-v", "error", "-show_entries", "stream=codec_name,sample_rate,channels,duration", "-of", "json"]).arg(&p).output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let st = &v["streams"][0];
+        assert_eq!(st["codec_name"], "aac");
+        assert_eq!(st["sample_rate"], "48000");
+        assert_eq!(st["channels"], 2);
+        assert!((st["duration"].as_str().unwrap().parse::<f64>().unwrap() - 3.0).abs() < 0.2);
+        // Built once, reused the second time.
+        let again = build_audio(&dir, &src).unwrap();
+        assert_eq!(again.path, r.path);
+        // No sound track: no file, not an error.
+        let mute = dir.join("m.mp4");
+        assert!(crate::proc::command(ffmpeg::ffmpeg_bin()).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(&mute).status().unwrap().success());
+        let m = build_audio(&dir, &mute).unwrap();
+        assert!(!m.has_audio && m.path.is_none() && m.peaks.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn sizes_are_even_and_never_upscaled() {

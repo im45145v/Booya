@@ -1476,6 +1476,36 @@ fn proxy_path(app: tauri::AppHandle, source: String) -> Option<String> {
     demolens_core::proxy::existing(&cache_dir(&app), &PathBuf::from(source)).map(|p| p.to_string_lossy().to_string())
 }
 
+/// The editor's preview sound: a small AAC file with the loudness evened out,
+/// plus the waveform the timeline draws. Built in seconds, not minutes.
+#[tauri::command]
+async fn audio_preview(app: tauri::AppHandle, source: String) -> R<serde_json::Value> {
+    let src = PathBuf::from(source);
+    blocking(move || {
+        let r = demolens_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
+        serde_json::to_value(&r).map_err(e)
+    })
+    .await
+}
+
+/// The bytes of a preview sound file this app built. The editor plays them
+/// from a blob, which behaves the same in every web view (no asset protocol,
+/// no range requests, no scope rules to trip over).
+#[tauri::command]
+async fn audio_bytes(app: tauri::AppHandle, path: String) -> R<tauri::ipc::Response> {
+    let dir = cache_dir(&app).join("proxies");
+    blocking(move || {
+        let p = PathBuf::from(&path).canonicalize().map_err(e)?;
+        let ok_dir = dir.canonicalize().map(|d| p.starts_with(d)).unwrap_or(false);
+        if !ok_dir || !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".audio.m4a")) {
+            return Err("That is not a preview sound file made by DemoLens".to_string());
+        }
+        let bytes = std::fs::read(&p).map_err(e)?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+}
+
 // ---------- Microphone ----------
 
 #[tauri::command]
@@ -2049,6 +2079,8 @@ fn main() {
             discard_recording,
             proxy_ensure,
             proxy_path,
+            audio_preview,
+            audio_bytes,
             mic_list,
             mic_meter_start,
             mic_meter_stop,

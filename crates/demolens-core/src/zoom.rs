@@ -184,7 +184,24 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
 
     let mut segs: Vec<ZoomSegment> = Vec::new();
     let (fw, fh) = (log.header.width as f64, log.header.height as f64);
+    // Activity that is close in time but far apart on the screen cannot share
+    // one view with a margin round it: split it where the view stops fitting.
+    let mut split: Vec<Vec<Activity>> = Vec::new();
     for g in groups {
+        let mut cur: Vec<Activity> = Vec::new();
+        for a in g {
+            let mut pts: Vec<(f64, f64)> = cur.iter().map(|c| (c.x, c.y)).collect();
+            pts.push((a.x, a.y));
+            if !cur.is_empty() && bleed_scale(&pts, fw, fh, cfg.bleed, cfg.max_scale) < 1.2 {
+                split.push(std::mem::take(&mut cur));
+            }
+            cur.push(a);
+        }
+        if !cur.is_empty() {
+            split.push(cur);
+        }
+    }
+    for g in split {
         // Separate clicks (a double click is one), typing and markers decide
         // whether this is worth a zoom at all.
         let mut clicks = 0;
@@ -478,6 +495,15 @@ mod tests {
         let view_w = 1920.0 / s;
         let margin = (view_w - 800.0) / 2.0 / view_w;
         assert!(margin >= cfg.bleed - 0.01, "margin {margin}");
+    }
+
+    #[test]
+    fn clicks_far_apart_on_screen_are_split_not_dropped() {
+        let cfg = ZoomConfig::default();
+        let c = |t: f64, x: f64, y: f64| click(t, x, y);
+        let segs = generate_zoom_segments(&log_with(vec![c(1000.0, 300.0, 300.0), c(1500.0, 340.0, 310.0), c(3000.0, 1600.0, 800.0), c(3500.0, 1640.0, 810.0)]), 20_000.0, &cfg);
+        assert!(!segs.is_empty(), "two pairs of clicks must still zoom");
+        assert!(segs.iter().all(|s| s.scale >= 1.12));
     }
 
     #[test]

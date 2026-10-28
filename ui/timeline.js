@@ -12,9 +12,11 @@ class Timeline {
     this.project = null; this.playhead = 0; this.selectedZoom = -1; this.selectedClip = 0; this.drag = null;
     this.view = [0, 1]; // visible output range in ms; [0, dur] when fitted
     this.fitted = true;
-    this.H = 222; this.gutter = 64;
-    this.L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96], marks: [102, 128], blur: [134, 156], keys: [162, 182], words: [188, 210] };
+    this.H = 252; this.gutter = 64;
+    this.L = { ruler: [0, 22], clips: [28, 62], zoom: [68, 96], marks: [102, 128], blur: [134, 156], keys: [162, 182], words: [188, 210], audio: [216, 244] };
     this.selItem = null; this.keyTrack = [];
+    // Waveform of the sound: { data: 0..255 per bucket, bucket: ms } and what state the sound is in.
+    this.peaks = null; this.audioState = 'none';
     // Edge grab size in px: bigger for a finger or pen than for a mouse.
     this.slop = 6; this.touches = new Map(); this.pinch = null; this.lastTap = null; this.lastDbl = 0;
     canvas.addEventListener('pointerdown', e => this.pdown(e));
@@ -261,7 +263,7 @@ class Timeline {
 
     // Lane labels
     ctx.fillStyle = C('--faint'); ctx.font = font(10); ctx.textBaseline = 'middle';
-    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH']]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
+    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH'], ['audio', 'AUDIO']]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(x0 - 2, 0, x1 - x0 + 10, H); ctx.clip();
 
     // Ruler with nice tick spacing
@@ -301,7 +303,7 @@ class Timeline {
     });
     // Lane backgrounds so empty lanes still read as lanes
     ctx.globalAlpha = .35; ctx.fillStyle = C('--line');
-    for (const k of ['marks', 'blur', 'keys']) { const [a, b] = this.L[k]; rr(ctx, x0, a, x1 - x0, b - a, 5); ctx.fill(); }
+    for (const k of ['marks', 'blur', 'keys', 'words', 'audio']) { const [a, b] = this.L[k]; rr(ctx, x0, a, x1 - x0, b - a, 5); ctx.fill(); }
     ctx.globalAlpha = 1;
     // Notes (callouts and shapes) and blur boxes
     for (const lane of ['marks', 'blur']) for (const it of this.items(lane)) {
@@ -329,6 +331,29 @@ class Timeline {
       rr(ctx, a, wa, Math.max(2, b - a - 1), wb - wa, 3); ctx.fill();
       if (b - a > ctx.measureText(w.text).width + 6) { ctx.fillStyle = '#fff'; ctx.font = font(10); ctx.fillText(w.text, a + 3, (wa + wb) / 2); }
     }
+    // Waveform of the sound, laid out the way it will be heard (after cuts and speed changes)
+    { const [aa, ab] = this.L.audio, mid = (aa + ab) / 2, amp = (ab - aa) / 2 - 2;
+      ctx.font = font(11); ctx.fillStyle = C('--faint');
+      if (this.peaks && this.peaks.data.length) {
+        ctx.fillStyle = C('--tl-clip');
+        let acc = 0;
+        for (const c of this.project.clips) {
+          const len = (c.src_end_ms - c.src_start_ms) / c.speed, a = this.x(acc), b = this.x(acc + len), pk = this.peaks.data, bk = this.peaks.bucket;
+          for (let px = Math.max(a, x0); px < Math.min(b, x1); px += 2) {
+            const s0 = c.src_start_ms + ((px - a) / Math.max(1, b - a)) * len * c.speed, s1 = c.src_start_ms + ((px + 2 - a) / Math.max(1, b - a)) * len * c.speed;
+            let v = 0; for (let i = Math.floor(s0 / bk), e = Math.min(pk.length - 1, Math.max(i, Math.floor(s1 / bk))); i <= e && i - Math.floor(s0 / bk) < 40; i++) v = Math.max(v, pk[i] || 0);
+            const h = Math.max(1, (v / 255) * amp); ctx.fillRect(px, mid - h, 1.6, h * 2);
+          }
+          acc += len;
+        }
+      } else {
+        const msg = { building: 'Preparing the sound...', none: 'No sound in this recording', error: 'The sound could not be prepared' }[this.audioState] || '';
+        if (msg) ctx.fillText(msg, x0 + 8, mid);
+      } }
+    // Hints in lanes that are still empty
+    ctx.font = font(11); ctx.fillStyle = C('--faint');
+    if (!this.project.zoom.length) ctx.fillText('No zooms yet. Double click here to add one, or run Auto edit.', x0 + 8, (this.L.zoom[0] + this.L.zoom[1]) / 2);
+    if (!(this.project.captions || []).length) ctx.fillText('No captions yet. Use Transcribe on the Auto edit tab.', x0 + 8, (wa + wb) / 2);
     // Playhead
     const p = this.x(this.playhead);
     ctx.fillStyle = C('--tl-playhead'); ctx.fillRect(p - 1, 12, 2, H - 12);

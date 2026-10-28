@@ -1005,6 +1005,44 @@ mod tests {
         assert_eq!(only.len(), 2, "typing is hidden, the shortcut and the Enter key stay");
     }
 
+    /// What is burned into the picture and what the SRT says must be the same
+    /// thing at every moment, also after cuts and a speed change.
+    #[test]
+    fn burned_in_captions_match_the_srt_through_cuts_and_speed() {
+        use crate::project::CaptionWord;
+        let w = |a: f64, b: f64, t: &str| CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let words = vec![w(1000.0, 1400.0, "Open"), w(1500.0, 1900.0, "the"), w(2000.0, 2400.0, "settings"), w(6000.0, 6400.0, "Then"), w(6500.0, 6900.0, "click"), w(7000.0, 7400.0, "save"), w(12000.0, 12400.0, "Done")];
+        let mut p = Project::new("x".into(), None, 64, 36, 20_000.0);
+        p.captions = crate::captions::words_to_captions(&words, 42, 700.0);
+        p.caption_style.burn_in = true;
+        p.cut_ranges(&[(2500.0, 5500.0)]);
+        p.clips[1].speed = 2.0;
+        let cues = crate::captions::output_captions(&p);
+        assert_eq!(cues.len(), 3, "{cues:?}");
+        let r = Renderer::new(p.clone(), None, 320, 180, None);
+        let total: f64 = p.clips.iter().map(|c| c.out_len()).sum();
+        let mut checked = 0;
+        let mut t = 0.0;
+        while t < total {
+            let near_edge = cues.iter().any(|(a, b, _)| (t - a).abs() < 80.0 || (t - b).abs() < 80.0);
+            if !near_edge {
+                let burned = r.caption_at(p.out_to_src(t)).map(|c| {
+                    c.words.iter().filter(|w| crate::captions::word_visible(&p, w)).map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
+                });
+                let burned = burned.filter(|s| !s.is_empty());
+                let srt = cues.iter().find(|(a, b, _)| t >= *a && t < *b).map(|c| c.2.clone());
+                assert_eq!(burned, srt, "at output {t} ms");
+                checked += 1;
+            }
+            t += 20.0;
+        }
+        assert!(checked > 100);
+        // The sped up clip shortens its caption: 1.8 s of caption (speech plus the 0.4 s it stays) lasts 0.9 s.
+        let (a, b, text) = &cues[1];
+        assert_eq!(text, "Then click save");
+        assert!((b - a - 900.0).abs() < 120.0, "{a} {b}");
+    }
+
     #[test]
     fn render_produces_padded_frame() {
         let mut p = Project::new("x".into(), None, 64, 36, 1000.0);

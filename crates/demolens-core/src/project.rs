@@ -796,6 +796,27 @@ mod tests {
     }
 
     #[test]
+    fn captions_and_their_words_survive_save_and_open() {
+        let dir = std::env::temp_dir().join(format!("dl-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = Project::new("a.mp4".into(), None, 100, 100, 10_000.0);
+        p.captions = crate::captions::words_to_captions(
+            &[CaptionWord { start_ms: 1000.0, end_ms: 1300.0, text: "Hello".into() }, CaptionWord { start_ms: 1400.0, end_ms: 1800.0, text: "world".into() }],
+            42,
+            700.0,
+        );
+        p.caption_style.burn_in = true;
+        let f = dir.join("p.demolens");
+        p.save(&f).unwrap();
+        let back = Project::load(&f).unwrap();
+        assert_eq!(back.captions.len(), 1);
+        assert_eq!(back.captions[0].words[1].text, "world");
+        assert_eq!(back.captions[0].words[1].start_ms, 1400.0);
+        assert!(back.caption_style.burn_in);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn aspect_sizes() {
         assert_eq!(Aspect::Landscape.size(2160), (3840, 2160));
         assert_eq!(Aspect::Portrait.size(1080), (1080, 1920));

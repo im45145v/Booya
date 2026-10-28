@@ -125,6 +125,10 @@
       <button id="rec-here" class="btn ghost" title="Record a new take and put it in at the playhead"><svg class="ico"><use href="#i-record"/></svg><span>Record here</span></button>
       <button id="rec-over" class="btn ghost" title="Record again over the selected clip"><svg class="ico"><use href="#i-record"/></svg><span>Re-record clip</span></button>
       <button id="del-sel" class="btn ghost" title="Delete the selected zoom or clip (Delete)"><svg class="ico"><use href="#i-trash"/></svg><span>Delete</span></button>
+      <span class="tb-sep"></span>
+      <button id="vol-btn" class="btn icon ghost" aria-pressed="false" title="Mute or unmute the sound you hear while editing (M). The exported video is not affected." aria-label="Mute preview sound"><svg class="ico"><use href="#i-speaker"/></svg></button>
+      <input id="vol" class="vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Preview volume" title="Volume while editing. This does not change the exported video." />
+      <span id="audio-chip" class="audio-chip" role="status" aria-live="polite" data-state="none">No project</span>
       <span class="grow"></span>
       <span class="muted small">Timeline</span>
       <button id="tl-out" class="btn icon ghost" title="Zoom timeline out (-)" aria-label="Zoom timeline out"><svg class="ico"><use href="#i-minus"/></svg></button>
