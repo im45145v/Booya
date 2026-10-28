@@ -5,7 +5,7 @@ use crate::render::Frame;
 use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 
 pub fn ffmpeg_bin() -> String {
     resolve("DEMOLENS_FFMPEG", "ffmpeg")
@@ -24,7 +24,7 @@ fn exe_name(name: &str) -> String {
 }
 
 fn runs(p: &Path) -> bool {
-    let mut c = Command::new(p);
+    let mut c = crate::proc::command(p);
     c.arg("-version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
@@ -130,7 +130,7 @@ fn parse_fps(r: &str) -> Option<f64> {
 }
 
 pub fn probe(path: &Path) -> Result<MediaInfo> {
-    let out = Command::new(ffprobe_bin())
+    let out = crate::proc::command(ffprobe_bin())
         .args(["-v", "error", "-show_streams", "-show_format", "-of", "json"])
         .arg(file_url(path))
         .output()
@@ -171,7 +171,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 /// Last resort: decode to nowhere and read the final timestamp. Slow for big
 /// files, so only used when the container has no duration at all.
 fn scan_duration(path: &Path) -> Option<f64> {
-    let out = Command::new(ffmpeg_bin())
+    let out = crate::proc::command(ffmpeg_bin())
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(file_url(path))
         .args(["-map", "0:v:0", "-c", "copy", "-f", "null", "-", "-progress", "pipe:1", "-nostats"])
@@ -217,7 +217,7 @@ pub fn hwaccel_args() -> Vec<&'static str> {
 
 fn frame_once(path: &Path, t_ms: f64, w: u32, h: u32, vf: Option<&str>) -> (Option<Frame>, String) {
     let size = format!("{w}x{h}");
-    let mut cmd = Command::new(ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg_bin());
     // One frame from a small proxy decodes faster in software than it takes to
     // start a VideoToolbox session, and every scrub spawns a fresh ffmpeg, so
     // hardware decode is only used for the long running readers below.
@@ -282,7 +282,7 @@ pub fn fit_filter(w: u32, h: u32, fit: crate::project::BgFit) -> String {
 
 /// Load an image as a (w, h) background with the chosen fit.
 pub fn load_image_fit(path: &Path, w: u32, h: u32, fit: crate::project::BgFit) -> Result<Frame> {
-    let out = Command::new(ffmpeg_bin())
+    let out = crate::proc::command(ffmpeg_bin())
         .args(["-v", "error", "-i"])
         .arg(file_url(path))
         .args([
@@ -321,7 +321,7 @@ impl FrameReader {
 
     /// Like `open` with a custom filter chain that must output `w`x`h`.
     pub fn open_filtered(path: &Path, start_ms: f64, fps: f64, vf: &str, w: u32, h: u32) -> Result<Self> {
-        let mut child = Command::new(ffmpeg_bin())
+        let mut child = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-nostdin"])
             .args(hwaccel_args())
             .args(["-ss", &format!("{:.3}", start_ms.max(0.0) / 1000.0), "-i"])
@@ -508,7 +508,7 @@ pub fn encoder_override(v: Option<&str>) -> Option<Encoder> {
 /// True when this ffmpeg can actually open `name` on this machine (being
 /// compiled in is not enough: NVENC needs a GPU and driver).
 pub fn encoder_works(name: &str) -> bool {
-    let mut c = Command::new(ffmpeg_bin());
+    let mut c = crate::proc::command(ffmpeg_bin());
     c.args(["-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:r=30:d=0.2", "-pix_fmt", "yuv420p", "-c:v", name, "-f", "null", "-"]);
     c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
@@ -584,7 +584,7 @@ mod probe_tests {
         let dir = std::env::temp_dir().join(format!("dl-eof-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("c.mkv");
-        let ok = Command::new(ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-pix_fmt", "yuv420p"])
             .arg(&f)
             .status()

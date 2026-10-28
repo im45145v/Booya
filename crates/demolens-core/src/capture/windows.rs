@@ -99,7 +99,7 @@ pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
     // A script file keeps the here-string and its quotes intact.
     let script = std::env::temp_dir().join(format!("demolens-windows-{}.ps1", std::process::id()));
     let out = std::fs::write(&script, LIST_WINDOWS_PS).ok().and_then(|_| {
-        std::process::Command::new("powershell")
+        crate::proc::command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&script)
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW

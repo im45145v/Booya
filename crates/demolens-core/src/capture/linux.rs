@@ -8,10 +8,9 @@
 
 use super::{s, CapturePlan, CaptureTarget, RecordOptions, Region};
 use anyhow::{bail, Context, Result};
-use std::process::Command;
 
 fn screen_size(display: &str) -> Result<(u32, u32)> {
-    let out = Command::new("xdpyinfo").env("DISPLAY", display).output().context("xdpyinfo not found (install x11-utils)")?;
+    let out = crate::proc::command("xdpyinfo").env("DISPLAY", display).output().context("xdpyinfo not found (install x11-utils)")?;
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
         if let Some(rest) = line.trim().strip_prefix("dimensions:") {
@@ -25,7 +24,7 @@ fn screen_size(display: &str) -> Result<(u32, u32)> {
 }
 
 fn window_geometry(display: &str, id: &str) -> Result<Region> {
-    let out = Command::new("xwininfo").env("DISPLAY", display).args(["-id", id]).output().context("xwininfo not found (install x11-utils)")?;
+    let out = crate::proc::command("xwininfo").env("DISPLAY", display).args(["-id", id]).output().context("xwininfo not found (install x11-utils)")?;
     let text = String::from_utf8_lossy(&out.stdout);
     let get = |k: &str| -> Option<i64> {
         text.lines().find_map(|l| l.trim().strip_prefix(k).and_then(|v| v.trim().parse().ok()))
@@ -120,7 +119,7 @@ pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
     let (sw, sh) = screen_size(&display)?;
     let mut v = vec![SourceInfo { kind: "display".into(), id: "0".into(), title: "Entire screen".into(), app: String::new(), bundle: String::new(), x: 0, y: 0, w: sw, h: sh, z: 0 }];
-    let tree = Command::new("xwininfo").env("DISPLAY", &display).args(["-root", "-tree"]).output().context("xwininfo not found (install x11-utils)")?;
+    let tree = crate::proc::command("xwininfo").env("DISPLAY", &display).args(["-root", "-tree"]).output().context("xwininfo not found (install x11-utils)")?;
     let mut seen = std::collections::HashSet::new();
     // xwininfo prints the topmost child first, so the index is the stacking order.
     let all = parse_tree(&String::from_utf8_lossy(&tree.stdout));
@@ -129,7 +128,7 @@ pub(crate) fn list_sources() -> Result<Vec<super::sources::SourceInfo>> {
             continue;
         }
         // Only windows that are actually on screen.
-        let info = Command::new("xwininfo").env("DISPLAY", &display).args(["-id", &id]).output();
+        let info = crate::proc::command("xwininfo").env("DISPLAY", &display).args(["-id", &id]).output();
         if !info.map(|o| String::from_utf8_lossy(&o.stdout).contains("IsViewable")).unwrap_or(false) {
             continue;
         }

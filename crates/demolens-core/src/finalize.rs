@@ -5,11 +5,11 @@ use crate::ffmpeg::{self, ffmpeg_bin, ffprobe_bin};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Start time and duration of the first stream of a kind, in seconds.
 pub(crate) fn stream_times(path: &Path, kind: &str) -> Option<(f64, f64)> {
-    let out = Command::new(ffprobe_bin())
+    let out = crate::proc::command(ffprobe_bin())
         .args(["-v", "error", "-select_streams", kind, "-show_entries", "stream=start_time,duration", "-show_entries", "format=duration", "-of", "json"])
         .arg(ffmpeg::file_url(path))
         .output()
@@ -63,7 +63,7 @@ fn audio_plain_filter() -> String {
 
 /// Sample rate of the first audio stream.
 pub(crate) fn audio_rate(path: &Path) -> Option<u32> {
-    let out = Command::new(ffprobe_bin())
+    let out = crate::proc::command(ffprobe_bin())
         .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate", "-of", "csv=p=0"])
         .arg(ffmpeg::file_url(path))
         .output()
@@ -110,7 +110,7 @@ pub fn remux_to_mp4_info(mkv: &Path) -> Result<Remuxed> {
     let side = mic_sidecar(mkv);
     let has_side = std::fs::metadata(&side).map(|m| m.len() > 4096).unwrap_or(false);
     let audio = if has_side { stream_times(&side, "a:0") } else { stream_times(mkv, "a:0") };
-    let mut cmd = Command::new(ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y"]);
     let mut video_start_s = 0.0;
     if let Some((vs, _)) = video {
@@ -276,7 +276,7 @@ mod tests {
         }
         let d = tmpdir("remux");
         let mkv = d.join("recording.mkv");
-        let ok = Command::new(ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1.5", "-f", "lavfi", "-i", "sine=frequency=440:d=1.5", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&mkv)
             .status()
@@ -315,7 +315,7 @@ mod tests {
         let d = tmpdir("remux-late");
         let mkv = d.join("recording.mkv");
         // 3 s of picture, sound that starts at 0.8 s and stops 0.3 s early.
-        let ok = Command::new(ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-itsoffset", "0.8", "-f", "lavfi", "-i", "sine=frequency=440:d=1.9", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&mkv)
             .status()
@@ -347,14 +347,14 @@ mod tests {
         // The screen has no audio. The microphone was recorded on its own at
         // 96 kHz, opened 0.8 s late, with jittery packet stamps like a wall
         // clock stamped device gives.
-        let ok = Command::new(ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an"])
             .arg(&mkv)
             .status()
             .unwrap()
             .success();
         assert!(ok);
-        let ok = Command::new(ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg_bin())
             .args(["-v", "error", "-y", "-itsoffset", "0.8", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=96000:d=2.1", "-af", "asetpts='PTS+0.003*sin(N)/TB'", "-c:a", "pcm_f32le"])
             .arg(mic_sidecar(&mkv))
             .status()

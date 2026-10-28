@@ -6,11 +6,10 @@ use crate::events::{Event, EventKind, EventLog, MouseButton};
 use crate::{ffmpeg, new_project};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// True when espeak-ng is installed, so the sample can have narration.
 pub fn can_speak() -> bool {
-    Command::new("espeak-ng").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    crate::proc::command("espeak-ng").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Build a fake "app" recording with ffmpeg and a matching synthetic event
@@ -54,7 +53,7 @@ pub fn make(dir: &Path, speech: bool, secrets: bool) -> Result<PathBuf> {
     } else {
         format!("sine=frequency=440:sample_rate=48000:duration={secs}")
     };
-    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("color=c=0xffffff:s={w}x{h}:r=30:d={secs}")]);
     if speech {
         cmd.arg("-i").arg(&audio_in);
@@ -130,12 +129,12 @@ pub fn narration(dir: &Path, secs: f64) -> Result<String> {
         (7.0, "Press control S to save it."),
         (9.3, "And there it is. Saved."),
     ];
-    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-y"]);
     let mut filter = String::new();
     for (i, (at, text)) in lines.iter().enumerate() {
         let wav = dir.join(format!("line{i}.wav"));
-        let ok = Command::new("espeak-ng").args(["-s", "150", "-w"]).arg(&wav).arg(text).status().map(|s| s.success()).unwrap_or(false);
+        let ok = crate::proc::command("espeak-ng").args(["-s", "150", "-w"]).arg(&wav).arg(text).status().map(|s| s.success()).unwrap_or(false);
         if !ok {
             bail!("--speech needs espeak-ng installed");
         }

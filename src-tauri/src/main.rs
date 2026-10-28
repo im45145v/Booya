@@ -838,7 +838,7 @@ fn glass_native(app: tauri::AppHandle, on: bool) -> bool {
 fn os_reduce_transparency() -> bool {
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("defaults")
+        return demolens_core::proc::command("defaults")
             .args(["read", "com.apple.universalaccess", "reduceTransparency"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
@@ -1303,7 +1303,7 @@ async fn background_import(app: tauri::AppHandle, path: String, project_source: 
         let stem: String = src.file_stem().and_then(|x| x.to_str()).unwrap_or("photo").chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(40).collect();
         let out_ext = if ext == "png" { "png" } else { "jpg" };
         let dest = dir.join(format!("background-{stem}.{out_ext}"));
-        let run = |bin: &str, args: Vec<std::ffi::OsString>| std::process::Command::new(bin).args(args).output().map(|o| o.status.success() && dest.is_file()).unwrap_or(false);
+        let run = |bin: &str, args: Vec<std::ffi::OsString>| demolens_core::proc::command(bin).args(args).output().map(|o| o.status.success() && dest.is_file()).unwrap_or(false);
         let mut ok = run(
             &demolens_core::ffmpeg::ffmpeg_bin(),
             vec!["-v".into(), "error".into(), "-y".into(), "-i".into(), src.clone().into_os_string(), "-vf".into(), "scale='min(3840,iw)':-2".into(), "-frames:v".into(), "1".into(), "-q:v".into(), "2".into(), dest.clone().into_os_string()],
@@ -1381,11 +1381,11 @@ fn reveal(app: tauri::AppHandle, path: String) -> R<()> {
         return Err("Only files you saved or recorded can be shown".into());
     }
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg("-R").arg(&p).spawn();
+    let r = demolens_core::proc::command("open").arg("-R").arg(&p).spawn();
     #[cfg(target_os = "windows")]
-    let r = std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn();
+    let r = demolens_core::proc::command("explorer").arg(format!("/select,{}", p.display())).spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let r = std::process::Command::new("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
+    let r = demolens_core::proc::command("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
     r.map(|_| ()).map_err(e)
 }
 
@@ -1409,7 +1409,7 @@ fn ffmpeg_status() -> serde_json::Value {
     let bin = demolens_core::ffmpeg::ffmpeg_bin();
     let found = demolens_core::ffmpeg::ffmpeg_found();
     let version = if found {
-        std::process::Command::new(&bin)
+        demolens_core::proc::command(&bin)
             .arg("-version")
             .output()
             .ok()
@@ -1495,7 +1495,7 @@ fn input_monitoring_status(prompt: Option<bool>) -> bool {
 fn open_input_monitoring_settings() {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").spawn();
+        let _ = demolens_core::proc::command("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").spawn();
     }
 }
 

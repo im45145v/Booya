@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Instant;
 
 /// Height of the proxy in pixels.
@@ -102,7 +102,7 @@ pub fn build(cache_dir: &Path, src: &Path, mut progress: impl FnMut(f64)) -> Res
     let hw = ffmpeg::hwaccel_args();
     let t0 = Instant::now();
     let mut run = |enc: Encoder, hw: &[&str]| -> Result<()> {
-        let mut c = Command::new(ffmpeg::ffmpeg_bin());
+        let mut c = crate::proc::command(ffmpeg::ffmpeg_bin());
         c.args(["-v", "error", "-nostdin", "-y", "-progress", "pipe:1"]);
         c.args(hw);
         c.arg("-i").arg(ffmpeg::file_url(src));
@@ -186,7 +186,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dl-proxy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("big.mp4");
-        let ok = Command::new(ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=2940x1912:r=10:d=2", "-f", "lavfi", "-i", "sine=frequency=300:d=2", "-af", "volume=-25dB"])
             .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&src)
@@ -204,7 +204,7 @@ mod tests {
         assert!((loud - crate::audio::TARGET_LUFS).abs() < 3.0, "{loud}");
         assert!(build(&dir, &src, |_| {}).unwrap().cached);
         // Seeking stays cheap: a keyframe at least every 15 frames.
-        let probe = Command::new("ffprobe")
+        let probe = crate::proc::command("ffprobe")
             .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=flags", "-of", "csv=p=0"])
             .arg(&s.path)
             .output();

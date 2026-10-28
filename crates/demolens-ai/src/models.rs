@@ -283,7 +283,7 @@ fn download_from(m: &ModelInfo, url: &str, mut progress: impl FnMut(u64, u64)) -
         std::fs::create_dir_all(&out)?;
         // bsdtar ships with Windows 10+ and macOS and reads zip and tar.gz.
         // Both bsdtar and GNU tar refuse absolute and ".." member paths.
-        let st = std::process::Command::new("tar").arg("-xf").arg(&tmp).arg("-C").arg(&out).status().context("tar not found")?;
+        let st = demolens_core::proc::command("tar").arg("-xf").arg(&tmp).arg("-C").arg(&out).status().context("tar not found")?;
         if !st.success() {
             bail!("could not extract {}", tmp.display());
         }

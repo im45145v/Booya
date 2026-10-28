@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -18,12 +18,12 @@ pub fn list_mics() -> Vec<String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let out = Command::new("pactl").args(["list", "short", "sources"]).output();
+        let out = crate::proc::command("pactl").args(["list", "short", "sources"]).output();
         out.map(|o| parse_pactl_sources(&String::from_utf8_lossy(&o.stdout))).unwrap_or_default()
     }
     #[cfg(target_os = "windows")]
     {
-        let out = Command::new(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output();
+        let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output();
         out.map(|o| parse_dshow_audio(&String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -112,7 +112,7 @@ impl MicMeter {
     /// `on_level(rms_db, peak_db)` is called from a background thread.
     pub fn start(name: Option<&str>, on_level: impl Fn(f32, f32) + Send + 'static) -> Result<Self> {
         let input = input_args(name)?;
-        let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+        let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
         cmd.args(["-hide_banner", "-nostats", "-v", "error", "-nostdin"]).args(&input);
         cmd.args(["-ac", "1", "-ar", "16000", "-f", "s16le", "-"]);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());

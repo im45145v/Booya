@@ -262,7 +262,7 @@ mod keyhook {
 
     pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<std::process::Child> {
         let exe = std::env::current_exe().ok()?;
-        let mut cmd = Command::new(exe);
+        let mut cmd = crate::proc::command(exe);
         cmd.arg(KEYHOOK_ARG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         #[cfg(windows)]
         {

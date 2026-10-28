@@ -12,7 +12,7 @@
 use crate::models::{self, Kind};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 pub struct Llm {
@@ -109,7 +109,7 @@ impl Llm {
         let Some(gguf) = models::first_installed(Kind::Llm) else { return Ok(None) };
         let server = models::find_binary(&models::path_of(&rt), "llama-server").context("llama-server not found in the runtime")?;
         let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
-        let mut cmd = Command::new(&server);
+        let mut cmd = demolens_core::proc::command(&server);
         cmd.args(["-m"]).arg(models::path_of(&gguf)).args(["--host", "127.0.0.1", "--port", &port.to_string(), "-c", "4096", "--log-disable"]);
         if let Some(dir) = server.parent() {
             // Shared libraries ship next to the binary.

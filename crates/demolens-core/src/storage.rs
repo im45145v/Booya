@@ -167,7 +167,7 @@ mod tests {
         let root = tmp("ok");
         let d = root.join("recording-3");
         std::fs::create_dir_all(&d).unwrap();
-        let ok = std::process::Command::new(crate::ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:r=10:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
             .arg(d.join("recording.mp4"))
             .status()

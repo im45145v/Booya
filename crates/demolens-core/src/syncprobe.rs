@@ -11,7 +11,6 @@ use crate::ffmpeg::{self, ffmpeg_bin};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::Path;
-use std::process::Command;
 
 /// Rate the beep detector decodes at.
 const RATE: u32 = 16_000;
@@ -43,7 +42,7 @@ pub fn make_reference(path: &Path, secs: u32, with_video: bool, with_audio: bool
     if !with_video && !with_audio {
         bail!("nothing to make");
     }
-    let mut c = Command::new(ffmpeg_bin());
+    let mut c = crate::proc::command(ffmpeg_bin());
     c.args(["-v", "error", "-y"]);
     if with_video {
         c.args(["-f", "lavfi", "-i"]).arg(format!(
@@ -81,7 +80,7 @@ pub fn make_reference(path: &Path, secs: u32, with_video: bool, with_audio: bool
 
 /// Times (s) at which the picture turns from dark to bright.
 pub fn flash_times(path: &Path) -> Result<Vec<f64>> {
-    let o = Command::new(ffmpeg_bin())
+    let o = crate::proc::command(ffmpeg_bin())
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(ffmpeg::file_url(path))
         .args(["-an", "-vf", "scale=8:8:flags=area,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-", "-f", "null", "-"])
@@ -116,7 +115,7 @@ pub fn parse_flashes(text: &str) -> Vec<f64> {
 /// Times (s) at which a beep starts, by the audio's own timeline (the file's
 /// start offset counts: audio that begins late is padded with silence).
 pub fn beep_times(path: &Path) -> Result<Vec<f64>> {
-    let o = Command::new(ffmpeg_bin())
+    let o = crate::proc::command(ffmpeg_bin())
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(ffmpeg::file_url(path))
         .args(["-vn", "-ac", "1", "-af", &format!("aresample={RATE}:async=1:first_pts=0"), "-f", "f32le", "-"])
@@ -380,7 +379,7 @@ pub fn run_capture_linux(dir: &Path, secs: u32) -> Result<Vec<CaptureRow>> {
 
     // The generator: flashes (xsetroot) and beeps (ffmpeg into the sink), starting now.
     let generate = |secs: u32| -> Result<std::thread::JoinHandle<()>> {
-        let mut beep = Command::new(ffmpeg_bin());
+        let mut beep = crate::proc::command(ffmpeg_bin());
         beep.args(["-v", "error", "-nostdin", "-re", "-f", "lavfi", "-i"])
             .arg(format!("aevalsrc='0.6*sin(2*PI*1000*t)*gte(t,1)*lt(mod(t,1),0.1)':s=48000:d={}", secs + 1))
             .args(["-f", "pulse", "-device", &sink, "probe_beep"])
@@ -390,7 +389,7 @@ pub fn run_capture_linux(dir: &Path, secs: u32) -> Result<Vec<CaptureRow>> {
         Ok(std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
             let set = |c: &str| {
-                let _ = Command::new("xsetroot").env("DISPLAY", &disp).args(["-solid", c]).status();
+                let _ = crate::proc::command("xsetroot").env("DISPLAY", &disp).args(["-solid", c]).status();
             };
             set("black");
             for k in 1..=secs {
@@ -435,13 +434,13 @@ pub fn run_capture_linux(dir: &Path, secs: u32) -> Result<Vec<CaptureRow>> {
     let old = dir.join("mixed.mkv");
     let r = (|| -> Result<SyncResult> {
         let (w, h) = {
-            let o = Command::new("xdpyinfo").env("DISPLAY", &display).output()?;
+            let o = crate::proc::command("xdpyinfo").env("DISPLAY", &display).output()?;
             let t = String::from_utf8_lossy(&o.stdout).to_string();
             let d = t.lines().find_map(|l| l.trim().strip_prefix("dimensions:").map(|r| r.split_whitespace().next().unwrap_or("").to_string())).unwrap_or_default();
             let (w, h) = d.split_once('x').context("screen size")?;
             (w.parse::<u32>()? & !1, h.parse::<u32>()? & !1)
         };
-        let mut c = Command::new(ffmpeg_bin());
+        let mut c = crate::proc::command(ffmpeg_bin());
         c.args(["-v", "error", "-y", "-f", "x11grab", "-draw_mouse", "0", "-framerate", "30", "-video_size"])
             .arg(format!("{w}x{h}")).args(["-i", &format!("{display}+0,0"), "-f", "pulse", "-i", &mic, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&old).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());

@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -247,7 +247,7 @@ pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
 fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
     let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
     let plan = plan(&opts)?;
-    let out = Command::new(crate::ffmpeg::ffmpeg_bin())
+    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-v", "error", "-nostdin"])
         .args(&plan.args)
         .args(["-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
@@ -319,7 +319,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
         let _ = std::fs::remove_file(&mic_file);
-        let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+        let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
         // The recording clock starts now, as ffmpeg is launched, not while the
         // plan was being made (opening the screen and listing microphones can
         // take a second). The event log starts at the same moment.
@@ -399,7 +399,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
 /// of the first samples is known; no timestamp based resampling is applied,
 /// so every sample the device delivered ends up in the file.
 fn start_mic_sidecar(input: &[String], epoch: f64, out: &Path, warnings: &mut Vec<String>) -> Option<Child> {
-    let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
     cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
     cmd.args(input);
@@ -452,7 +452,7 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
         return None;
     };
     let out = dir.join("webcam.mkv");
-    let mut cmd = Command::new(crate::ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&input);
     cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -490,7 +490,7 @@ fn finish(child: &mut Child, fed: bool) -> bool {
         }
         #[cfg(unix)]
         {
-            let _ = Command::new("kill").args(["-INT", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            let _ = crate::proc::command("kill").args(["-INT", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
         }
     }
     let t = Instant::now();
@@ -754,7 +754,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let video = dir.join("v.mkv");
         // stands in for ffmpeg stuck on a permission prompt: alive, no output
-        let mut child = Command::new("sleep").arg("30").stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = crate::proc::command("sleep").arg("30").stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let err = drain_stderr(&mut child);
         let t = Instant::now();
         let r = wait_until_writing(&mut child, &video, &err, Duration::from_millis(700));
@@ -767,7 +767,7 @@ mod tests {
     #[test]
     fn early_exit_is_reported() {
         let video = std::env::temp_dir().join("dl-none.mkv");
-        let mut child = Command::new("sh").args(["-c", "echo 'Input/output error' >&2; exit 1"]).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = crate::proc::command("sh").args(["-c", "echo 'Input/output error' >&2; exit 1"]).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let err = drain_stderr(&mut child);
         let r = wait_until_writing(&mut child, &video, &err, Duration::from_secs(5));
         assert!(r.unwrap_err().contains("Input/output error"));
@@ -781,7 +781,7 @@ pub(crate) fn s<T: ToString>(v: T) -> String {
 
 #[allow(dead_code)]
 pub(crate) fn which(bin: &str) -> bool {
-    Command::new(bin).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+    crate::proc::command(bin).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
 }
 
 #[allow(dead_code)]
@@ -790,7 +790,7 @@ pub(crate) fn exists(p: &Path) -> bool {
 }
 
 fn frame_count(path: &Path) -> Option<u64> {
-    let out = Command::new(crate::ffmpeg::ffprobe_bin())
+    let out = crate::proc::command(crate::ffmpeg::ffprobe_bin())
         .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
         .arg(crate::ffmpeg::file_url(path))
         .output()
@@ -811,7 +811,7 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     let mut next: Vec<String> = Vec::new();
 
     let ffmpeg = crate::ffmpeg::ffmpeg_bin();
-    let version = Command::new(&ffmpeg).arg("-version").output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string));
+    let version = crate::proc::command(&ffmpeg).arg("-version").output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string));
     v["ffmpeg"] = json!({ "path": ffmpeg, "version": version, "encoder": crate::ffmpeg::best_encoder().name() });
     if version.is_none() {
         next.push(format!("ffmpeg was not found or does not run. {}", crate::ffmpeg::install_hint()));

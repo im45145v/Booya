@@ -4,11 +4,10 @@
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 /// Decode the first audio stream to mono f32 samples at `rate` Hz.
 pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
-    let out = Command::new(crate::ffmpeg::ffmpeg_bin())
+    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
         .args(["-v", "error", "-i"])
         .arg(crate::ffmpeg::file_url(path))
         .args(["-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "f32le", "-"])
@@ -58,7 +57,7 @@ pub fn parse_loudnorm(stderr: &str) -> Option<Loudness> {
 /// the label `[aout]`) for the input file `input`.
 pub fn measure_graph(input: &Path, graph: &str) -> Result<Option<Loudness>> {
     let full = format!("{graph};[aout]loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA=11:print_format=json[m]");
-    let out = Command::new(crate::ffmpeg::ffmpeg_bin())
+    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-nostdin", "-i"])
         .arg(crate::ffmpeg::file_url(input))
         .args(["-vn", "-filter_complex", &full, "-map", "[m]", "-f", "null", "-"])
@@ -238,7 +237,7 @@ mod loudness_tests {
         let dir = std::env::temp_dir().join(format!("dl-loud-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let quiet = dir.join("quiet.wav");
-        let ok = Command::new(crate::ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:d=4", "-af", "volume=-25dB"])
             .arg(&quiet)
             .status()
@@ -248,7 +247,7 @@ mod loudness_tests {
         let m = measure_file(&quiet).unwrap().expect("measurable");
         assert!(m.input_i < -35.0, "{}", m.input_i);
         let loud = dir.join("loud.wav");
-        let ok = Command::new(crate::ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-i"])
             .arg(&quiet)
             .args(["-af", &normalize_chain(Some(&m))])

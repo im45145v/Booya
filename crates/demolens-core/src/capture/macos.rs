@@ -14,13 +14,13 @@
 
 use super::{macos_sck, parse_avfoundation_devices, s, screen_index, AvDevice, CapturePlan, CaptureTarget, Feed, RecordOptions, Region};
 use anyhow::{anyhow, bail, Result};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Runs the device listing with a timeout, so a stuck permission prompt can
 /// not freeze the app.
 pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
-    let child = Command::new(crate::ffmpeg::ffmpeg_bin())
+    let child = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

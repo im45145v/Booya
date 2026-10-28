@@ -95,7 +95,7 @@ pub fn thumbnail(src: &SourceInfo) -> Result<Thumb> {
 #[cfg(not(target_os = "macos"))]
 fn grab_with_ffmpeg(src: &SourceInfo) -> Result<Vec<u8>> {
     use anyhow::{bail, Context};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let mut args: Vec<String> = vec!["-hide_banner".into(), "-v".into(), "error".into(), "-nostdin".into()];
     #[cfg(target_os = "linux")]
     {
@@ -116,7 +116,7 @@ fn grab_with_ffmpeg(src: &SourceInfo) -> Result<Vec<u8>> {
         }
     }
     args.extend(["-frames:v".into(), "1".into(), "-vf".into(), format!("scale={THUMB_W}:-2"), "-f".into(), "image2pipe".into(), "-c:v".into(), "png".into(), "-".into()]);
-    let out = Command::new(crate::ffmpeg::ffmpeg_bin()).args(&args).stdin(Stdio::null()).output().context("failed to start ffmpeg")?;
+    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(&args).stdin(Stdio::null()).output().context("failed to start ffmpeg")?;
     if out.stdout.len() < 100 {
         bail!("no preview: {}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or(""));
     }

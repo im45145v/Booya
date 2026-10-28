@@ -11,12 +11,11 @@ use demolens_core::ffmpeg::{self, Encoder, PreviewDecoder};
 use demolens_core::{export, new_project, proxy};
 use serde_json::json;
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 fn make_source(path: &Path, secs: f64, w: u32, h: u32, fps: u32) -> Result<f64> {
     let t = Instant::now();
-    let st = Command::new(ffmpeg::ffmpeg_bin())
+    let st = demolens_core::proc::command(ffmpeg::ffmpeg_bin())
         .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
         .arg(format!("testsrc2=size={w}x{h}:rate={fps}:duration={secs}"))
         .args(["-f", "lavfi", "-i"])

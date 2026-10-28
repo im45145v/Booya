@@ -7,7 +7,7 @@ use crate::render::{Frame, Renderer};
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Build the renderer for a project at its export size.
 pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Renderer> {
@@ -228,7 +228,7 @@ pub fn passthrough_ok(p: &Project) -> bool {
 /// Copy the streams into an MP4 without re-encoding.
 fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     let info = ffmpeg::probe(&project.source)?;
-    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(&project.source));
     // The capture is H.264 already; audio may be PCM or Opus, which MP4
     // players handle badly, so audio is converted to AAC (cheap).
@@ -321,7 +321,7 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         None => None,
     };
 
-    let mut cmd = Command::new(ffmpeg::ffmpeg_bin());
+    let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-r", &fps.to_string(), "-i", "-"]);
     let with_audio = s.format != Format::Gif && info.has_audio && !project.audio.mute;
     // Noise cleanup writes a cleaned track to a private temp folder and uses
@@ -501,7 +501,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dl-export-loud-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("quiet.mp4");
-        let ok = Command::new(ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-af", "volume=-25dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&src)
             .status()
@@ -537,7 +537,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dl-export-cards-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("a.mp4");
-        let ok = Command::new(ffmpeg::ffmpeg_bin())
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3", "-f", "lavfi", "-i", "sine=frequency=300:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
             .arg(&src)
             .status()
@@ -555,12 +555,12 @@ mod tests {
         let d = crate::ffmpeg::probe(&out).unwrap().duration_ms;
         assert!((d - 6000.0).abs() < 250.0, "duration {d}");
         // The first second is silent (the intro), the sound follows.
-        let quiet = Command::new(ffmpeg::ffmpeg_bin())
+        let quiet = crate::proc::command(ffmpeg::ffmpeg_bin())
             .args(["-v", "error", "-i"]).arg(&out)
             .args(["-t", "0.8", "-af", "volumedetect", "-f", "null", "-"])
             .output().unwrap();
         let log = String::from_utf8_lossy(&quiet.stderr).to_string();
-        let loud = Command::new(ffmpeg::ffmpeg_bin())
+        let loud = crate::proc::command(ffmpeg::ffmpeg_bin())
             .args(["-v", "info", "-ss", "1.5", "-t", "1", "-i"]).arg(&out)
             .args(["-af", "volumedetect", "-f", "null", "-"])
             .output().unwrap();
@@ -584,7 +584,7 @@ mod tests {
         let mut args = vec!["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=1920x1080:r=10:d=3"];
         args.extend_from_slice(audio_args);
         args.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]);
-        assert!(Command::new(ffmpeg::ffmpeg_bin()).args(&args).arg(&src).status().unwrap().success());
+        assert!(crate::proc::command(ffmpeg::ffmpeg_bin()).args(&args).arg(&src).status().unwrap().success());
         src
     }
 

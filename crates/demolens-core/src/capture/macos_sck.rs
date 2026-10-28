@@ -663,7 +663,6 @@ pub fn thumbnail(src: &SourceInfo) -> Result<Thumb, String> {
 /// sips converts the .icns). Cached for the session.
 fn app_icon(bundle: &str) -> Option<Vec<u8>> {
     use std::collections::HashMap;
-    use std::process::Command;
     static CACHE: Mutex<Option<HashMap<String, Option<Vec<u8>>>>> = Mutex::new(None);
     if bundle.is_empty() || !bundle.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
         return None;
@@ -672,10 +671,10 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
         return hit.clone();
     }
     let find = || -> Option<Vec<u8>> {
-        let out = Command::new("/usr/bin/mdfind").arg(format!("kMDItemCFBundleIdentifier == '{bundle}'")).output().ok()?;
+        let out = crate::proc::command("/usr/bin/mdfind").arg(format!("kMDItemCFBundleIdentifier == '{bundle}'")).output().ok()?;
         let app = String::from_utf8_lossy(&out.stdout).lines().find(|l| l.ends_with(".app"))?.to_string();
         let plist = format!("{app}/Contents/Info");
-        let name = Command::new("/usr/bin/defaults").args(["read", &plist, "CFBundleIconFile"]).output().ok()?;
+        let name = crate::proc::command("/usr/bin/defaults").args(["read", &plist, "CFBundleIconFile"]).output().ok()?;
         let name = String::from_utf8_lossy(&name.stdout).trim().to_string();
         if name.is_empty() {
             return None;
@@ -683,7 +682,7 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
         let name = if name.ends_with(".icns") { name } else { format!("{name}.icns") };
         let icns = format!("{app}/Contents/Resources/{name}");
         let tmp = std::env::temp_dir().join(format!("demolens-icon-{}-{bundle}.png", std::process::id()));
-        let ok = Command::new("/usr/bin/sips").args(["-s", "format", "png", "-Z", "64", &icns, "--out"]).arg(&tmp).output().ok()?.status.success();
+        let ok = crate::proc::command("/usr/bin/sips").args(["-s", "format", "png", "-Z", "64", &icns, "--out"]).arg(&tmp).output().ok()?.status.success();
         let bytes = if ok { std::fs::read(&tmp).ok() } else { None };
         let _ = std::fs::remove_file(&tmp);
         bytes

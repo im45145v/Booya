@@ -13,7 +13,7 @@ use crate::ffmpeg::{self, best_encoder, ffmpeg_bin};
 use crate::project::{Clip, Project};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Where a take goes, in source ms.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -274,7 +274,7 @@ pub fn join_media(src: &Path, take: &Path, sp: &Splice, out: &Path, w: u32, h: u
         f.push_str("[a]");
     }
     let tmp = out.with_extension("mp4.part");
-    let mut c = Command::new(ffmpeg_bin());
+    let mut c = crate::proc::command(ffmpeg_bin());
     c.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(src)).arg("-i").arg(ffmpeg::file_url(take));
     c.args(["-filter_complex", &f, "-map", "[v]"]);
     if any_audio {

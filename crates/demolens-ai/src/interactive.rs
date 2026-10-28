@@ -15,7 +15,7 @@ use demolens_core::project::Project;
 use demolens_core::{export, ffmpeg};
 use serde::Serialize;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -84,7 +84,7 @@ pub fn click_points(p: &Project, log: &EventLog, max_steps: usize) -> Vec<(f64, 
 }
 
 fn jpeg(png: &[u8]) -> Result<Vec<u8>> {
-    let mut c = Command::new(ffmpeg::ffmpeg_bin())
+    let mut c = demolens_core::proc::command(ffmpeg::ffmpeg_bin())
         .args(["-v", "error", "-f", "png_pipe", "-i", "pipe:0", "-frames:v", "1", "-q:v", "4", "-pix_fmt", "yuvj420p", "-f", "mjpeg", "pipe:1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
