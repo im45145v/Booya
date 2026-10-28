@@ -201,15 +201,26 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
             i += 1;
             continue;
         }
+        // The run is the bad word and what piled up after it, including a word
+        // or two between them that happens to have a believable length.
         let mut j = i + 1;
-        while j < n && collapsed(&words[j]) {
+        while j < n && (collapsed(&words[j]) || (1..=2).any(|d| j + d < n && collapsed(&words[j + d]))) {
             j += 1;
+        }
+        let stretched = |w: &CaptionWord| w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
+        if j - i < 2 {
+            // A lone word held over a pause: it ends when it has been said.
+            if stretched(&words[i]) {
+                words[i].end_ms = words[i].start_ms + (150.0 + 110.0 * chars(&words[i]) as f64).min(words[i].end_ms - words[i].start_ms);
+            }
+            i = j;
+            continue;
         }
         let lo = words[i].start_ms;
         let hi = if j < n { words[j].start_ms.max(words[j - 1].end_ms) } else { words[j - 1].end_ms };
         let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(a, b)| (a.max(lo) < b.min(hi)).then(|| (a.max(lo), b.min(hi)))).collect();
         let total: f64 = pieces.iter().map(|(a, b)| b - a).sum();
-        if j - i < 2 && !(words[i].end_ms - words[i].start_ms > 800.0 + 120.0 * chars(&words[i]) as f64) || total < 60.0 * (j - i) as f64 {
+        if total < 60.0 * (j - i) as f64 {
             i = j;
             continue;
         }
@@ -403,6 +414,27 @@ mod tests {
         retime_implausible(&mut words, &[(300.0, 5200.0), (7050.0, 11040.0)]);
         assert!(words.iter().all(|w| w.end_ms <= 11040.0), "{words:?}");
         assert!(words[1].end_ms < 8500.0, "{words:?}");
+    }
+
+    #[test]
+    fn a_lone_held_word_and_a_second_stretch_before_the_collapse() {
+        let w = |a: f64, b: f64, t: &str| demolens_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        // From the second CI run: "March." held to the next sentence, "Press"
+        // held for four seconds, then one normal word, then the pile-up.
+        let mut words = vec![w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S")];
+        for t in ["to", "save", "it,", "and", "now", "it", "is"] {
+            words.push(w(11360.0, 11360.0, t));
+        }
+        words.push(w(11360.0, 11370.0, "saved."));
+        retime_implausible(&mut words, &[(0.0, 5400.0), (6750.0, 11370.0)]);
+        assert!(words[0].end_ms < 5300.0, "{words:?}");
+        assert!(words[1].end_ms < 8300.0, "{words:?}");
+        let save = &words[4];
+        assert!(save.start_ms > 8000.0 && save.start_ms < 10000.0, "{words:?}");
+        assert!(words.iter().all(|w| w.end_ms <= 11370.0 && w.start_ms < w.end_ms), "{words:?}");
+        for p in words[1..].windows(2) {
+            assert!(p[0].end_ms <= p[1].start_ms + 1.0, "{words:?}");
+        }
     }
 
     #[test]
