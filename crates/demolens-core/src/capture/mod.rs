@@ -38,7 +38,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-mod macos_sck;
+pub(crate) mod macos_sck;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
