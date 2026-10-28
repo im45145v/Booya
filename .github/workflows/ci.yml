@@ -30,17 +30,17 @@ jobs:
         run: node tests/js/avsync.test.js
       - name: Test the updater manifest builder
         run: python3 scripts/test_make_latest_json.py
-      - name: Test core and AI
-        run: cargo test -p demolens-core -p demolens-ai
-      - name: Build CLI and app
-        run: cargo build --workspace --release
-      - name: ffmpeg for the sync probe
+      - name: ffmpeg for the media tests and the sync probe
         shell: bash
         run: |
           if ! command -v ffmpeg >/dev/null; then
             if [ "$RUNNER_OS" = macOS ]; then brew install ffmpeg; else choco install ffmpeg -y --no-progress; echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"; fi
           fi
           ffmpeg -version | head -1
+      - name: Test core and AI
+        run: cargo test -p demolens-core -p demolens-ai
+      - name: Build CLI and app
+        run: cargo build --workspace --release
       - name: Sound against picture, every stage that works on files
         shell: bash
         run: |

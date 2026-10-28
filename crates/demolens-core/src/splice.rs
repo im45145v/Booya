@@ -443,6 +443,9 @@ mod tests {
     #[test]
     fn splicing_real_media_keeps_the_sound_with_the_picture() {
         use crate::syncprobe::{make_reference, measure};
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
         let d = std::env::temp_dir().join(format!("dl-splice-real-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
