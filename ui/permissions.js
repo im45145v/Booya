@@ -28,7 +28,7 @@
   }
 
   function note(d) {
-    if (d.platform === 'macos') return '<p class="perm-fine">DemoLens does not need the Accessibility permission. Clicks, the cursor and scrolling are read without it.</p>';
+    if (d.platform === 'macos') return '<p class="perm-fine">Booya does not need the Accessibility permission. Clicks, the cursor and scrolling are read without it.</p>';
     if (d.platform === 'windows') return '<p class="perm-fine">If the microphone stays silent, open Settings > Privacy > Microphone and switch on "Let desktop apps access your microphone".</p>';
     return '';
   }
@@ -56,7 +56,7 @@
       if (stop || !host.isConnected) { stop = true; return; }
       const d = await invoke('permissions_list').catch(() => null); if (!d || stop) return;
       remember(d);
-      host.innerHTML = `<p class="muted small">What the system lets DemoLens do. These update by themselves when you change them.</p><div class="perm-rows">${rows(d)}</div>${note(d)}<p class="perm-fine">DemoLens never sends your recordings anywhere.</p>`;
+      host.innerHTML = `<p class="muted small">What the system lets Booya do. These update by themselves when you change them.</p><div class="perm-rows">${rows(d)}</div>${note(d)}<p class="perm-fine">Booya never sends your recordings anywhere.</p>`;
       bind(host, draw);
     };
     draw();
@@ -75,11 +75,11 @@
         const ok = canGo(x);
         el.innerHTML = `<div class="perm-card">
           <img class="perm-logo" src="logo.svg" alt="" width="64" height="64" />
-          <h1 id="perm-h">Welcome to DemoLens</h1>
-          <p class="perm-lede">${why ? esc(why) : 'Before you can start recording, DemoLens needs a few permissions from your system.'}</p>
+          <h1 id="perm-h">Welcome to Booya</h1>
+          <p class="perm-lede">${why ? esc(why) : 'Before you can start recording, Booya needs a few permissions from your system.'}</p>
           <div class="perm-rows">${rows(x)}</div>
           ${note(x)}
-          <div class="perm-foot"><span class="perm-private">DemoLens never sends your recordings anywhere.</span>
+          <div class="perm-foot"><span class="perm-private">Booya never sends your recordings anywhere.</span>
             <button class="btn primary perm-go" id="perm-go" ${ok ? '' : 'disabled'}>Continue</button></div>
           ${ok ? '' : '<p class="perm-fine">Continue unlocks once Screen Recording is on.</p>'}</div>`;
         bind(el, tick);

@@ -5,7 +5,7 @@
 //! ```text
 //! My demo.demolens/
 //!   project.json      the edit (paths inside are relative to this folder)
-//!   transcript.json   the captions as plain text, readable without DemoLens
+//!   transcript.json   the captions as plain text, readable without Booya
 //!   media/            the recording (and the webcam file)
 //!   events/           the mouse and key log
 //!   assets/           background photos
@@ -183,7 +183,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 /// The captions as plain text with times in seconds of the source.
 fn transcript(p: &Project) -> serde_json::Value {
     serde_json::json!({
-        "note": "Written by DemoLens from the captions in project.json. Edit captions in DemoLens, not here.",
+        "note": "Written by Booya from the captions in project.json. Edit captions in Booya, not here.",
         "captions": p.captions.iter().map(|c| serde_json::json!({
             "start_s": (c.start_ms / 10.0).round() / 100.0,
             "end_s": (c.end_ms / 10.0).round() / 100.0,
@@ -224,7 +224,7 @@ pub fn open(path: &Path) -> Result<Opened> {
     let (file, dir) = match bundle_dir_of(path) {
         Some(d) => (d.join(MANIFEST), d),
         None if path.is_file() => (path.to_path_buf(), path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))),
-        None if path.is_dir() => bail!("{} is not a DemoLens project (no {MANIFEST} inside)", path.display()),
+        None if path.is_dir() => bail!("{} is not a Booya project (no {MANIFEST} inside)", path.display()),
         None => bail!("{} does not exist", path.display()),
     };
     let mut project = Project::load(&file)?;

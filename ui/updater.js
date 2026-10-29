@@ -21,26 +21,26 @@ async function checkForUpdate(quiet) {
   if (!u) return null;
   lastUpdate = u;
   if (u.available) showUpdateBanner(u);
-  else if (!quiet) status(`DemoLens ${u.current} is the latest version.`, 'success');
+  else if (!quiet) status(`Booya ${u.current} is the latest version.`, 'success');
   return u;
 }
 
 function showUpdateBanner(u) {
-  $('update-text').textContent = `DemoLens ${u.version} is available (you have ${u.current}).`;
+  $('update-text').textContent = `Booya ${u.version} is available (you have ${u.current}).`;
   $('update-banner').hidden = false;
   $('update-install').textContent = u.can_install ? 'Install and restart' : 'Open download page';
-  $('update-notes').onclick = () => modal(`DemoLens ${u.version}`, `<div class="about-notes">${esc(plainNotes(u.notes) || 'No notes for this release.')}</div>${updateCaveat()}`);
+  $('update-notes').onclick = () => modal(`Booya ${u.version}`, `<div class="about-notes">${esc(plainNotes(u.notes) || 'No notes for this release.')}</div>${updateCaveat()}`);
   $('update-later').onclick = () => { $('update-banner').hidden = true; };
   $('update-install').onclick = () => installUpdate(u);
 }
 
-const updateCaveat = () => IS_MAC ? '<p class="hint">After an update macOS may ask for Screen Recording, Microphone and Input Monitoring again, because DemoLens is signed ad hoc and each new build looks like a new app to the system. Allow them again, then reopen DemoLens.</p>' : '';
+const updateCaveat = () => IS_MAC ? '<p class="hint">After an update macOS may ask for Screen Recording, Microphone and Input Monitoring again, because Booya is signed ad hoc and each new build looks like a new app to the system. Allow them again, then reopen Booya.</p>' : '';
 
 async function installUpdate(u) {
-  if (!u.can_install) return modal('Update DemoLens', '<p>This copy was installed from a .deb or .rpm package, so it cannot replace itself. Update it with your package manager, or get the new version from <a href="https://github.com/im45145v/DemoLens/releases/latest" target="_blank">github.com/im45145v/DemoLens/releases/latest</a>. The AppImage updates itself.</p>');
+  if (!u.can_install) return modal('Update Booya', '<p>This copy was installed from a .deb or .rpm package, so it cannot replace itself. Update it with your package manager, or get the new version from <a href="https://github.com/im45145v/DemoLens/releases/latest" target="_blank">github.com/im45145v/DemoLens/releases/latest</a>. The AppImage updates itself.</p>');
   if (typeof recording !== 'undefined' && recording) return status('Finish the recording before updating.', 'error');
   if (saved !== null && history[hIdx] !== saved) {
-    const ok = await confirmBox('Update with unsaved changes?', '<p>You have unsaved changes. Save first, or they will be lost when DemoLens restarts.</p>');
+    const ok = await confirmBox('Update with unsaved changes?', '<p>You have unsaved changes. Save first, or they will be lost when Booya restarts.</p>');
     if (!ok) return;
   }
   const btn = $('update-install'); btn.disabled = true;
@@ -50,16 +50,16 @@ async function installUpdate(u) {
   });
   $('update-text').textContent = `Downloading ${u.version}...`;
   try { await invoke('install_update'); status('Installed. Restarting...', 'success'); }
-  catch (e) { off(); btn.disabled = false; $('update-text').textContent = `DemoLens ${u.version} is available (you have ${u.current}).`; fail(e); }
+  catch (e) { off(); btn.disabled = false; $('update-text').textContent = `Booya ${u.version} is available (you have ${u.current}).`; fail(e); }
 }
 
 async function renderAboutTab() {
   const host = $('about-body'); if (!host) return;
   let st = {}; try { st = await invoke('ffmpeg_status'); } catch { }
-  host.innerHTML = `<p><b>DemoLens ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
+  host.innerHTML = `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
     <h3 class="section">Updates</h3>
     <div class="row"><button class="btn primary" id="upd-check">Check for updates</button><span id="upd-result" class="muted small"></span></div>
-    <label class="switch"><input type="checkbox" id="upd-auto" ${autoUpdateOn() ? 'checked' : ''} /> Check for updates when DemoLens starts</label>
+    <label class="switch"><input type="checkbox" id="upd-auto" ${autoUpdateOn() ? 'checked' : ''} /> Check for updates when Booya starts</label>
     <p class="muted small">Checking asks GitHub for a small file (latest.json) and sends nothing else. Updates are signed and checked against a key built into the app before they are installed.</p>
     ${updateCaveat()}
     <p><b>ffmpeg:</b> ${st.found ? esc(st.version) + (st.bundled ? ' (bundled)' : '') + '<br><span class="hint">' + esc(st.path) + '</span>' : 'not found'}</p>

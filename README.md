@@ -1,12 +1,16 @@
-<p align="center"><img src="assets/logo.svg" width="128" height="128" alt="DemoLens logo"></p>
+<p align="center"><img src="brand/icon.svg" width="128" height="128" alt="Booya logo"></p>
 
-<h1 align="center">DemoLens</h1>
+<h1 align="center">booya</h1>
 
-DemoLens is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
+<p align="center"><b>Record it. Booya.</b></p>
 
-While you record, DemoLens writes the cursor, clicks and key presses to a file next to the video. The editor uses that file to zoom on the right spots, draw a clean cursor and show key presses. Export to MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.
+> Booya was formerly called DemoLens. Nothing else changed: same app, same recordings folder, same updates. The GitHub repository and the command line tool keep the old name for now.
 
-![Demo GIF rendered by DemoLens from the built in sample](docs/media/demo.gif)
+Booya is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
+
+While you record, Booya writes the cursor, clicks and key presses to a file next to the video. The editor uses that file to zoom on the right spots, draw a clean cursor and show key presses. Export to MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.
+
+![Demo GIF rendered by Booya from the built in sample](docs/media/demo.gif)
 
 ![The editor with the built-in sample loaded](docs/media/v040-editor.png)
 
@@ -19,33 +23,33 @@ Screenshots of the app in this README come from the real interface running in a 
 ## Quick start
 
 1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
-2. Open DemoLens and click **Try the sample**, or **Record screen**.
+2. Open Booya and click **Try the sample**, or **Record screen**.
 3. Open the **Auto edit** tab and click **Run auto edit**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and removes noise. Each step reports what it did, and Ctrl+Z undoes all of it.
 4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
 
 Press `?` in the app for all keyboard shortcuts.
 
-DemoLens looks for ffmpeg in this order: the copy bundled with the app, your PATH, then common folders such as `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. If none works, it shows the one line install command for your OS (`brew install ffmpeg`, `winget install Gyan.FFmpeg` or `sudo apt install ffmpeg`). Licenses for the bundled ffmpeg are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the app under About.
+Booya looks for ffmpeg in this order: the copy bundled with the app, your PATH, then common folders such as `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. If none works, it shows the one line install command for your OS (`brew install ffmpeg`, `winget install Gyan.FFmpeg` or `sudo apt install ffmpeg`). Licenses for the bundled ffmpeg are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the app under About.
 
-### Opening DemoLens on macOS
+### Opening Booya on macOS
 
 The macOS app is signed ad hoc, not with a paid Apple Developer ID, so Gatekeeper blocks it the first time. Use any one of these:
 
-- Right click (or Control click) DemoLens in Applications, choose **Open**, then **Open** again.
+- Right click (or Control click) Booya in Applications, choose **Open**, then **Open** again.
 - Or try to open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**.
 - Or, if macOS says the app "is damaged and can't be opened", run this in Terminal and open it again:
 
   ```sh
-  xattr -cr /Applications/DemoLens.app
+  xattr -cr /Applications/Booya.app
   ```
 
   This removes the download quarantine flag that your browser added. The app is not actually damaged.
 
-The first time you record, macOS asks for **Screen & System Audio Recording** and, with the mic on, **Microphone** access. Allow both, then quit and reopen DemoLens if macOS asks you to. You can change this later in System Settings > Privacy & Security.
+The first time you record, macOS asks for **Screen & System Audio Recording** and, with the mic on, **Microphone** access. Allow both, then quit and reopen Booya if macOS asks you to. You can change this later in System Settings > Privacy & Security.
 
-## Why DemoLens
+## Why Booya
 
-| | DemoLens | Screen Studio | Cap | Loom / Tella |
+| | Booya | Screen Studio | Cap | Loom / Tella |
 |---|---|---|---|---|
 | Price | Free, MIT | Paid | Free core, paid cloud | Subscription |
 | Windows, macOS, Linux | All three | macOS only | macOS, Windows | Browser and desktop |
@@ -53,7 +57,7 @@ The first time you record, macOS asks for **Screen & System Audio Recording** an
 | Auto blur of API keys, emails, cards | Yes | No | No | No |
 | Scriptable CLI | Yes | No | No | No |
 
-If you record developer tools, your screen is full of tokens, emails and customer data. DemoLens looks for them and blurs them, and it never uploads a frame unless you set up your own storage.
+If you record developer tools, your screen is full of tokens, emails and customer data. Booya looks for them and blurs them, and it never uploads a frame unless you set up your own storage.
 
 ## Features
 
@@ -64,7 +68,7 @@ If you record developer tools, your screen is full of tokens, emails and custome
 - **Markers**: press the marker shortcut (or the flag button on the pill) during a recording and the editor adds a zoom to the cursor at that moment.
 - **Webcam and layouts**: record the webcam alongside the screen (macOS, Linux and, new in 0.6.0, Windows). Show it as a circle or rounded square in any corner, in a column beside the screen, full screen, or not at all, and change the layout for any stretch of the recording on the timeline, with a blend between layouts. In 9:16 and 1:1 videos the screen follows the cursor. Optional mirror. It all shows in the editor preview, not only in the export ([how](docs/EDITING.md)).
 - **Auto zoom**: the camera stays on the whole screen and zooms only for a cluster of clicks in one small area (3 on Normal, a setting), a burst of typing, or a marker. Navigation (tab and window switches, the Dock, menus, drags) is skipped, and it eases out while you scroll. Subtle, Normal and Lively set how picky it is ([rules](docs/EDITING.md)). The zoom eases in and out smoothly, anticipates where the action will be, and holds still while the cursor wanders inside a dead zone (the Steadiness slider). Every segment is visible on the timeline, where you can drag its edges, change its scale, delete it or add new ones.
-- **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. DemoLens hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
+- **Cursor**: cursor smoothing, a bigger cursor option and click highlight ripples. Booya hides the OS cursor while recording and draws its own, so it stays sharp at any zoom.
 - **Keystroke overlay**: shows shortcuts such as `Ctrl + S`, and "Typing..." while you type. Shortcuts only by default.
 - **Device frames, motion blur, music**: put the recording in a vector laptop, browser or phone frame, blur fast zoom and pan moves, and add a music track that ducks under your voice, with fades. Mute a single clip, and pin the camera to a corner or an edge. See `docs/EDITING.md`.
 - **System audio**: off by default (the speaker button). Linux records the monitor with the screen; Windows uses WASAPI loopback and macOS a ScreenCaptureKit audio stream, both as a sidecar mixed into the voice track.
@@ -84,7 +88,7 @@ If you record developer tools, your screen is full of tokens, emails and custome
 
 ## How it works
 
-DemoLens uses the Mac media engine for encoding where it can and avoids work it does not need. See [docs/EFFICIENCY.md](docs/EFFICIENCY.md) for what it does and the measured numbers.
+Booya uses the Mac media engine for encoding where it can and avoids work it does not need. See [docs/EFFICIENCY.md](docs/EFFICIENCY.md) for what it does and the measured numbers.
 
 ```
  record                       edit                                   export
@@ -184,7 +188,7 @@ These integrations are tested against mocked HTTP servers. They follow each prov
 
 ## Privacy
 
-DemoLens runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
+Booya runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
 
 - **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press (the full combo) and when you type, but not the characters you type: letters are stored only as part of a Ctrl/Alt/Option/Cmd/Win shortcut. Cursor moves and clicks are logged for auto zoom. The recording pill is visible while recording.
 - **Where it goes:** `Videos/DemoLens/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
@@ -200,7 +204,7 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the DemoLens window and REC badge are left out | avfoundation (audio only) | ScreenCaptureKit audio stream (macOS 13+, off by default, written on the side and mixed in; not yet run on a Mac) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
+| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the Booya window and REC badge are left out | avfoundation (audio only) | ScreenCaptureKit audio stream (macOS 13+, off by default, written on the side and mixed in; not yet run on a Mac) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
 | Windows | ffmpeg `gdigrab`: screen, window (by title), area | WASAPI in process (DirectShow as fallback; set `DEMOLENS_MIC` to choose) | WASAPI loopback of the default speakers (off by default, written on the side and mixed in) | rdev |
 
 Native GPU capture on Windows (Windows.Graphics.Capture) is stubbed with a TODO in `crates/demolens-core/src/capture/`. Run `demolens doctor --audio` to record 3 seconds from the microphone and see its level. The ffmpeg output of a recording's audio is kept in `audio.log` in the project folder.
@@ -214,7 +218,7 @@ demolens doctor --seconds 5
 
 It reports the Screen Recording permission, the displays ScreenCaptureKit sees (macOS), the ffmpeg in use, and a short test capture (file size, frame count, resolution). `next_steps` says what to fix. On macOS the permission belongs to the app that launched the command, so allow your terminal under System Settings > Privacy & Security > Screen & System Audio Recording.
 
-The macOS build is ad-hoc signed, so each update is a new app identity to macOS. If recording stops after an update, remove DemoLens from the Screen Recording list, add it again, and reopen the app.
+The macOS build is ad-hoc signed, so each update is a new app identity to macOS. If recording stops after an update, remove Booya from the Screen Recording list, add it again, and reopen the app.
 
 ## Building
 

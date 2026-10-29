@@ -164,7 +164,7 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ] && ! ls dist/*.app.tar.gz >/dev/null 2>&1; then
             # The updater wants the .app in a tarball. Tauri writes it only when it signs.
             app=$(find "$b/macos" -maxdepth 1 -name '*.app' | head -1)
-            tar -czf "dist/DemoLens_${{ matrix.name }}.app.tar.gz" -C "$b/macos" "$(basename "$app")"
+            tar -czf "dist/Booya_${{ matrix.name }}.app.tar.gz" -C "$b/macos" "$(basename "$app")"
           fi
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a "dist/demolens-cli-${{ matrix.name }}.zip" ./target/release/demolens.exe

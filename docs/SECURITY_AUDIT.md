@@ -1,4 +1,4 @@
-# DemoLens security and compute audit
+# Booya security and compute audit
 
 Scope: tags v0.1.0, v0.1.1, v0.1.2, v0.1.3 and `main` before v0.2.0. Method: code review of every crate, the Tauri shell and the UI, `cargo audit` against the RustSec database, and the privacy review in the project tracker (GDPR and India DPDP Act 2023). All findings below are fixed in v0.2.0 unless marked otherwise.
 
@@ -57,7 +57,7 @@ Models and the llama.cpp server binary were used as downloaded. **Fix:** SHA-256
 Private folders (0700) and logs (0600); retention setting and delete buttons in Settings > Privacy; dialog plugin removed from capabilities; all actions pinned to commit SHAs, `contents: read` by default and `write` only for the publish job, `cargo audit` in CI; README wording fixed; camera string now explains the webcam overlay.
 
 ### 16. RustSec warnings (Info)
-`cargo audit` reports no vulnerabilities. It warns about unmaintained `proc-macro-error`, `ttf-parser`, `zbus_names`, `zvariant`, `zvariant_derive` and an unsoundness in `glib::VariantStrIter` (RUSTSEC-2024-0429), all pulled in by the GTK and Tauri stack. DemoLens does not call the affected glib API. These clear when Tauri moves to newer GTK bindings.
+`cargo audit` reports no vulnerabilities. It warns about unmaintained `proc-macro-error`, `ttf-parser`, `zbus_names`, `zvariant`, `zvariant_derive` and an unsoundness in `glib::VariantStrIter` (RUSTSEC-2024-0429), all pulled in by the GTK and Tauri stack. Booya does not call the affected glib API. These clear when Tauri moves to newer GTK bindings.
 
 There are no npm dependencies, so `npm audit` does not apply.
 

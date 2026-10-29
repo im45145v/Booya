@@ -332,7 +332,7 @@ pub fn read_text(frame: &demolens_core::render::Frame) -> Result<String> {
 
 #[cfg(not(feature = "ocr"))]
 pub fn read_text(_frame: &demolens_core::render::Frame) -> Result<String> {
-    anyhow::bail!("this build of DemoLens has no OCR (built without the 'ocr' feature)")
+    anyhow::bail!("this build of Booya has no OCR (built without the 'ocr' feature)")
 }
 
 /// Draw a known line of text, read it back and check the secret finder sees
@@ -354,7 +354,7 @@ pub fn self_test() -> Result<String> {
 
 #[cfg(not(feature = "ocr"))]
 pub fn scan(_project: &Project, _sample_ms: f64, _progress: impl FnMut(f64)) -> Result<Vec<Hit>> {
-    anyhow::bail!("this build of DemoLens has no OCR (built without the 'ocr' feature)")
+    anyhow::bail!("this build of Booya has no OCR (built without the 'ocr' feature)")
 }
 
 #[cfg(test)]

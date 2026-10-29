@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>DemoLens records your voice with the screen when the microphone is turned on.</string>
+  <string>Booya records your voice with the screen when the microphone is turned on.</string>
   <key>NSCameraUsageDescription</key>
-  <string>DemoLens records your webcam only when you turn on the webcam overlay for a recording.</string>
+  <string>Booya records your webcam only when you turn on the webcam overlay for a recording.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>DemoLens records your screen to make product demos.</string>
+  <string>Booya records your screen to make product demos.</string>
 </dict>
 </plist>

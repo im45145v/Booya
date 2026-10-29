@@ -104,7 +104,7 @@ pub fn run(mut a: Args) -> Result<()> {
     if as_json {
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("DemoLens bench: {} on encoder {}", out["source"], out["encoder"]);
+        println!("Booya bench: {} on encoder {}", out["source"], out["encoder"]);
         println!("  decode a preview frame, original: {:.1} ms (seek {:.0} ms)", orig_play, orig_seek);
         println!("  decode a preview frame, 720p proxy: {:.1} ms (seek {:.0} ms), {:.1}x faster", px_play, px_seek, orig_play / px_play.max(0.001));
         println!("  proxy build: {:.1} s with {}", st.seconds, st.encoder);

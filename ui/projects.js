@@ -8,7 +8,7 @@ async function openProjectPath(path) {
   const r = await invoke('open_project', { path });
   let p = r.project;
   if (r.recovered) {
-    const use = confirm(`DemoLens found edits to "${baseName(r.path)}" that were never saved (the app was closed first).\n\nOK restores them. Cancel keeps the last saved version.`);
+    const use = confirm(`Booya found edits to "${baseName(r.path)}" that were never saved (the app was closed first).\n\nOK restores them. Cancel keeps the last saved version.`);
     if (use) p = r.recovered; else invoke('discard_autosave', { path: r.path }).catch(() => { });
   }
   setProject(p, r.path);
@@ -78,7 +78,7 @@ renderRecent();
 async function duplicateProject() {
   if (!project) return;
   try {
-    const target = await dialog.save({ defaultPath: stem(project.source) + ' copy.demolens', filters: [{ name: 'DemoLens project', extensions: ['demolens'] }] });
+    const target = await dialog.save({ defaultPath: stem(project.source) + ' copy.demolens', filters: [{ name: 'Booya project', extensions: ['demolens'] }] });
     if (!target) return;
     readPanel(); checkpoint();
     showBusy('Copying the project...');

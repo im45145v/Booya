@@ -717,7 +717,7 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
 
 #[cfg(not(feature = "whisper"))]
 fn run_ranges(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: &str, _ranges: &[(usize, usize)], _lenient: bool) -> Result<Vec<Vec<CaptionWord>>> {
-    anyhow::bail!("this build of DemoLens has no speech recognition (built without the 'whisper' feature)")
+    anyhow::bail!("this build of Booya has no speech recognition (built without the 'whisper' feature)")
 }
 
 fn run_whisper(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str) -> Result<Vec<CaptionWord>> {

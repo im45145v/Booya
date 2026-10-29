@@ -1,4 +1,4 @@
-# DemoLens product review
+# Booya product review
 
 Two reviews from October 2026, written after actually using the app. I ran the desktop app on a 1600x1000 X11 display, opened it with no project, tried to record, opened the sample, ran every Local AI action, exported, and read the README top to bottom as a new user would. Screenshots of what I saw are in `docs/media/before-after/before-*.png`.
 
@@ -89,7 +89,7 @@ Impact and effort are 1 (low) to 3 (high).
 
 ### Positioning
 
-Cap already owns "open source Screen Studio" for Mac and Windows. DemoLens should not fight on that sentence. The defensible position is:
+Cap already owns "open source Screen Studio" for Mac and Windows. Booya should not fight on that sentence. The defensible position is:
 
 > **The private demo studio. Product demos with local models, on Linux, Windows and macOS. Nothing leaves your machine.**
 
@@ -103,21 +103,21 @@ Three things nobody else combines:
 
 - A top of README GIF that shows **an API key on screen getting blurred automatically** and filler words being cut. Lead with the hook, not the feature list.
 - Download buttons. A GitHub Release with installers for each OS, linked from the first screen of the README.
-- A "Why DemoLens" table against Screen Studio, Cap and Loom. People share comparisons.
+- A "Why Booya" table against Screen Studio, Cap and Loom. People share comparisons.
 - A Show HN / r/linux / r/selfhosted launch angled at "Screen Studio for Linux with offline AI".
 - A tiny landing page (GitHub Pages) with the GIF, the three bullets above and the download links.
-- Every exported video could carry an optional, off by default "Made with DemoLens" end card. Opt in only, or it costs trust.
+- Every exported video could carry an optional, off by default "Made with Booya" end card. Opt in only, or it costs trust.
 
 ### Distribution
 
 - **Now:** GitHub Releases built by Actions on every `v*` tag, with installers for all three OSes.
 - **Next:** Homebrew cask, winget manifest, Flathub (this matters for Linux discovery), AUR.
-- **Later:** a GitHub Pages landing page and a short launch video made with DemoLens itself.
+- **Later:** a GitHub Pages landing page and a short launch video made with Booya itself.
 
 ### Risks
 
 1. **Wayland.** Ubuntu and Fedora default to Wayland. Without the PipeWire portal, "great on Linux" is not true for most new Linux users. This is the biggest product risk.
-2. **Cap moves to Linux and adds local AI.** They have the team and the brand. DemoLens must win on privacy, Linux depth and the CLI before that happens.
+2. **Cap moves to Linux and adds local AI.** They have the team and the brand. Booya must win on privacy, Linux depth and the CLI before that happens.
 3. **Unsigned builds.** macOS Gatekeeper and Windows SmartScreen warnings scare people off. Signing costs money and admin time.
 4. **ffmpeg as an external dependency.** Every "ffmpeg not found" is a lost user. Bundle it.
 5. **Model quality.** The 0.5B model writes plain text and Whisper drops filler words. Be honest in the UI so that AI output never feels like a broken promise.

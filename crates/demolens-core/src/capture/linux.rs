@@ -51,7 +51,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     };
     let mut args = vec![
         s("-f"), s("x11grab"),
-        s("-draw_mouse"), s("0"), // DemoLens draws its own cursor
+        s("-draw_mouse"), s("0"), // Booya draws its own cursor
         s("-framerate"), s(o.fps),
         s("-video_size"), format!("{}x{}", region.w, region.h),
         s("-i"), format!("{display}+{},{}", region.x, region.y),

@@ -2,7 +2,7 @@
 
 ## What a project is
 
-Save a project and DemoLens writes a **folder** that ends in `.demolens`:
+Save a project and Booya writes a **folder** that ends in `.demolens`:
 
 ```
 My demo.demolens/
@@ -20,13 +20,13 @@ Old projects (a loose `.json`) still open. **Save** writes a bundle the next tim
 ## Where to find it
 
 - **Project** button in the top bar: Save as, Duplicate, Open a project folder, Import a video clip at the playhead. (On a Mac the same items are in the File menu.)
-- The start screen lists recent projects. When a project's files are missing, a dialog lists them with a **Locate...** button for each, so you can point DemoLens at the new place.
+- The start screen lists recent projects. When a project's files are missing, a dialog lists them with a **Locate...** button for each, so you can point Booya at the new place.
 
 ## Autosave and recovery
 
 - Every 15 seconds, when you switch away from the window, and when you quit, but only if something changed.
 - A new recording autosaves into its own `recording-...` folder in your recordings folder, so a crash after recording still leaves an editable project.
-- A project you saved yourself is never overwritten by autosave. Autosave writes `project.autosave.json` beside it. On opening, if that file is newer and different, DemoLens asks whether to recover it. Saving removes it.
+- A project you saved yourself is never overwritten by autosave. Autosave writes `project.autosave.json` beside it. On opening, if that file is newer and different, Booya asks whether to recover it. Saving removes it.
 
 ## Add a recording in the middle, or redo a part
 

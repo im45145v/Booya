@@ -1,13 +1,14 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
 <head>
-  <link rel="icon" type="image/svg+xml" href="logo.svg">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="alternate icon" href="favicon.ico">
 <meta charset="utf-8" />
-<title>DemoLens</title>
+<title>Booya</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<!-- Icon sprite (outline icons, 24px grid, drawn for DemoLens). -->
+<!-- Icon sprite (outline icons, 24px grid, drawn for Booya). -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="i-logo" viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="13" rx="3"/><circle cx="12" cy="11" r="3.2"/><path d="M8 20.5h8"/></symbol>
@@ -50,7 +51,7 @@
 </svg>
 
 <header class="toolbar" role="toolbar" aria-label="Main toolbar">
-  <div class="brand"><img src="logo.svg" alt="" width="24" height="24"><span>DemoLens</span></div>
+  <div class="brand"><img src="logo.svg" alt="" width="24" height="24"><span class="wordmark">booya</span></div>
   <div class="tb-group">
     <button id="open-btn" class="btn ghost" title="Open a video or project (Ctrl+O)"><svg class="ico"><use href="#i-open"/></svg><span>Open</span></button>
     <button id="proj-btn" class="btn ghost needs-project" title="Project: save as, duplicate, open a project folder, import a clip" aria-haspopup="dialog"><svg class="ico"><use href="#i-open"/></svg><span>Project</span></button>
@@ -75,7 +76,7 @@
   <div class="tb-group">
     <button id="theme-btn" class="btn icon ghost" title="Switch light or dark theme" aria-label="Switch theme"><svg class="ico"><use href="#i-sun"/></svg></button>
     <button id="settings-btn" class="btn icon ghost" title="Settings: appearance, shortcuts, privacy, cloud, storage" aria-label="Settings"><svg class="ico"><use href="#i-gear"/></svg></button>
-    <button id="about-btn" class="btn icon ghost" title="About DemoLens" aria-label="About DemoLens"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button>
+    <button id="about-btn" class="btn icon ghost" title="About Booya" aria-label="About Booya"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg></button>
     <button id="keys-btn" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico"><use href="#i-keyboard"/></svg></button>
     <button id="ex-top" class="btn primary needs-project" title="Export video (Ctrl+E)"><svg class="ico"><use href="#i-export"/></svg><span>Export</span></button>
   </div>
@@ -95,9 +96,9 @@
       <div id="shape-layer" class="shape-layer" hidden><svg id="shape-svg" aria-hidden="true"></svg></div>
       <div id="welcome" class="welcome">
         <div class="welcome-card">
-          <img class="welcome-logo" src="logo.svg" alt="DemoLens" width="40" height="40">
-          <h1>Record the screen, then tidy the recording</h1>
-          <p class="lead">DemoLens zooms in on clicks, smooths the cursor, adds captions, cuts filler words and blurs emails and keys. It all runs on this computer unless you turn on a cloud provider.</p>
+          <img class="welcome-logo" src="logo.svg" alt="Booya" width="40" height="40">
+          <h1>Record it. Booya.</h1>
+          <p class="lead">Booya zooms in on clicks, smooths the cursor, adds captions, cuts filler words and blurs emails and keys. It all runs on this computer unless you turn on a cloud provider.</p>
           <div class="welcome-actions">
             <button id="w-sample" class="btn primary lg"><svg class="ico"><use href="#i-sample"/></svg><span>Try the sample</span></button>
             <button id="w-record" class="btn lg"><svg class="ico"><use href="#i-record"/></svg><span>Record screen</span></button>
@@ -207,7 +208,7 @@
       <div class="walls" id="walls" role="group" aria-label="Wallpapers"></div>
       <div class="row" id="bg-colors">
         <label class="color"><input type="color" id="bg-from" value="#6366f1" aria-label="First colour" /></label>
-        <label class="color" id="bg-to-wrap"><input type="color" id="bg-to" value="#ec4899" aria-label="Second colour" /></label>
+        <label class="color" id="bg-to-wrap"><input type="color" id="bg-to" value="#9B82FF" aria-label="Second colour" /></label>
         <label class="inline grow" id="bg-angle-wrap">Angle <input id="bg-angle" class="field sm" type="number" value="35" min="0" max="360" /></label>
       </div>
       <div id="bg-image-row" hidden>

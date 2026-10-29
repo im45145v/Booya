@@ -1,4 +1,4 @@
-"""Drives the real DemoLens editor UI in Chrome with a stand in for the Tauri
+"""Drives the real Booya editor UI in Chrome with a stand in for the Tauri
 shell. The media, project file and preview frames come from the real pipeline
 (`cargo run -p demolens-core --example e2e_fixture`)."""
 import functools, http.server, json, os, re, subprocess, threading, urllib.parse

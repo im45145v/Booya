@@ -1,4 +1,4 @@
-// DemoLens editor UI. All pixels come from the Rust renderer via `preview`.
+// Booya editor UI. All pixels come from the Rust renderer via `preview`.
 const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
 const $ = id => document.getElementById(id);
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -390,7 +390,7 @@ $('play').onclick = () => project && setPlaying(!playing);
 // ---------- Open, save, sample ----------
 async function openAny(path) {
   try {
-    if (!path) path = await dialog.open({ multiple: false, filters: [{ name: 'Video or DemoLens project', extensions: [...VIDEO_EXT, 'json'] }] });
+    if (!path) path = await dialog.open({ multiple: false, filters: [{ name: 'Video or Booya project', extensions: [...VIDEO_EXT, 'json'] }] });
     if (!path) return;
     showBusy('Opening ' + baseName(path) + '...');
     if (path.endsWith('.json')) await openProjectPath(path);
@@ -410,14 +410,14 @@ async function save(as) {
     let target = projectPath;
     if (as || !target || isLooseProject(target)) {
       // Projects are folders ending in .demolens, with the recording copied in.
-      target = await dialog.save({ defaultPath: (!as && !isLooseProject(projectPath) && projectPath) || stem(project.source) + '.demolens', filters: [{ name: 'DemoLens project', extensions: ['demolens'] }] });
+      target = await dialog.save({ defaultPath: (!as && !isLooseProject(projectPath) && projectPath) || stem(project.source) + '.demolens', filters: [{ name: 'Booya project', extensions: ['demolens'] }] });
       if (!target) return;
     }
     readPanel(); checkpoint();
     showBusy('Saving the project folder...');
     try { await invoke('save_project_bundle', { path: target, project }); } finally { hideBusy(); }
     projectPath = target;
-    saved = history[hIdx]; updTitle(); status('Saved ' + baseName(projectPath) + '. It is a folder with the recording inside, so you can move or copy it.', 'success');
+    saved = history[hIdx]; updTitle(); status('Saved. Nice one. ' + baseName(projectPath) + ' is a folder with the recording inside, so you can move or copy it.', 'success');
     if (typeof renderRecent === 'function') renderRecent();
   } catch (e) { fail(e); }
 }
@@ -448,7 +448,7 @@ async function keysPermissionCheck(prompt) {
   if (!/Mac/i.test(navigator.platform)) return true;
   let ok = true;
   try { ok = await invoke('input_monitoring_status', { prompt }); } catch { return true; }
-  if (!ok) status('Keys need Input Monitoring. In System Settings > Privacy & Security > Input Monitoring switch DemoLens on, then quit and reopen DemoLens. Until then shortcuts such as Cmd+Tab are not shown.', 'error');
+  if (!ok) status('Keys need Input Monitoring. In System Settings > Privacy & Security > Input Monitoring switch Booya on, then quit and reopen Booya. Until then shortcuts such as Cmd+Tab are not shown.', 'error');
   return ok;
 }
 $('rec-keys').addEventListener('click', async () => {
@@ -642,7 +642,7 @@ $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
     return status(why, 'info');
   }
   r.project.caption_style.burn_in = true; applyResult(r.project);
-  status(`Transcribed ${rp.words} words (${rp.fillers} filler words). Captions are burned in; switch that off in Style.`, 'success');
+  status(`Captions ready, all offline. ${rp.words} words (${rp.fillers} filler words). They are burned in; switch that off in Style.`, 'success');
 });
 // Auto cut proposes first. Nothing is removed until the red bands on the timeline have been reviewed.
 function clearProposal() { tl.proposed = null; $('cut-review').hidden = true; tl.draw(); }
@@ -679,13 +679,13 @@ $('ai-redact').onclick = () => aiTask('Scanning for secrets', async () => {
 $('ai-interactive').onclick = async () => {
   if (!project || busy) return;
   readPanel();
-  if (!project.events) return status('This recording has no click log, so there is nothing to click through. Record with DemoLens to get one.', 'error');
+  if (!project.events) return status('This recording has no click log, so there is nothing to click through. Record with Booya to get one.', 'error');
   const ok = await confirmBox('Interactive demo', `<p>Makes one HTML file: a screenshot for every click, a pulsing dot where you clicked, and a short caption from your narration. It works offline and uploads nothing.</p>
     ${project.blur.length ? '<p class="found">Your blurred regions are applied to every screenshot.</p>' : '<p class="warn-note">No blurred regions yet. Run "Blur secrets" first if the screen shows anything private.</p>'}
     <label class="stack">Title <input class="field" id="ix-title" placeholder="Leave empty to write one from the recording" /></label>
     <label class="stack">Button text (optional) <input class="field" id="ix-cta" placeholder="Start free trial" /></label>
     <label class="stack">Button link (optional, https://...) <input class="field" id="ix-url" placeholder="https://example.com/signup" /></label>
-    <label><input type="checkbox" id="ix-badge" checked /> Show "Made with DemoLens"</label>`, 'Choose where to save');
+    <label><input type="checkbox" id="ix-badge" checked /> Show "Made with Booya"</label>`, 'Choose where to save');
   if (!ok) return;
   const v = id => ($(id) && $(id).value || '').trim();
   const title = v('ix-title'), cta = v('ix-cta'), url = v('ix-url'), badge = $('ix-badge') ? $('ix-badge').checked : true;
@@ -781,12 +781,12 @@ $('keys-btn').onclick = showShortcuts;
 async function checkFfmpeg(force) {
   let st; try { st = await invoke('ffmpeg_status'); } catch { return; }
   if (st.found && !force) return st;
-  if (!st.found) modal('ffmpeg is needed', `<p>DemoLens uses ffmpeg to record and export. The installer normally includes it, but no working copy was found on this computer.</p><p>Install it with this one line, then restart DemoLens:</p><pre class="code">${esc(st.hint)}</pre><p class="hint">Windows: run it in PowerShell. macOS: needs <a href="https://brew.sh" target="_blank">Homebrew</a>. Or download it from <a href="https://ffmpeg.org/download.html" target="_blank">ffmpeg.org</a>.</p>`);
+  if (!st.found) modal('ffmpeg is needed', `<p>Booya uses ffmpeg to record and export. The installer normally includes it, but no working copy was found on this computer.</p><p>Install it with this one line, then restart Booya:</p><pre class="code">${esc(st.hint)}</pre><p class="hint">Windows: run it in PowerShell. macOS: needs <a href="https://brew.sh" target="_blank">Homebrew</a>. Or download it from <a href="https://ffmpeg.org/download.html" target="_blank">ffmpeg.org</a>.</p>`);
   return st;
 }
 async function showAbout() {
   let st = {}; try { st = await invoke('ffmpeg_status'); } catch {}
-  modal('About DemoLens', `<p><b>DemoLens ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
+  modal('About Booya', `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
   <p><b>ffmpeg:</b> ${st.found ? esc(st.version) + (st.bundled ? ' (bundled)' : '') + '<br><span class="hint">' + esc(st.path) + '</span>' : 'not found'}</p>
   <p class="hint">This app bundles FFmpeg (https://ffmpeg.org), licensed under the GNU GPL version 2 or later (the bundled builds include GPL components). FFmpeg is a trademark of Fabrice Bellard. Source code for the bundled builds is available from the builders: BtbN/FFmpeg-Builds (Linux, Windows) and ffmpeg.martin-riedl.de (macOS). See THIRD_PARTY_NOTICES.md in the repository.</p>
   <p class="hint">Models are downloaded separately and keep their own licenses.</p>`);
@@ -949,7 +949,7 @@ $('rec-mic-dev').onchange = () => { localStorage.setItem('mic-dev', $('rec-mic-d
 async function meterStart() {
   if ($('rec-mic').getAttribute('aria-pressed') !== 'true') return meterStop();
   try { await invoke('mic_meter_start', { device: $('rec-mic-dev').value || null }); meterOn = true; $('mic-meter').hidden = false; localStorage.setItem('mic-ok', '1'); }
-  catch (e) { meterOn = false; $('mic-meter').hidden = true; status('Cannot read the microphone: ' + humanError(e) + ' On a Mac, allow DemoLens under System Settings > Privacy & Security > Microphone.', 'error'); }
+  catch (e) { meterOn = false; $('mic-meter').hidden = true; status('Cannot read the microphone: ' + humanError(e) + ' On a Mac, allow Booya under System Settings > Privacy & Security > Microphone.', 'error'); }
 }
 // Nothing may hold the microphone when the recorder opens it (Windows lets one
 // app lock it), so wait until the meter has really let go.
@@ -1394,7 +1394,7 @@ async function showSettings(tab = 'privacy') {
   if (tab === 'privacy') body = `<p>Recordings stay on this computer in private folders. Key capture is off unless you turn it on for a recording, and then only shortcut names are kept.</p>
     <label class="inline">Delete recordings older than <select id="set-ret" class="field sm">${[0, 7, 30, 90].map(d => `<option value="${d}" ${(st.retention_days || 0) === d ? 'selected' : ''}>${d ? d + ' days' : 'never'}</option>`).join('')}</select></label>
     <h3 class="section">Recordings (${recs.length})</h3><div class="list">${recs.map(r => `<div class="item"><span>${esc(baseName(r.path))} <small class="muted">${kb(r.bytes)}</small></span><button class="btn ghost sm" data-del="${esc(r.path)}">Delete</button></div>`).join('') || '<p class="muted small">None.</p>'}</div>
-    <div class="row"><button class="btn" id="set-wipe">Delete all DemoLens data...</button></div>
+    <div class="row"><button class="btn" id="set-wipe">Delete all Booya data...</button></div>
     <p class="muted small">See PRIVACY.md for exactly what is stored and sent.</p>`;
   if (tab === 'cloud') body = `<p>Cloud providers are off. Turn one on per task only if you want to; <b>the audio or text for that task then leaves your device</b> and goes to the provider, under their terms. Keys are kept in your system keychain.</p>` +
     cloudState.providers.map(p => `<div class="model"><div><b>${esc(p.info.name)}</b><small><a href="${esc(p.info.terms)}" target="_blank" rel="noreferrer">Terms</a> &middot; <a href="${esc(p.info.privacy)}" target="_blank" rel="noreferrer">Privacy</a>${p.info.key_url ? ` &middot; <a href="${esc(p.info.key_url)}" target="_blank" rel="noreferrer">Get a key</a>` : ''}</small>
@@ -1406,7 +1406,7 @@ async function showSettings(tab = 'privacy') {
     body = `<label class="switch"><input type="checkbox" id="set-glass" ${st.glass_ui ? 'checked' : ''} /> Glass look</label>
       <p class="muted small">A frosted, translucent look for the toolbar, sidebar and dialogs. ${IS_MAC ? 'On a Mac the window itself is see-through and macOS blurs what is behind it.' : 'Here it is a blur drawn in the page, so it only shows over other content, such as behind dialogs.'}</p>
       ${g.reduce ? '<p class="warn-note">Reduce Transparency is on in your system settings, so the glass look is paused. Turn that off in the system accessibility settings to see it.</p>' : ''}
-      ${IS_MAC || /Win/i.test(navigator.platform) ? `<label class="switch"><input type="checkbox" id="set-tray" ${st.menu_bar !== false ? 'checked' : ''} /> Show DemoLens in the ${IS_MAC ? 'menu bar' : 'system tray'} for quick recording</label>` : ''}
+      ${IS_MAC || /Win/i.test(navigator.platform) ? `<label class="switch"><input type="checkbox" id="set-tray" ${st.menu_bar !== false ? 'checked' : ''} /> Show Booya in the ${IS_MAC ? 'menu bar' : 'system tray'} for quick recording</label>` : ''}
       <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>`;
   }
   if (tab === 'shortcuts') body = '<div id="sc-body"><p class="muted small">Loading...</p></div>';
@@ -1432,7 +1432,7 @@ async function showSettings(tab = 'privacy') {
   if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => { await invoke('delete_recording', { path: b.dataset.del }).catch(fail); again(); }));
   if ($('set-wipe')) $('set-wipe').onclick = async () => {
-    const ok = await confirmBox('Delete all DemoLens data?', '<p>This deletes every recording in Videos/DemoLens, the transcript cache and the built in sample. Templates and models are kept.</p><label><input type="checkbox" id="wipe-keys" /> Also remove saved API keys</label>', 'Delete everything');
+    const ok = await confirmBox('Delete all Booya data?', '<p>This deletes every recording in Videos/DemoLens, the transcript cache and the built in sample. Templates and models are kept.</p><label><input type="checkbox" id="wipe-keys" /> Also remove saved API keys</label>', 'Delete everything');
     if (ok) { const n = await invoke('delete_all_data', { includeKeys: !!document.getElementById('wipe-keys')?.checked }).catch(fail); status(`Deleted ${n || 0} item(s).`, 'success'); }
   };
   document.querySelectorAll('[data-t]').forEach(c => (c.onchange = async () => {
@@ -1458,7 +1458,7 @@ async function renderShortcutsPage(note) {
   const host = $('sc-body'); if (!host) return;
   await loadShortcuts();
   const caps = t => t ? Shortcuts.parts(t).map(p => `<kbd>${esc(p)}</kbd>`).join('') : '<span class="muted small">Not set</span>';
-  host.innerHTML = `<p class="muted small">These work from any app while DemoLens is running. Click the keys, then press the new combination. Esc cancels. A combination needs Ctrl${IS_MAC ? ', Cmd' : ''} or Alt, so it does not take over normal typing.</p>
+  host.innerHTML = `<p class="muted small">These work from any app while Booya is running. Click the keys, then press the new combination. Esc cancels. A combination needs Ctrl${IS_MAC ? ', Cmd' : ''} or Alt, so it does not take over normal typing.</p>
     <div class="sc-list">${shortcutState.actions.map(a => `<div class="sc-row" data-id="${a.id}">
       <div class="sc-name"><b>${esc(a.label)}</b><small>${esc(a.hint)}</small>${a.error ? `<small class="sc-err">Could not be registered: another app probably has these keys. Choose different keys.</small>` : ''}<small class="sc-err" data-err="${a.id}"></small></div>
       <button class="sc-keys${a.error ? ' bad' : ''}" data-rec="${a.id}" title="Click, then press the new keys">${caps(a.text)}</button>
@@ -1535,7 +1535,7 @@ $('blur-draw').onclick = async () => {
 // The permissions screen comes first (a Mac's first launch, or a permission that went off), then the privacy note.
 function firstRunNote() {
   if (localStorage.getItem('privacy-ack')) return;
-  modal('Before you start', `<p>DemoLens records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
+  modal('Before you start', `<p>Booya records and edits on this computer. By default nothing leaves it, except model downloads you start from the Models dialog.</p>
     <ul><li>A small pill shows while recording (it is not in the video). Its buttons pause, drop a marker, stop or discard; the keys are in Settings > Shortcuts.</li><li>Key capture is off unless you turn it on, and never stores what you type.</li><li>Cloud providers and uploads are off until you turn them on in Settings, and show what is sent first.</li></ul>
     <div class="row end"><button class="btn primary" id="fr-ok">Got it</button></div>`);
   $('fr-ok').onclick = () => { localStorage.setItem('privacy-ack', '1'); $('modal').close(); };

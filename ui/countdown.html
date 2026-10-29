@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>DemoLens countdown</title>
+<html lang="en"><head><meta charset="utf-8"><title>Booya countdown</title>
 <style>
+@font-face{font-family:"JetBrains Mono";src:url("fonts/JetBrainsMono.woff2") format("woff2");font-weight:400 600}
 html,body{margin:0;height:100%;background:transparent;overflow:hidden;font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;user-select:none;-webkit-user-select:none}
-.c{position:absolute;inset:10px;border-radius:50%;display:grid;place-items:center;background:rgba(14,14,17,.78);border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 36px rgba(0,0,0,.4);cursor:pointer}
-.n{font-size:92px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;animation:pop 1s ease-out both}
+.c{position:absolute;inset:10px;border-radius:50%;display:grid;place-items:center;background:rgba(20,18,31,.82);border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 36px rgba(0,0,0,.4);cursor:pointer}
+.n{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:92px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;animation:pop 1s ease-out both}
 .h{position:absolute;bottom:34px;font-size:11px;color:rgba(255,255,255,.6)}
 @keyframes pop{0%{transform:scale(1.35);opacity:0}25%{opacity:1}100%{transform:scale(.9);opacity:.9}}
 @media (prefers-reduced-motion:reduce){.n{animation:none}}

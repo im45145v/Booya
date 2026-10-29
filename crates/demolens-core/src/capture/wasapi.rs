@@ -190,7 +190,7 @@ fn start_with(source: Source, epoch: f64, wav: Option<&Path>, level: Option<Box<
                     cpal::SampleFormat::I16 => build::<i16>(&dev, cfg, sh.clone())?,
                     cpal::SampleFormat::U16 => build::<u16>(&dev, cfg, sh.clone())?,
                     cpal::SampleFormat::I32 => build::<i32>(&dev, cfg, sh.clone())?,
-                    other => bail!("the device uses a sample format ({other:?}) DemoLens cannot read"),
+                    other => bail!("the device uses a sample format ({other:?}) Booya cannot read"),
                 };
                 stream.play().map_err(|e| anyhow!("{e}"))?;
                 Ok((stream, sh, name, rate))

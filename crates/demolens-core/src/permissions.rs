@@ -1,8 +1,8 @@
-//! What the operating system lets DemoLens do, for the permissions screen.
+//! What the operating system lets Booya do, for the permissions screen.
 //!
 //! macOS asks for three things: Screen Recording (required, it is the whole
 //! point), Microphone, and Input Monitoring (only to show typed shortcuts).
-//! DemoLens needs no Accessibility permission: clicks, the cursor and scroll
+//! Booya needs no Accessibility permission: clicks, the cursor and scroll
 //! come from permission free polling in `input.rs`. System audio goes through
 //! ScreenCaptureKit and so is covered by Screen Recording.
 //!
@@ -48,7 +48,7 @@ pub fn list() -> Vec<Item> {
     {
         let screen = if mac::screen_granted() { Status::Granted } else { Status::Denied };
         vec![
-            Item { id: SCREEN, title: "Screen Recording", detail: "Lets DemoLens see your screen so it can record it.", status: screen, required: true, note: "macOS may ask you to quit and reopen DemoLens after you switch this on." },
+            Item { id: SCREEN, title: "Screen Recording", detail: "Lets Booya see your screen so it can record it.", status: screen, required: true, note: "macOS may ask you to quit and reopen Booya after you switch this on." },
             Item { id: MIC, title: "Microphone", detail: "Records your voice with the video.", status: mac::mic_status(), required: false, note: "" },
             Item { id: INPUT, title: "Input Monitoring", detail: "Shows the shortcuts you press (like Cmd+K) in the video. Never what you type.", status: mac::input_status(), required: false, note: "" },
             Item { id: SYSTEM_AUDIO, title: "System audio", detail: "Records what your Mac plays. It uses the Screen Recording permission, and stays off until you switch it on in Record options.", status: screen, required: false, note: "" },
@@ -56,7 +56,7 @@ pub fn list() -> Vec<Item> {
     }
     #[cfg(windows)]
     {
-        vec![Item { id: MIC, title: "Microphone", detail: "Windows has a switch, \"Let desktop apps access your microphone\", that must be on for DemoLens to hear you.", status: win::mic_status(), required: false, note: "" }]
+        vec![Item { id: MIC, title: "Microphone", detail: "Windows has a switch, \"Let desktop apps access your microphone\", that must be on for Booya to hear you.", status: win::mic_status(), required: false, note: "" }]
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {

@@ -1,4 +1,4 @@
-//! DemoLens desktop app. The web UI is only a control surface: every preview
+//! Booya desktop app. The web UI is only a control surface: every preview
 //! frame is rendered by `demolens_core::render::Renderer`, the same code the
 //! exporter runs, and shipped to the UI as a PNG.
 
@@ -60,7 +60,7 @@ fn check_write(app: &tauri::AppHandle, path: &str, exts: &[&str]) -> R<PathBuf> 
     let p = PathBuf::from(path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !exts.contains(&ext.as_str()) {
-        return Err(format!("DemoLens only writes {} files here", exts.join(", ")));
+        return Err(format!("Booya only writes {} files here", exts.join(", ")));
     }
     if !app.state::<AppState>().granted.lock().unwrap().contains(&p) {
         return Err("Pick the file with the Save dialog first".into());
@@ -541,7 +541,7 @@ fn rec_mic_status(app: tauri::AppHandle) -> serde_json::Value {
 fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
     use std::sync::atomic::Ordering;
     let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()))
-        .title("DemoLens countdown")
+        .title("Booya countdown")
         .inner_size(200.0, 200.0)
         .resizable(false)
         .decorations(false)
@@ -755,11 +755,12 @@ fn pause_recording(app: tauri::AppHandle, paused: Option<bool>) -> R<bool> {
 /// (content protected), frosted on macOS. It sits at the top centre of the
 /// screen with the cursor on it.
 fn show_indicator(app: &tauri::AppHandle) {
+    tray_recording(app, true);
     if app.get_webview_window("indicator").is_some() {
         return;
     }
     let w = tauri::WebviewWindowBuilder::new(app, "indicator", tauri::WebviewUrl::App("indicator.html".into()))
-        .title("DemoLens is recording")
+        .title("Booya is recording")
         .inner_size(384.0, 52.0)
         .resizable(false)
         .decorations(false)
@@ -788,6 +789,7 @@ fn show_indicator(app: &tauri::AppHandle) {
 }
 
 fn hide_indicator(app: &tauri::AppHandle) {
+    tray_recording(app, false);
     if let Some(w) = app.get_webview_window("indicator") {
         let _ = w.close();
     }
@@ -804,7 +806,7 @@ struct Settings {
     retention_days: Option<u32>,
     /// Frosted glass look for the app itself (macOS vibrancy, or a CSS blur elsewhere).
     glass_ui: bool,
-    /// Show DemoLens in the menu bar (macOS) or the system tray (Windows).
+    /// Show Booya in the menu bar (macOS) or the system tray (Windows).
     menu_bar: bool,
     /// Shortcut overrides by action id. Missing means the default.
     shortcuts: demolens_core::shortcuts::Bindings,
@@ -955,7 +957,7 @@ fn list_recordings(app: tauri::AppHandle) -> R<Vec<RecordingInfo>> {
 }
 
 /// Delete one recording folder (video, audio, event log). Only folders
-/// inside the DemoLens recordings directory can be deleted.
+/// inside the Booya recordings directory can be deleted.
 #[tauri::command]
 fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
     let root = recordings_dir(&app)?.canonicalize().map_err(e)?;
@@ -963,7 +965,7 @@ fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
     let p = if p.is_file() { p.parent().map(|x| x.to_path_buf()).unwrap_or(p) } else { p };
     let c = p.canonicalize().map_err(e)?;
     if c.parent() != Some(root.as_path()) || !c.file_name().is_some_and(|n| n.to_string_lossy().starts_with("recording-")) {
-        return Err("Only DemoLens recording folders can be deleted here".into());
+        return Err("Only Booya recording folders can be deleted here".into());
     }
     std::fs::remove_dir_all(&c).map_err(e)
 }
@@ -1557,7 +1559,7 @@ async fn audio_bytes(app: tauri::AppHandle, path: String) -> R<tauri::ipc::Respo
         let p = PathBuf::from(&path).canonicalize().map_err(e)?;
         let ok_dir = dir.canonicalize().map(|d| p.starts_with(d)).unwrap_or(false);
         if !ok_dir || !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".audio.m4a") || n.ends_with(".audio.wav")) {
-            return Err("That is not a preview sound file made by DemoLens".to_string());
+            return Err("That is not a preview sound file made by Booya".to_string());
         }
         let bytes = std::fs::read(&p).map_err(e)?;
         Ok(tauri::ipc::Response::new(bytes))
@@ -1793,7 +1795,7 @@ async fn mic_list() -> R<Vec<String>> {
     blocking(|| Ok(demolens_core::capture::mics::list_mics())).await
 }
 
-/// The permissions screen: what DemoLens needs on this system and where each stands.
+/// The permissions screen: what Booya needs on this system and where each stands.
 #[tauri::command]
 fn permissions_list() -> serde_json::Value {
     let items = demolens_core::permissions::list();
@@ -1810,7 +1812,7 @@ async fn permissions_request(id: String) -> R<()> {
     blocking(move || demolens_core::permissions::request(&id).map(|_| ()).map_err(e)).await
 }
 
-/// Whether macOS lets DemoLens read the keyboard state (Input Monitoring).
+/// Whether macOS lets Booya read the keyboard state (Input Monitoring).
 /// With `prompt` the system dialog is shown the first time. Always true on
 /// other systems.
 #[tauri::command]
@@ -1953,7 +1955,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         b.build(app)
     };
     let settings = item("settings", "Settings...", Some("Cmd+,"))?;
-    let app_menu = SubmenuBuilder::new(app, "DemoLens")
+    let app_menu = SubmenuBuilder::new(app, "Booya")
         .about(None)
         .separator()
         .item(&settings)
@@ -1980,7 +1982,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .separator()
         .close_window()
         .build()?;
-    // Undo and Redo are DemoLens commands (the web view routes them to a text
+    // Undo and Redo are Booya commands (the web view routes them to a text
     // field when one has focus), so the standard Cmd+Z actually works.
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&item("undo", "Undo", Some("Cmd+Z"))?)
@@ -2215,17 +2217,43 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
         }
     }
     m.separator()
-        .item(&MenuItemBuilder::with_id("tray-show", "Show DemoLens").build(app)?)
-        .item(&MenuItemBuilder::with_id("tray-quit", "Quit DemoLens").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray-show", "Show Booya").build(app)?)
+        .item(&MenuItemBuilder::with_id("tray-quit", "Quit Booya").build(app)?)
         .build()
+}
+
+/// Menu bar glyphs from brand/ (88x88 raw RGBA, made from the PNGs): the outline ghost when idle, the filled one while recording.
+#[cfg(target_os = "macos")]
+const TRAY_IDLE: &[u8] = include_bytes!("../../brand/tray-template@2x.rgba");
+#[cfg(target_os = "macos")]
+const TRAY_REC: &[u8] = include_bytes!("../../brand/tray-recording@2x.rgba");
+
+/// Swap the menu bar glyph between idle and recording (macOS only).
+fn tray_recording(app: &tauri::AppHandle, on: bool) {
+    #[cfg(target_os = "macos")]
+    if let Some(t) = app.tray_by_id("main") {
+        let img = tauri::image::Image::new_owned((if on { TRAY_REC } else { TRAY_IDLE }).to_vec(), 88, 88);
+        let _ = t.set_icon(Some(img));
+        let _ = t.set_icon_as_template(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, on);
 }
 
 /// The menu bar (macOS) or tray (Windows) item with quick record.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::tray::TrayIconBuilder;
-    let mut b = TrayIconBuilder::with_id("main").menu(&tray_menu(app)?).tooltip("DemoLens");
-    if let Some(icon) = app.default_window_icon() {
+    let mut b = TrayIconBuilder::with_id("main").menu(&tray_menu(app)?).tooltip("Booya");
+    // The Mac menu bar gets the single colour ghost outline as a template image, so it
+    // follows the light or dark bar. Windows keeps the full colour app icon.
+    #[cfg(target_os = "macos")]
+    let template = Some(tauri::image::Image::new_owned(TRAY_IDLE.to_vec(), 88, 88));
+    #[cfg(not(target_os = "macos"))]
+    let template: Option<tauri::image::Image<'static>> = None;
+    if let Some(img) = template {
+        b = b.icon(img).icon_as_template(true);
+    } else if let Some(icon) = app.default_window_icon() {
         b = b.icon(icon.clone());
     }
     let tray = b.build(app)?;
@@ -2271,7 +2299,7 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     if !can_self_update() {
         return Err("This copy was installed from a .deb or .rpm package. Update it with your package manager or download the new release.".into());
     }
-    let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("DemoLens is already up to date.".into()) };
+    let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into()) };
     let mut got: u64 = 0;
     let handle = app.clone();
     update
@@ -2484,7 +2512,7 @@ fn main() {
             s3_upload
         ])
         .build(tauri::generate_context!())
-        .expect("error while building DemoLens")
+        .expect("error while building Booya")
         .run(|app, event| {
             // Quitting must not leave ffmpeg recording or a mic meter running:
             // drop the live sessions, whose Drop stops their child processes.

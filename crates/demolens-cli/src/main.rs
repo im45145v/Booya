@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 mod ai;
 mod bench;
 
-const HELP: &str = "DemoLens: local screen recorder for product demos
+const HELP: &str = "Booya: local screen recorder for product demos
 
 USAGE:
   demolens record [--screen N | --window ID | --area X,Y,W,H] [--mic] [--system-audio]

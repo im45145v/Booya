@@ -1,4 +1,4 @@
-//! DemoLens core: event log, auto zoom, compositor, export and capture.
+//! Booya core: event log, auto zoom, compositor, export and capture.
 
 pub mod captions;
 pub mod capture;

@@ -126,7 +126,7 @@ pub fn delete_recording(root: &Path, dir: &Path) -> Result<u64> {
     let c = dir.canonicalize()?;
     let ok_name = c.file_name().is_some_and(|n| n.to_string_lossy().starts_with("recording-"));
     if c.parent() != Some(root_c.as_path()) || !ok_name {
-        bail!("Only DemoLens recording folders can be deleted here");
+        bail!("Only Booya recording folders can be deleted here");
     }
     let bytes = dir_bytes(&c);
     std::fs::remove_dir_all(&c)?;

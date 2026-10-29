@@ -1,4 +1,4 @@
-//! DemoLens local AI. Everything here runs on the user's machine with open
+//! Booya local AI. Everything here runs on the user's machine with open
 //! weight models that are downloaded on first use. No cloud APIs.
 //!
 //! * `models`     list, download and delete models (sizes shown up front)
