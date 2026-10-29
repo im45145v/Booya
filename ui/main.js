@@ -786,7 +786,7 @@ async function checkFfmpeg(force) {
 }
 async function showAbout() {
   let st = {}; try { st = await invoke('ffmpeg_status'); } catch {}
-  modal('About Booya', `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
+  modal('About Booya', `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/Booya" target="_blank">github.com/im45145v/Booya</a></p>
   <p><b>ffmpeg:</b> ${st.found ? esc(st.version) + (st.bundled ? ' (bundled)' : '') + '<br><span class="hint">' + esc(st.path) + '</span>' : 'not found'}</p>
   <p class="hint">This app bundles FFmpeg (https://ffmpeg.org), licensed under the GNU GPL version 2 or later (the bundled builds include GPL components). FFmpeg is a trademark of Fabrice Bellard. Source code for the bundled builds is available from the builders: BtbN/FFmpeg-Builds (Linux, Windows) and ffmpeg.martin-riedl.de (macOS). See THIRD_PARTY_NOTICES.md in the repository.</p>
   <p class="hint">Models are downloaded separately and keep their own licenses.</p>`);

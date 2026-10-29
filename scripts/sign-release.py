@@ -18,7 +18,7 @@ import sys
 import tempfile
 import urllib.request
 
-REPO = os.environ.get("DEMOLENS_REPO", "im45145v/DemoLens")
+REPO = os.environ.get("DEMOLENS_REPO", "im45145v/Booya")
 KEY = os.environ.get("DEMOLENS_UPDATER_KEY", "/workspace/secrets/demolens-updater.key")
 PW = os.environ.get("DEMOLENS_UPDATER_KEY_PASSWORD_FILE", KEY.replace(".key", ".password"))
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN_DEMOLENS")
