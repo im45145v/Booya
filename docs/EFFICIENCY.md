@@ -4,7 +4,7 @@ Booya runs on laptops, often while a call or a browser is open, so it tries to u
 
 ## What Booya does to save work
 
-- **Hardware video encoding.** Recording and export use the Mac's media engine (`h264_videotoolbox`) on macOS and NVENC on NVIDIA machines. Booya checks once per run that the encoder actually opens, and falls back to software x264 if it does not. If a hardware export fails partway, it is redone in software automatically. Set `DEMOLENS_ENCODER=software` to force software.
+- **Hardware video encoding.** Recording and export use the Mac's media engine (`h264_videotoolbox`) on macOS and NVENC on NVIDIA machines. Booya checks once per run that the encoder actually opens, and falls back to software x264 if it does not. If a hardware export fails partway, it is redone in software automatically. Set `BOOYA_ENCODER=software` to force software.
 - **Faster software export preset.** When software encoding is used, export uses x264 `veryfast` at CRF 18 instead of `medium`.
 - **Decode only the pixels that are needed.** A Retina recording is decoded at the smallest size that still gives one source pixel per output pixel at the deepest zoom in the project. With no zoom, a 2880x1800 recording exported at 1080p is decoded at about 1680 wide. Zoomed projects decode at full size where needed, so zooms stay sharp. Blur boxes are scaled to match, so redaction is unchanged.
 - **The drop shadow is painted once.** It used to be recomputed for every pixel of every frame. It is now baked into the background when the renderer is created, and each frame only visits the rows and columns the recording card covers. The output is pixel identical (checked by comparing raw RGBA hashes of preview frames before and after).
@@ -24,8 +24,8 @@ Measured on the Linux build machine (8 vCPUs, software x264, no GPU encoder) on 
 | Export the built-in 1920x1080 sample (with zooms) to 1080p, wall time | 7.7 s | 7.2 s | 7% faster |
 | Same sample export, CPU time | 41.3 s | 32.9 s | 20% less CPU |
 | x264 alone, 20 s of 1080p30, `medium` vs `veryfast` at CRF 18, CPU time | 29.1 s | 15.2 s | 48% less CPU |
-| CLI binary size (`demolens`) | 18.5 MB | 13.0 MB | 30% smaller |
-| App binary size (`demolens-app`) | 29.3 MB | 18.8 MB | 36% smaller |
+| CLI binary size (`booya`) | 18.5 MB | 13.0 MB | 30% smaller |
+| App binary size (`booya-app`) | 29.3 MB | 18.8 MB | 36% smaller |
 
 Quality check: PSNR of the new export against the old one is 41.9 dB for the Retina test clip and 55.2 dB for the sample. Above 40 dB the difference is not visible.
 

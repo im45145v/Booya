@@ -4,8 +4,6 @@
 
 <p align="center"><b>Record it. Booya.</b></p>
 
-> Booya was formerly called DemoLens. Nothing else changed: same app, same recordings folder, same updates. The command line tool is still called `demolens`.
-
 Booya is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
 
 While you record, Booya writes the cursor, clicks and key presses to a file next to the video. The editor uses that file to zoom on the right spots, draw a clean cursor and show key presses. Export to MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.
@@ -75,11 +73,11 @@ If you record developer tools, your screen is full of tokens, emails and custome
 - **First run on a Mac**: a Welcome screen asks for Screen Recording (required), Microphone, Input Monitoring and System audio, one row each with a button that asks or opens the exact Settings page, and tells you if an update switched one off. It is also under Settings > Permissions. Windows and Linux show the microphone only.
 - **Glass frame**: Style > Glass puts the recording on a frosted panel over the background, with adjustable blur, tint, edge light, corner radius and inset. Captions, notes and key labels use the same frosted look. The built-in presets "Frosted" and "Frosted dark" start from it.
 - **Styling**: gradient, solid or your own photo as the background (png, jpg, heic, webp; fit, fill or blur, dim; copied into the project folder), padding, rounded corners, a soft shadow, an optional text watermark, twelve built-in wallpapers, intro and outro title cards, timed text callouts and drawn shapes (arrow, box, ellipse, highlight).
-- **Interactive demo**: `demolens interactive demo.json` (or the Auto edit tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
+- **Interactive demo**: `booya interactive demo.json` (or the Auto edit tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot, or hover a window and click to snap to its exact frame (hold Alt, Option on a Mac, to turn snapping off). Edges snap to nearby window and screen edges while you drag.
 - **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
-- **Auto edit**: one button (or `D`, or `demolens ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
+- **Auto edit**: one button (or `D`, or `booya ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
 - **Editor**: dark and light themes, an optional glass look for the app (Settings > Appearance), undo and redo, a timeline you can zoom and scrub, and keyboard shortcuts for most actions (press `?`). Opening a video also loads the event log next to it.
 - **Local models** (optional, offline, see below): captions, auto cut of filler words and long pauses, blur for emails, API keys and card numbers, and written docs (title, chapters, a step by step guide, a social post).
 - **Audio cleanup**: background noise removal and mute.
@@ -102,14 +100,14 @@ Booya uses the Mac media engine for encoding where it can and avoids work it doe
  └──────────────┘             └────────────────────────────────┘
 ```
 
-The important design choice is that there is **one render path**. The editor preview and the exporter both call `Renderer::render` in `demolens-core`, so the preview is exactly what you will export. The web UI never draws video pixels itself; it only edits the project and shows frames rendered by Rust.
+The important design choice is that there is **one render path**. The editor preview and the exporter both call `Renderer::render` in `booya-core`, so the preview is exactly what you will export. The web UI never draws video pixels itself; it only edits the project and shows frames rendered by Rust.
 
 Repository layout:
 
 | Path | What it is |
 |------|------------|
-| `crates/demolens-core` | The engine. `events` (event log format, cursor track and smoothing), `zoom` (auto zoom generation and the eased camera), `render` (compositor: background, shadow, rounded frame, zoomed video, blur, cursor, ripples, key overlay), `export` (decode, render, encode), `ffmpeg` (probe and pipes), `project` (timeline model with trim, split and speed), `preset`, `capture` (per OS backends) and `input` (global hooks). |
-| `crates/demolens-cli` | The `demolens` command line tool. Everything the editor does can be scripted. |
+| `crates/booya-core` | The engine. `events` (event log format, cursor track and smoothing), `zoom` (auto zoom generation and the eased camera), `render` (compositor: background, shadow, rounded frame, zoomed video, blur, cursor, ripples, key overlay), `export` (decode, render, encode), `ffmpeg` (probe and pipes), `project` (timeline model with trim, split and speed), `preset`, `capture` (per OS backends) and `input` (global hooks). |
+| `crates/booya-cli` | The `booya` command line tool. Everything the editor does can be scripted. |
 | `src-tauri` | The Tauri 2 desktop app. Thin command layer over the core. |
 | `ui` | Plain HTML, CSS and JS editor. No bundler, no Node needed. |
 
@@ -120,7 +118,7 @@ The renderer is plain Rust on the CPU, parallelised over rows with rayon. On an 
 JSON Lines. The first line is a header, then one event per line. Times are milliseconds since the first video frame and coordinates are in video pixels.
 
 ```json
-{"demolens_events":1,"width":1920,"height":1080,"origin_x":0,"origin_y":0,"scale":1.0}
+{"booya_events":1,"width":1920,"height":1080,"origin_x":0,"origin_y":0,"scale":1.0}
 {"t":1203.5,"kind":"move","x":160.0,"y":232.0}
 {"t":1350.0,"kind":"click","x":160.0,"y":232.0,"button":"left"}
 {"t":5200.0,"kind":"key","key":"i","modifiers":[]}
@@ -129,13 +127,13 @@ JSON Lines. The first line is a header, then one event per line. Times are milli
 
 ### Auto zoom
 
-The camera stays on the whole screen and zooms only for a cluster of clicks (3 in one small area within 4.5 s on Normal, a setting), a burst of typing over 1.5 s, or a marker. It eases out while you scroll, never zooms in the first second and holds long. The full rules and numbers are in `docs/EDITING.md`. At render time the camera moves on a critically damped spring curve, follows the smoothed cursor inside a dead zone, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/demolens-core/src/zoom.rs`.
+The camera stays on the whole screen and zooms only for a cluster of clicks (3 in one small area within 4.5 s on Normal, a setting), a burst of typing over 1.5 s, or a marker. It eases out while you scroll, never zooms in the first second and holds long. The full rules and numbers are in `docs/EDITING.md`. At render time the camera moves on a critically damped spring curve, follows the smoothed cursor inside a dead zone, and is clamped so the zoomed view never leaves the frame. All of this is covered by unit tests in `crates/booya-core/src/zoom.rs`.
 
 ## Local models
 
 By default the captioning, cutting, blurring and writing features run on your own machine. Nothing is sent anywhere, and nothing is downloaded until you ask for it (models come from Hugging Face, GitHub and AWS and are SHA-256 checked). Without any model installed, everything else still works and each button tells you which model it needs.
 
-Open **Models...** in the app (or run `demolens models list`) to see, download and delete models. They live in `~/.config/demolens/models` (the platform config folder on macOS and Windows). Once downloaded, everything works with no network.
+Open **Models...** in the app (or run `booya models list`) to see, download and delete models. They live in `~/.config/booya/models` (the platform config folder on macOS and Windows). Once downloaded, everything works with no network.
 
 | Model | Size | Used for | License |
 |-------|------|----------|---------|
@@ -154,7 +152,7 @@ What each feature does:
 - **Auto blur secrets**: samples frames (skipping frames that did not change), reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), bearer tokens, card numbers (Luhn checked), phone numbers, Aadhaar (Verhoeff checked), PAN, UPI IDs, IBANs (mod 97), IP addresses and password fields. It can miss text: watch the export before sharing.
 - **Write docs**: builds steps from the transcript, clicks, typing and zooms, then writes a title, YouTube style chapters, a Markdown guide and a short social post. With no LLM it falls back to a rule based writer.
 
-The LLM is found in this order: `DEMOLENS_LLM_URL` (any OpenAI compatible server, this machine only unless you also set `DEMOLENS_ALLOW_REMOTE_LLM=1`, in which case it must be https and the app asks first), Ollama on port 11434, a server on port 8080, then the bundled llama.cpp runtime with a downloaded Qwen model.
+The LLM is found in this order: `BOOYA_LLM_URL` (any OpenAI compatible server, this machine only unless you also set `BOOYA_ALLOW_REMOTE_LLM=1`, in which case it must be https and the app asks first), Ollama on port 11434, a server on port 8080, then the bundled llama.cpp runtime with a downloaded Qwen model.
 
 Honest limits: Whisper often drops filler words or writes them as real words, so auto cut finds fewer fillers than a human would. The 0.5B model writes plain but usable text; the 1.5B model or your own Ollama model writes better.
 
@@ -191,8 +189,8 @@ These integrations are tested against mocked HTTP servers. They follow each prov
 Booya runs on your computer. There is no account, no telemetry, no analytics and no crash reporting.
 
 - **What it records:** your screen, and your microphone, system audio and webcam only if you turn them on. If you turn on key capture, it records which shortcuts you press (the full combo) and when you type, but not the characters you type: letters are stored only as part of a Ctrl/Alt/Option/Cmd/Win shortcut. Cursor moves and clicks are logged for auto zoom. The recording pill is visible while recording.
-- **Where it goes:** `Videos/DemoLens/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
-- **Network use:** only when you download models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `DEMOLENS_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
+- **Where it goes:** `Videos/Booya/` on your computer, in folders only you can read. Settings > Privacy can delete old recordings automatically or everything at once.
+- **Network use:** only when you download models (from Hugging Face, GitHub and AWS), or when you turn on a cloud provider or your own storage, which show what will be sent first. If you set `BOOYA_ALLOW_REMOTE_LLM=1`, transcript text is sent to the server you choose.
 - **Auto blur helps but is not perfect.** Always watch your export before sharing.
 - **Recording other people:** if your screen, mic or calls include other people, you are responsible for telling them and having a lawful reason under laws such as GDPR or India's DPDP Act.
 
@@ -204,16 +202,16 @@ See [PRIVACY.md](PRIVACY.md) for details and [SECURITY.md](SECURITY.md) to repor
 |----|-------|------------|--------------|-----------|
 | Linux (X11) | ffmpeg `x11grab`: screen, window (by X id), area | PulseAudio / PipeWire | Pulse monitor source | rdev (XRecord) |
 | Linux (Wayland) | Not supported yet: use an X11 session. Planned: xdg-desktop-portal ScreenCast + PipeWire | | | |
-| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `demolens sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the Booya window and REC badge are left out | avfoundation (audio only) | ScreenCaptureKit audio stream (macOS 13+, off by default, written on the side and mixed in; not yet run on a Mac) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
-| Windows | ffmpeg `gdigrab`: screen, window (by title), area | WASAPI in process (DirectShow as fallback; set `DEMOLENS_MIC` to choose) | WASAPI loopback of the default speakers (off by default, written on the side and mixed in) | rdev |
+| macOS (12.3+) | ScreenCaptureKit: screen, area (hover a window to snap), window, picked visually (live previews need macOS 14+; `booya sources --thumbs dir` shows what the picker sees). Frames go to ffmpeg; the Booya window and REC badge are left out | avfoundation (audio only) | ScreenCaptureKit audio stream (macOS 13+, off by default, written on the side and mixed in; not yet run on a Mac) | CoreGraphics pointer poller (no Accessibility permission). Keys: opt-in CGEventTap (poller as fallback) that needs Input Monitoring; shortcuts keep their key, plain typing does not |
+| Windows | ffmpeg `gdigrab`: screen, window (by title), area | WASAPI in process (DirectShow as fallback; set `BOOYA_MIC` to choose) | WASAPI loopback of the default speakers (off by default, written on the side and mixed in) | rdev |
 
-Native GPU capture on Windows (Windows.Graphics.Capture) is stubbed with a TODO in `crates/demolens-core/src/capture/`. Run `demolens doctor --audio` to record 3 seconds from the microphone and see its level. The ffmpeg output of a recording's audio is kept in `audio.log` in the project folder.
+Native GPU capture on Windows (Windows.Graphics.Capture) is stubbed with a TODO in `crates/booya-core/src/capture/`. Run `booya doctor --audio` to record 3 seconds from the microphone and see its level. The ffmpeg output of a recording's audio is kept in `audio.log` in the project folder.
 
-### Is capture working? `demolens doctor`
+### Is capture working? `booya doctor`
 
 ```bash
-demolens doctor            # prints JSON, exit code 1 if the test capture failed
-demolens doctor --seconds 5
+booya doctor            # prints JSON, exit code 1 if the test capture failed
+booya doctor --seconds 5
 ```
 
 It reports the Screen Recording permission, the displays ScreenCaptureKit sees (macOS), the ffmpeg in use, and a short test capture (file size, frame count, resolution). `next_steps` says what to fix. On macOS the permission belongs to the app that launched the command, so allow your terminal under System Settings > Privacy & Security > Screen & System Audio Recording.
@@ -222,7 +220,7 @@ The macOS build is ad-hoc signed, so each update is a new app identity to macOS.
 
 ## Building
 
-You need Rust 1.88 or newer (`rustup` recommended) and `ffmpeg` plus `ffprobe` on your `PATH` (or point `DEMOLENS_FFMPEG` and `DEMOLENS_FFPROBE` at them).
+You need Rust 1.88 or newer (`rustup` recommended) and `ffmpeg` plus `ffprobe` on your `PATH` (or point `BOOYA_FFMPEG` and `BOOYA_FFPROBE` at them).
 
 ### Linux (Debian / Ubuntu)
 
@@ -230,8 +228,8 @@ You need Rust 1.88 or newer (`rustup` recommended) and `ffmpeg` plus `ffprobe` o
 sudo apt install ffmpeg x11-utils pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
   librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev \\
   cmake clang libclang-dev   # cmake and clang build whisper.cpp
-cargo build --release                       # CLI: target/release/demolens
-cargo build --release -p demolens-app       # desktop app: target/release/demolens-app
+cargo build --release                       # CLI: target/release/booya
+cargo build --release -p booya-app       # desktop app: target/release/booya-app
 ```
 
 Fedora: `sudo dnf install ffmpeg webkit2gtk4.1-devel gtk3-devel librsvg2-devel libxdo-devel openssl-devel libXtst-devel libXi-devel`.
@@ -241,7 +239,7 @@ Fedora: `sudo dnf install ffmpeg webkit2gtk4.1-devel gtk3-devel librsvg2-devel l
 ```sh
 xcode-select --install
 brew install ffmpeg cmake
-cargo build --release -p demolens-app
+cargo build --release -p booya-app
 ```
 
 Grant Screen Recording and Accessibility permission to the app (or your terminal) the first time you record.
@@ -253,7 +251,7 @@ Install the Visual Studio C++ Build Tools and WebView2 (preinstalled on Windows 
 ```powershell
 winget install Gyan.FFmpeg
 winget install Kitware.CMake LLVM.LLVM   # for whisper.cpp
-cargo build --release -p demolens-app
+cargo build --release -p booya-app
 ```
 
 To build installers (`.deb`, `.AppImage`, `.dmg`, `.msi`) install the Tauri CLI with `cargo install tauri-cli --version "^2"` and run `cargo tauri build` inside `src-tauri`.
@@ -263,48 +261,48 @@ To build installers (`.deb`, `.AppImage`, `.dmg`, `.msi`) install the Tauri CLI 
 Desktop app:
 
 ```sh
-target/release/demolens-app                      # empty editor, use Record or Open
-target/release/demolens-app my.demolens.json     # open a project
+target/release/booya-app                      # empty editor, use Record or Open
+target/release/booya-app my.booya.json     # open a project
 ```
 
 Command line:
 
 ```sh
-demolens record --area 0,0,1920,1080 --mic --system-audio --out rec   # Enter to stop
-demolens new rec/recording.mkv -o demo.json        # probe, load events, auto zoom
-demolens trim demo.json 500 11500
-demolens split demo.json 7500
-demolens speed demo.json 1 2
-demolens blur demo.json 420,300,600,200
-demolens preview demo.json --at 3000 -o frame.png
-demolens export demo.json -o demo.mp4 --aspect 9:16 --quality 2160
-demolens export demo.json -o demo.gif --aspect 1:1 --quality 480 --fps 15
-demolens preset save demo.json "Acme"     # later: demolens preset apply other.json "Acme"
+booya record --area 0,0,1920,1080 --mic --system-audio --out rec   # Enter to stop
+booya new rec/recording.mkv -o demo.json        # probe, load events, auto zoom
+booya trim demo.json 500 11500
+booya split demo.json 7500
+booya speed demo.json 1 2
+booya blur demo.json 420,300,600,200
+booya preview demo.json --at 3000 -o frame.png
+booya export demo.json -o demo.mp4 --aspect 9:16 --quality 2160
+booya export demo.json -o demo.gif --aspect 1:1 --quality 480 --fps 15
+booya preset save demo.json "Acme"     # later: booya preset apply other.json "Acme"
 ```
 
 Try the whole pipeline without recording anything:
 
 ```sh
-demolens sample samples          # synthetic app video + event log + project
-demolens export samples/sample.demolens.json -o demo.mp4
+booya sample samples          # synthetic app video + event log + project
+booya export samples/sample.booya.json -o demo.mp4
 ```
 
 Models from the command line:
 
 ```sh
-demolens models list
-demolens models download whisper-base.en
-demolens transcribe demo.json
-demolens captions demo.json -o demo.srt          # or --burn --size 48
-demolens autocut demo.json --pause 0.7
-demolens redact demo.json
-demolens docs demo.json -o docs/                 # --no-llm for the rule based writer
-demolens audio demo.json --denoise
-demolens ready demo.json                         # all of the above in one go
-demolens sample samples --speech                 # sample with espeak-ng narration and fake secrets
+booya models list
+booya models download whisper-base.en
+booya transcribe demo.json
+booya captions demo.json -o demo.srt          # or --burn --size 48
+booya autocut demo.json --pause 0.7
+booya redact demo.json
+booya docs demo.json -o docs/                 # --no-llm for the rule based writer
+booya audio demo.json --denoise
+booya ready demo.json                         # all of the above in one go
+booya sample samples --speech                 # sample with espeak-ng narration and fake secrets
 ```
 
-Run the tests with `cargo test -p demolens-core -p demolens-ai`.
+Run the tests with `cargo test -p booya-core -p booya-ai`.
 
 ## Roadmap
 

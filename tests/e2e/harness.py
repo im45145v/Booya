@@ -1,6 +1,6 @@
 """Drives the real Booya editor UI in Chrome with a stand in for the Tauri
 shell. The media, project file and preview frames come from the real pipeline
-(`cargo run -p demolens-core --example e2e_fixture`)."""
+(`cargo run -p booya-core --example e2e_fixture`)."""
 import functools, http.server, json, os, re, subprocess, threading, urllib.parse
 from pathlib import Path
 
@@ -69,7 +69,7 @@ def out_to_src(project, o):
 
 def build_fixture(fx: Path, speech=False):
     fx.mkdir(parents=True, exist_ok=True)
-    args = ["cargo", "run", "-q", "-p", "demolens-core", "--example", "e2e_fixture", "--", str(fx)] + (["speech"] if speech else [])
+    args = ["cargo", "run", "-q", "-p", "booya-core", "--example", "e2e_fixture", "--", str(fx)] + (["speech"] if speech else [])
     subprocess.run(args, cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     return fx
 
@@ -84,7 +84,7 @@ class Studio:
         self.errors = []
         self.extra = extra or {}
         self.project = json.loads((self.fx / "project.json").read_text())
-        self.project_path = str(self.fx / "e2e.demolens")
+        self.project_path = str(self.fx / "e2e.booya")
         Handler.fx = self.fx
         Handler.log = self.requests
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)

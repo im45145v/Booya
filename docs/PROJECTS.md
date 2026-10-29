@@ -2,10 +2,10 @@
 
 ## What a project is
 
-Save a project and Booya writes a **folder** that ends in `.demolens`:
+Save a project and Booya writes a **folder** that ends in `.booya`:
 
 ```
-My demo.demolens/
+My demo.booya/
   project.json        everything you set: clips, zooms, captions, callouts, style
   transcript.json     the transcript, when there is one
   media/              the recording, its microphone and webcam parts

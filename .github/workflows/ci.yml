@@ -46,14 +46,14 @@ jobs:
           fi
           ffmpeg -version | head -1
       - name: Test core and AI
-        run: cargo test -p demolens-core -p demolens-ai
+        run: cargo test -p booya-core -p booya-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
       - name: Sound against picture, every stage that works on files
         shell: bash
         run: |
           set +e
-          target/release/demolens syncprobe | tee sync.txt
+          target/release/booya syncprobe | tee sync.txt
           code=${PIPESTATUS[0]}
           { echo "### Sound vs picture on $RUNNER_OS"; echo; cat sync.txt; } >> "$GITHUB_STEP_SUMMARY"
           exit $code
@@ -75,7 +75,7 @@ jobs:
           Start-Sleep -Seconds 2
           ffmpeg -v error -y -f gdigrab -framerate 30 -t 14 -i desktop -c:v libx264 -preset ultrafast gdi.mp4
           Stop-Job $job; Remove-Job $job -Force
-          $r = & target/release/demolens.exe syncprobe --flashes gdi.mp4
+          $r = & target/release/booya.exe syncprobe --flashes gdi.mp4
           $code = $LASTEXITCODE
           "### Windows screen capture clock`n`n$r" | Out-File -Append $env:GITHUB_STEP_SUMMARY
           $r
@@ -86,7 +86,7 @@ jobs:
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = "$PWD\target\release\demolens.exe"
+          $exe = "$PWD\target\release\booya.exe"
           # A folder name with spaces: every path the app builds must survive them.
           $dir = Join-Path $env:RUNNER_TEMP 'demo lens rec'
           New-Item -ItemType Directory -Force $dir | Out-Null
@@ -137,7 +137,7 @@ jobs:
         run: |
           # The runner has no microphone, or a virtual one. Either way the
           # pipeline has to finish and say what happened, never stay silent.
-          $out = & "$PWD\target\release\demolens.exe" doctor --audio --seconds 2 | Out-String
+          $out = & "$PWD\target\release\booya.exe" doctor --audio --seconds 2 | Out-String
           $code = $LASTEXITCODE
           $out
           $r = $out | ConvertFrom-Json
@@ -161,8 +161,8 @@ jobs:
         timeout-minutes: 15
         run: |
           brew install ffmpeg
-          target/release/demolens bench --seconds 8 | tee bench.txt
-          target/release/demolens bench --seconds 8 --json > bench.json
+          target/release/booya bench --seconds 8 | tee bench.txt
+          target/release/booya bench --seconds 8 --json > bench.json
           echo '```' >> "$GITHUB_STEP_SUMMARY"; cat bench.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
   capture-sync:
     # Real capture on Linux: Xvfb + x11grab for the screen, a PulseAudio null
@@ -182,7 +182,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y ffmpeg xvfb x11-utils x11-xserver-utils pulseaudio pulseaudio-utils libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config cmake clang libclang-dev
       - name: Build the CLI
-        run: cargo build --release -p demolens-cli
+        run: cargo build --release -p booya-cli
       - name: Start a screen and a sound card
         run: |
           Xvfb :99 -screen 0 1280x720x24 &
@@ -196,7 +196,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           set +e
-          target/release/demolens syncprobe --capture --seconds 20 | tee sync.txt
+          target/release/booya syncprobe --capture --seconds 20 | tee sync.txt
           code=${PIPESTATUS[0]}
           { echo "### Linux capture, sound vs picture"; echo; cat sync.txt; } >> "$GITHUB_STEP_SUMMARY"
           exit $code
@@ -217,10 +217,10 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y ffmpeg espeak-ng libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config cmake clang libclang-dev
       - name: Build the CLI
-        run: cargo build --release -p demolens-cli
+        run: cargo build --release -p booya-cli
       - name: Subtitles on real speech
         shell: bash
-        run: python3 scripts/subtitles_e2e.py target/release/demolens "$RUNNER_TEMP/subs" | tee subs.txt
+        run: python3 scripts/subtitles_e2e.py target/release/booya "$RUNNER_TEMP/subs" | tee subs.txt
       - name: Summary
         if: always()
         run: |
@@ -244,7 +244,7 @@ jobs:
           python3 -m pip install playwright pillow
           google-chrome --version
       - name: Build the test recording
-        run: cargo run -q -p demolens-core --example e2e_fixture -- "$RUNNER_TEMP/fx" speech
+        run: cargo run -q -p booya-core --example e2e_fixture -- "$RUNNER_TEMP/fx" speech
       - name: The editor can be heard
         run: python3 tests/e2e/test_audio.py "$RUNNER_TEMP/fx"
       - name: Permissions screen
@@ -257,7 +257,7 @@ jobs:
         run: python3 tests/e2e/test_scenes.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layouts in the real renderer and exporter
         run: |
-          cargo run -q -p demolens-core --release --example layouts_gallery -- "$RUNNER_TEMP/gal"
+          cargo run -q -p booya-core --release --example layouts_gallery -- "$RUNNER_TEMP/gal"
           python3 tests/e2e/check_gallery.py "$RUNNER_TEMP/gal"
           mkdir -p "$RUNNER_TEMP/shots/layouts" && cp "$RUNNER_TEMP/gal/shots/"*.png "$RUNNER_TEMP/shots/layouts/"
       - name: Screenshots of the editor

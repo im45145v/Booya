@@ -78,7 +78,7 @@ renderRecent();
 async function duplicateProject() {
   if (!project) return;
   try {
-    const target = await dialog.save({ defaultPath: stem(project.source) + ' copy.demolens', filters: [{ name: 'Booya project', extensions: ['demolens'] }] });
+    const target = await dialog.save({ defaultPath: stem(project.source) + ' copy.booya', filters: [{ name: 'Booya project', extensions: ['booya'] }] });
     if (!target) return;
     readPanel(); checkpoint();
     showBusy('Copying the project...');
@@ -89,7 +89,7 @@ async function duplicateProject() {
 
 // ---------- Project menu ----------
 $('proj-btn').onclick = () => {
-  modal('Project', `<p class="muted small">A project is a folder ending in .demolens. It holds the edit and a copy of the recording, so you can move it, back it up or send it.</p>
+  modal('Project', `<p class="muted small">A project is a folder ending in .booya. It holds the edit and a copy of the recording, so you can move it, back it up or send it.</p>
     <div class="list">
       <button class="btn" data-pm="save-as">Save as...</button>
       <button class="btn" data-pm="duplicate">Duplicate...</button>

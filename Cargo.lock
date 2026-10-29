@@ -393,6 +393,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "booya-ai"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "booya-core",
+ "hmac",
+ "ocrs",
+ "regex",
+ "rten",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "whisper-rs",
+]
+
+[[package]]
+name = "booya-app"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "booya-ai",
+ "booya-core",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-updater",
+]
+
+[[package]]
+name = "booya-cli"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "booya-ai",
+ "booya-core",
+ "serde_json",
+]
+
+[[package]]
+name = "booya-core"
+version = "0.7.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "cpal",
+ "nnnoiseless",
+ "png 0.17.16",
+ "rayon",
+ "rdev",
+ "screencapturekit",
+ "serde",
+ "serde_json",
+ "windows-sys 0.52.0",
+ "x11",
+]
+
+[[package]]
 name = "brotli"
 version = "9.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1012,70 +1076,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71958f69fb2de856c5dd51ac9377e986ca1aa5919f931bf5395a807277f889a0"
 dependencies = [
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "demolens-ai"
-version = "0.7.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "demolens-core",
- "hmac",
- "ocrs",
- "regex",
- "rten",
- "serde",
- "serde_json",
- "sha2",
- "ureq",
- "whisper-rs",
-]
-
-[[package]]
-name = "demolens-app"
-version = "0.7.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "demolens-ai",
- "demolens-core",
- "keyring",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-updater",
-]
-
-[[package]]
-name = "demolens-cli"
-version = "0.7.0"
-dependencies = [
- "anyhow",
- "demolens-ai",
- "demolens-core",
- "serde_json",
-]
-
-[[package]]
-name = "demolens-core"
-version = "0.7.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "cpal",
- "nnnoiseless",
- "png 0.17.16",
- "rayon",
- "rdev",
- "screencapturekit",
- "serde",
- "serde_json",
- "windows-sys 0.52.0",
- "x11",
 ]
 
 [[package]]

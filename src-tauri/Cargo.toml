@@ -1,5 +1,5 @@
 [package]
-name = "demolens-app"
+name = "booya-app"
 description = "Booya desktop editor (Tauri 2)"
 version.workspace = true
 edition.workspace = true
@@ -10,13 +10,13 @@ authors.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-demolens-core = { path = "../crates/demolens-core", features = ["input-hooks"] }
+booya-core = { path = "../crates/booya-core", features = ["input-hooks"] }
 tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 base64 = "0.22"
-demolens-ai = { path = "../crates/demolens-ai" }
+booya-ai = { path = "../crates/booya-ai" }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"

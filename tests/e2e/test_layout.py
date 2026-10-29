@@ -93,7 +93,7 @@ with sync_playwright() as pw:
     mouse_drag("#split-v", 900, 0)
     assert abs(panel_w() - 260) <= 1, ("panel min", panel_w())
     # saved, and back after a reload
-    saved = p.evaluate("JSON.parse(localStorage.getItem('demolens.layout.v1'))")
+    saved = p.evaluate("JSON.parse(localStorage.getItem('booya.layout.v1'))")
     assert saved["panel"] == 260, saved
     # horizontal
     pre_h = box("#preview-wrap")[3]
@@ -112,7 +112,7 @@ with sync_playwright() as pw:
     p.dblclick("#split-v"); p.dblclick("#split-h")
     p.wait_for_timeout(100)
     assert abs(panel_w() - 300) <= 1 and abs(tl_h() - 252) <= 1, (panel_w(), tl_h())
-    assert p.evaluate("JSON.parse(localStorage.getItem('demolens.layout.v1'))") == {"panel": 300, "tl": 252}
+    assert p.evaluate("JSON.parse(localStorage.getItem('booya.layout.v1'))") == {"panel": 300, "tl": 252}
     # keyboard
     p.focus("#split-v"); p.keyboard.press("ArrowLeft")
     assert abs(panel_w() - 310) <= 1, panel_w()

@@ -1,9 +1,9 @@
-//! Turns a binding from `demolens_core::shortcuts` into an OS shortcut.
+//! Turns a binding from `booya_core::shortcuts` into an OS shortcut.
 
-use demolens_core::shortcuts::Combo;
+use booya_core::shortcuts::Combo;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
-/// Every key name `demolens_core::shortcuts::valid_key` accepts.
+/// Every key name `booya_core::shortcuts::valid_key` accepts.
 fn code_from_name(name: &str) -> Option<Code> {
     Some(match name {
         "KeyA" => Code::KeyA,
@@ -128,7 +128,7 @@ mod tests {
         names.extend((0..=9).map(|d| format!("Digit{d}")));
         names.extend((1..=24).map(|n| format!("F{n}")));
         for n in names {
-            assert!(demolens_core::shortcuts::valid_key(&n));
+            assert!(booya_core::shortcuts::valid_key(&n));
             assert!(code_from_name(&n).is_some(), "{n}");
         }
         assert!(to_shortcut("CmdOrCtrl+Shift+KeyR").is_some());

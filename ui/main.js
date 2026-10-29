@@ -3,7 +3,7 @@ const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
 const $ = id => document.getElementById(id);
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const baseName = p => String(p).split(/[\\/]/).pop();
-const stem = p => baseName(p).replace(/\.demolens\.json$|\.[^.]+$/, '');
+const stem = p => baseName(p).replace(/\.booya\.json$|\.[^.]+$/, '');
 const hex = rgb => '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
 const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
 const icon = (id, cls = 'ico') => `<svg class="${cls}" aria-hidden="true"><use href="#${id}"/></svg>`;
@@ -370,7 +370,7 @@ $('zoom-focus').onclick = async () => {
 $('zoom-del').onclick = () => { if (project && tl.selectedZoom >= 0) { project.zoom.splice(tl.selectedZoom, 1); tl.selectedZoom = -1; tl.draw(); syncSelection(); refresh(); checkpoint(); status('Zoom deleted.', 'success'); } else status('Select a zoom on the timeline first.', 'info'); };
 $('zoom-follow').onchange = () => { const z = project?.zoom[tl.selectedZoom]; if (z) { z.follow_cursor = $('zoom-follow').checked; refresh(); } };
 $('zc-apply').onclick = () => $('auto-zoom').click();
-// Mirrors ZoomConfig::with_intensity in crates/demolens-core/src/zoom.rs.
+// Mirrors ZoomConfig::with_intensity in crates/booya-core/src/zoom.rs.
 const ZOOM_STYLES = { subtle: { level: 1.5, hold: 2000, ease: 1000, clicks: 4 }, normal: { level: 1.6, hold: 2500, ease: 900, clicks: 3 }, lively: { level: 1.8, hold: 3000, ease: 800, clicks: 2 } };
 $('zc-style').onchange = () => { const z = ZOOM_STYLES[$('zc-style').value]; if (!z || !project) return; $('zc-level').value = z.level; $('zc-hold').value = z.hold; $('zc-ease').value = z.ease; $('zc-clicks').value = z.clicks; readPanel(); outputs(); status('Zoom intensity set. Press "Apply to auto zoom" to rebuild the zooms.', 'info'); };
 $('auto-zoom').onclick = async () => {
@@ -409,8 +409,8 @@ async function save(as) {
   try {
     let target = projectPath;
     if (as || !target || isLooseProject(target)) {
-      // Projects are folders ending in .demolens, with the recording copied in.
-      target = await dialog.save({ defaultPath: (!as && !isLooseProject(projectPath) && projectPath) || stem(project.source) + '.demolens', filters: [{ name: 'Booya project', extensions: ['demolens'] }] });
+      // Projects are folders ending in .booya, with the recording copied in.
+      target = await dialog.save({ defaultPath: (!as && !isLooseProject(projectPath) && projectPath) || stem(project.source) + '.booya', filters: [{ name: 'Booya project', extensions: ['booya'] }] });
       if (!target) return;
     }
     readPanel(); checkpoint();
@@ -707,7 +707,7 @@ $('ai-docs').onclick = () => aiTask('Writing docs', async () => {
   catch (err) {
     const m = String(err).match(/REMOTE_LLM:(\S+)/);
     if (!m) throw err;
-    const ok = await confirmBox('Send the transcript to another computer?', `<p>DEMOLENS_LLM_URL points at <b>${esc(m[1])}</b>, which is not this computer. The transcript text and chapter timings would be sent there.</p>`, 'Send it');
+    const ok = await confirmBox('Send the transcript to another computer?', `<p>BOOYA_LLM_URL points at <b>${esc(m[1])}</b>, which is not this computer. The transcript text and chapter timings would be sent there.</p>`, 'Send it');
     if (!ok) return status('Cancelled. Nothing was sent.', 'info');
     r = await invoke('ai_docs', { project, useLlm: true, cloud, confirmRemote: true });
   }
@@ -1432,7 +1432,7 @@ async function showSettings(tab = 'privacy') {
   if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };
   document.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => { await invoke('delete_recording', { path: b.dataset.del }).catch(fail); again(); }));
   if ($('set-wipe')) $('set-wipe').onclick = async () => {
-    const ok = await confirmBox('Delete all Booya data?', '<p>This deletes every recording in Videos/DemoLens, the transcript cache and the built in sample. Templates and models are kept.</p><label><input type="checkbox" id="wipe-keys" /> Also remove saved API keys</label>', 'Delete everything');
+    const ok = await confirmBox('Delete all Booya data?', '<p>This deletes every recording in Videos/Booya, the transcript cache and the built in sample. Templates and models are kept.</p><label><input type="checkbox" id="wipe-keys" /> Also remove saved API keys</label>', 'Delete everything');
     if (ok) { const n = await invoke('delete_all_data', { includeKeys: !!document.getElementById('wipe-keys')?.checked }).catch(fail); status(`Deleted ${n || 0} item(s).`, 'success'); }
   };
   document.querySelectorAll('[data-t]').forEach(c => (c.onchange = async () => {

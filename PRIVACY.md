@@ -15,11 +15,11 @@ Nothing. The maintainer does not receive any data from the app. There is no acco
 - Settings, and the cloud provider choices with the date you turned each one on.
 - API keys and storage secrets, only in your operating system keychain.
 
-Recordings are saved under `Videos/DemoLens/` (private folders, readable only by you on Linux and macOS) or where you choose. Settings > Privacy can delete old recordings automatically, delete one recording, or delete all Booya data.
+Recordings are saved under `Videos/Booya/` (private folders, readable only by you on Linux and macOS) or where you choose. Settings > Privacy can delete old recordings automatically, delete one recording, or delete all Booya data.
 
 ## Network connections
 - **Model downloads** from huggingface.co, github.com and an Amazon S3 bucket, only when you click download. Each file is checked against a SHA-256 hash. These services see your IP address under their own privacy policies.
-- **Optional remote LLM:** only if you set `DEMOLENS_LLM_URL` to another machine and `DEMOLENS_ALLOW_REMOTE_LLM=1`. It must use https, and the app asks before sending the transcript.
+- **Optional remote LLM:** only if you set `BOOYA_LLM_URL` to another machine and `BOOYA_ALLOW_REMOTE_LLM=1`. It must use https, and the app asks before sending the transcript.
 - **Optional cloud AI** (OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs or an OpenAI compatible endpoint): off by default. You turn each provider on per task (speech to text, writing, text to speech) with your own key, and see what will be sent, to which endpoint, and how big it is, before each call. Speech to text sends the audio track only; writing sends the transcript text; text to speech sends the voiceover text. Video and event logs are never sent. The provider processes the data under your agreement with it and may store it outside your country.
 - **Optional upload** to your own S3 or Cloudflare R2 bucket: off by default. Objects are private and shared with a signed link that expires (24 hours by default, 7 days at most). Event logs and project files are never uploaded.
 
