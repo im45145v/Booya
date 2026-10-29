@@ -15,6 +15,12 @@ Needs a transcript first: **Auto edit > Tools > Transcribe** (or tick Captions i
 Show them in the video: **Style tab > Keys and captions > Burn in captions**, size with **Caption size**.
 Take them out as a file: **Auto edit > Tools > Export subtitles** (SRT or VTT). Your edits are what gets written.
 
+Auto edit can be cancelled while it is running. Cancellation is checked between pipeline steps, transcription windows and scanned frames; changes are discarded when cancelled.
+
+## Background and camera framing
+
+**Style tab > Background > None** removes the wallpaper and uses a plain black canvas (exports are opaque, not transparent). Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
+
 ## Callouts (short notes on the video)
 
 **Edit tab > Callouts**
@@ -42,11 +48,13 @@ Take them out as a file: **Auto edit > Tools > Export subtitles** (SRT or VTT). 
 When a recording has a camera, the **Style** tab has a **Layout** choice for the whole recording and the timeline gets a **LAYOUT** lane:
 
 - **Screen only** hides the camera.
-- **Camera bubble over the screen** is the usual round or square picture in a corner.
+- **Camera bubble over the screen** places the camera in a corner; set its circle, rounded-square, square or rectangle shape under **Webcam > Camera shape**.
 - **Side by side** puts the camera in a column next to the screen (above or below it in a tall video), so nothing is covered.
 - **Camera full screen** shows only the camera.
 
 To change the layout for part of the recording, double click an empty place on the LAYOUT lane (or press **Add at playhead**). A block appears; drag it to move it, drag its edges to resize it, choose its layout under **This stretch**, and press Delete to remove it. Blocks cannot overlap. Where there is no block the whole recording layout applies. **Blend** sets how long the picture takes to glide from one layout to the next (0 cuts straight over).
+
+**Camera share** controls the camera pane's width in a landscape split or its height in a tall split.
 
 In a 9:16 or 1:1 video the whole screen would be tiny, so the screen shows a window that follows the cursor and blends towards the zoom. Turn off **Tall and square videos follow the cursor** to show the whole screen with bars instead.
 

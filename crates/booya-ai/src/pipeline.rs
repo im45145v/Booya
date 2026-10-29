@@ -2,9 +2,9 @@
 
 use crate::{models, redact, transcribe};
 use anyhow::{Context, Result};
+use booya_core::audio;
 use booya_core::captions::{self, AutoCutOptions};
 use booya_core::project::{BlurBox, Project};
-use booya_core::audio;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -31,12 +31,23 @@ pub fn speech_model(id: Option<&str>) -> Result<std::path::PathBuf> {
 }
 
 /// Transcribe the project's audio into captions (word timed, in source time).
-pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&str>) -> Result<TranscribeReport> {
+pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&str>,
+) -> Result<TranscribeReport> {
+    transcribe_project_cancellable(p, model, lang, || false)
+}
+
+pub fn transcribe_project_cancellable(
+    p: &mut Project,
+    model: Option<&str>,
+    lang: Option<&str>,
+    cancelled: impl Fn() -> bool,
+) -> Result<TranscribeReport> {
     let mut samples = Vec::new();
     let has_audio = booya_core::ffmpeg::probe(&p.source).map(|i| i.has_audio).unwrap_or(true);
     if has_audio {
         samples = audio::decode_mono(&p.source, 16_000)?;
     }
+    anyhow::ensure!(!cancelled(), "transcription cancelled");
     let reason = if !has_audio || samples.is_empty() {
         Some("no_audio")
     } else if !transcribe::audible(&samples) {
@@ -46,13 +57,15 @@ pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&st
     };
     if let Some(r) = reason {
         // Nothing to hear: no captions, and no error either.
-        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: r.into() });
+        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: r.into(),
+        });
     }
     let model = speech_model(model)?;
-    let words = transcribe::transcribe(&p.source, &model, lang)?;
+    let words = transcribe::transcribe_with_cancel(&p.source, &model, lang, None, cancelled)?;
     let name = model.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
     let mut r = if words.is_empty() {
-        TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: "no_speech".into() }
+        TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: String::new(), weak_model: false, reason: "no_speech".into(),
+        }
     } else {
         finish_transcript(p, words)?
     };
@@ -63,25 +76,30 @@ pub fn transcribe_project(p: &mut Project, model: Option<&str>, lang: Option<&st
 
 /// Transcribe with a cloud provider the user opted into. The audio track
 /// (16 kHz mono WAV) is the only thing sent.
-pub fn transcribe_project_cloud(p: &mut Project, cfg: &crate::providers::CloudConfig, provider: crate::providers::Provider, key: &str, lang: Option<&str>) -> Result<TranscribeReport> {
+pub fn transcribe_project_cloud(p: &mut Project, cfg: &crate::providers::CloudConfig, provider: crate::providers::Provider, key: &str, lang: Option<&str>,
+) -> Result<TranscribeReport> {
     let samples = audio::decode_mono(&p.source, 16_000)?;
     let wav = crate::providers::wav_bytes(&samples, 16_000);
     let words = crate::providers::transcribe(cfg, provider, key, &wav, lang)?;
     finish_transcript(p, words)
 }
 
-fn finish_transcript(p: &mut Project, mut words: Vec<booya_core::project::CaptionWord>) -> Result<TranscribeReport> {
+fn finish_transcript(p: &mut Project, mut words: Vec<booya_core::project::CaptionWord>,
+) -> Result<TranscribeReport> {
     words.retain(|w| !captions::is_nonspeech(&w.text));
     if words.is_empty() || transcribe::only_hallucination(&words) {
-        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: "no_speech".into() });
+        return Ok(TranscribeReport { words: 0, fillers: 0, lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: "no_speech".into(),
+        });
     }
     let samples = audio::decode_mono(&p.source, 16_000)?;
-    captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0));
+    captions::snap_to_speech(&mut words, &audio::detect_silences(&samples, 16_000, -38.0, 250.0),
+    );
     // Captions never show before anyone speaks, whoever did the transcribing.
     let tight = transcribe::voice_onsets(&samples, 16_000);
     transcribe::fix_times(&mut words, &tight, &tight);
     p.captions = captions::words_to_captions(&words, 42, 900.0);
-    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: String::new() })
+    Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: String::new(),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -109,7 +127,8 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
             vec![(0.0, p.duration_ms)]
         };
         let idle_opts = booya_core::activity::IdleOptions { min_idle_ms: o.min_silence_ms.max(2500.0), ..Default::default() };
-        let idle = booya_core::activity::idle_stretches(&p.source, log.as_ref(), p.duration_ms, &idle_opts)
+        let idle = booya_core::activity::idle_stretches(&p.source, log.as_ref(), p.duration_ms, &idle_opts,
+        )
             .context("could not check the screen for activity, so no pauses were cut")?;
         booya_core::activity::intersect(&quiet, &idle)
     } else {
@@ -128,7 +147,9 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
     let cuts = planned
         .iter()
         .map(|&(s, e)| {
-            let filler = words.iter().any(|w| captions::is_filler(&w.text) && w.start_ms >= s - 50.0 && w.end_ms <= e + 50.0);
+            let filler = words.iter().any(|w| {
+                captions::is_filler(&w.text) && w.start_ms >= s - 50.0 && w.end_ms <= e + 50.0
+            });
             (s, e, if filler { "filler" } else { "silence" }.to_string())
         })
         .collect();
@@ -137,12 +158,14 @@ pub fn autocut_project(p: &mut Project, o: &AutoCutOptions, dry_run: bool) -> Re
         p.cut_ranges(&planned);
         p.validate()?;
     }
-    Ok(CutReport { cuts, before_ms: before, after_ms: p.output_duration_ms(), had_transcript: !words.is_empty() })
+    Ok(CutReport { cuts, before_ms: before, after_ms: p.output_duration_ms(), had_transcript: !words.is_empty(),
+    })
 }
 
 /// Remove `[t - before, t + after]` around every activity time from the cut
 /// ranges, dropping leftover pieces shorter than `min_len` ms.
-pub fn protect_activity(cuts: &[(f64, f64)], activity: &[f64], before: f64, after: f64, min_len: f64) -> Vec<(f64, f64)> {
+pub fn protect_activity(cuts: &[(f64, f64)], activity: &[f64], before: f64, after: f64, min_len: f64,
+) -> Vec<(f64, f64)> {
     let keep: Vec<(f64, f64)> = activity.iter().map(|&t| (t - before, t + after)).collect();
     protect_ranges(cuts, &keep, min_len)
 }
@@ -214,15 +237,21 @@ mod activity_tests {
         // Pointer moves from 5.0 s to 6.8 s, clicks at 7.0 s.
         let mut t = 5_000.0;
         while t <= 6_800.0 {
-            log.events.push(Event { t, kind: EventKind::Move { x: t / 10.0, y: 100.0 } });
+            log.events.push(Event { t, kind: EventKind::Move { x: t / 10.0, y: 100.0,
+                },
+            });
             t += 50.0;
         }
-        log.events.push(Event { t: 7_000.0, kind: EventKind::Click { x: 680.0, y: 100.0, button: MouseButton::Left } });
+        log.events.push(Event { t: 7_000.0, kind: EventKind::Click { x: 680.0, y: 100.0, button: MouseButton::Left,
+            },
+        });
         let r = super::click_travel(&log);
         assert_eq!(r, vec![(4_850.0, 7_000.0)]);
         // A click with no movement still keeps 1 s before it.
         let mut still = EventLog::new(100, 100);
-        still.events.push(Event { t: 3_000.0, kind: EventKind::Click { x: 1.0, y: 1.0, button: MouseButton::Left } });
+        still.events.push(Event { t: 3_000.0, kind: EventKind::Click { x: 1.0, y: 1.0, button: MouseButton::Left,
+            },
+        });
         assert_eq!(super::click_travel(&still), vec![(1_850.0, 3_000.0)]);
     }
 }
@@ -236,8 +265,19 @@ pub struct RedactReport {
 }
 
 /// Scan frames for sensitive text and add blur boxes for it.
-pub fn redact_project(p: &mut Project, every_ms: f64, dry_run: bool, progress: impl FnMut(f64)) -> Result<RedactReport> {
-    let hits = redact::scan(p, every_ms, progress)?;
+pub fn redact_project(p: &mut Project, every_ms: f64, dry_run: bool, progress: impl FnMut(f64),
+) -> Result<RedactReport> {
+    redact_project_cancellable(p, every_ms, dry_run, progress, || false)
+}
+
+pub fn redact_project_cancellable(
+    p: &mut Project,
+    every_ms: f64,
+    dry_run: bool,
+    progress: impl FnMut(f64),
+    cancelled: impl Fn() -> bool,
+) -> Result<RedactReport> {
+    let hits = redact::scan_cancellable(p, every_ms, progress, cancelled)?;
     let mut boxes = redact::hits_to_blur(&hits, every_ms, 6.0);
     for b in &mut boxes {
         // The last sampled frame is up to two samples before the end.
@@ -252,7 +292,9 @@ pub fn redact_project(p: &mut Project, every_ms: f64, dry_run: bool, progress: i
         }
     }
     // Running it twice should not stack duplicate boxes.
-    let dup = |a: &BlurBox, b: &BlurBox| (a.x - b.x).abs() < 8.0 && (a.y - b.y).abs() < 8.0 && (a.w - b.w).abs() < 16.0 && (a.start_ms - b.start_ms).abs() < every_ms;
+    let dup = |a: &BlurBox, b: &BlurBox| {
+        (a.x - b.x).abs() < 8.0 && (a.y - b.y).abs() < 8.0 && (a.w - b.w).abs() < 16.0 && (a.start_ms - b.start_ms).abs() < every_ms
+    };
     let mut added = 0;
     if !dry_run {
         for b in boxes {
@@ -264,7 +306,8 @@ pub fn redact_project(p: &mut Project, every_ms: f64, dry_run: bool, progress: i
     } else {
         added = boxes.len();
     }
-    Ok(RedactReport { found, detections: hits.len(), added })
+    Ok(RedactReport { found, detections: hits.len(), added,
+    })
 }
 
 /// One step of [`demo_ready`].
@@ -298,54 +341,88 @@ pub struct ReadyOptions {
 
 impl Default for ReadyOptions {
     fn default() -> Self {
-        Self { zoom: true, captions: true, cut: true, cut_silences: false, blur: true, denoise: true, min_silence_ms: 700.0 }
+        Self { zoom: true, captions: true, cut: true, cut_silences: false, blur: true, denoise: true, min_silence_ms: 700.0,
+        }
     }
 }
 
 /// Auto edit in one call: auto zoom, transcribe and caption, cut
 /// filler words and long pauses, blur secrets and clean up the audio. Steps
 /// whose model is missing are skipped with a note instead of failing.
-pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f64, &str)) -> ReadyReport {
+pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f64, &str),
+) -> ReadyReport {
+    demo_ready_cancellable(p, o, &mut progress, || false)
+        .expect("an uncancellable auto edit cannot be cancelled")
+}
+
+/// Run auto edit with cancellation checks between steps and model windows.
+/// The caller can discard the unreturned project when cancellation is observed.
+pub fn demo_ready_cancellable(
+    p: &mut Project,
+    o: &ReadyOptions,
+    mut progress: impl FnMut(f64, &str),
+    cancelled: impl Fn() -> bool,
+) -> Result<ReadyReport> {
+    let check_cancelled = || -> Result<()> {
+        anyhow::ensure!(!cancelled(), "Auto edit cancelled");
+        Ok(())
+    };
+    check_cancelled()?;
     let before_ms = p.output_duration_ms();
     let mut steps = Vec::new();
-    let mut step = |name, state, detail: String| steps.push(ReadyStep { name, state, detail });
+    let mut step = |name, state, detail: String| {
+        steps.push(ReadyStep { name, state, detail,
+        })
+    };
     let has_audio = booya_core::ffmpeg::probe(&p.source).map(|i| i.has_audio).unwrap_or(false);
 
     if o.zoom {
+        check_cancelled()?;
         progress(0.05, "Adding auto zoom...");
         match p.events.as_ref().map(|e| booya_core::events::EventLog::load(e)) {
             Some(Ok(log)) => {
-                p.zoom = booya_core::zoom::generate_zoom_segments(&log, p.duration_ms, &booya_core::zoom::ZoomConfig::default());
-                step("Auto zoom", "done", format!("{} zoom segments from clicks and typing", p.zoom.len()));
+                p.zoom = booya_core::zoom::generate_zoom_segments(&log, p.duration_ms, &booya_core::zoom::ZoomConfig::default(),
+                );
+                step("Auto zoom", "done", format!("{} zoom segments from clicks and typing", p.zoom.len()),
+                );
             }
-            Some(Err(err)) => step("Auto zoom", "failed", format!("could not read the input log: {err}")),
-            None => step("Auto zoom", "skipped", "no input log next to this video".into()),
+            Some(Err(err)) => step("Auto zoom", "failed", format!("could not read the input log: {err}"),
+            ),
+            None => step("Auto zoom", "skipped", "no input log next to this video".into(),
+            ),
         }
+        check_cancelled()?;
     }
 
     let mut have_words = !p.captions.is_empty();
     if o.captions {
+        check_cancelled()?;
         progress(0.15, "Transcribing on this computer...");
         if !has_audio {
             step("Captions", "skipped", "the video has no audio".into());
         } else if models::first_installed(models::Kind::Speech).is_none() {
-            step("Captions", "skipped", "download a speech model (Whisper) in Models to get captions".into());
+            step("Captions", "skipped", "download a speech model (Whisper) in Models to get captions".into(),
+            );
         } else {
-            match transcribe_project(p, None, None) {
+            match transcribe_project_cancellable(p, None, None, &cancelled) {
                 Ok(r) => {
                     p.caption_style.burn_in = true;
                     have_words = true;
-                    step("Captions", "done", format!("{} words, {} caption lines, burned in", r.words, r.lines));
+                    step("Captions", "done", format!("{} words, {} caption lines, burned in", r.words, r.lines),
+                    );
                 }
                 Err(err) => step("Captions", "failed", err.to_string()),
             }
         }
+        check_cancelled()?;
     }
 
     if o.cut {
+        check_cancelled()?;
         progress(0.45, "Cutting filler words...");
         if !has_audio && !o.cut_silences {
-            step("Auto cut", "skipped", "the video has no audio, so there are no filler words to cut".into());
+            step("Auto cut", "skipped", "the video has no audio, so there are no filler words to cut".into(),
+            );
         } else if !have_words && !o.cut_silences {
             step("Auto cut", "skipped", "no transcript, so no filler words to cut. Pauses are left alone unless you ask for them".into());
         } else {
@@ -353,20 +430,28 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
             match autocut_project(p, &co, false) {
                 Ok(r) => {
                     let f = r.cuts.iter().filter(|c| c.2 == "filler").count();
-                    step("Auto cut", "done", format!("{} filler words and {} still pauses removed. Ctrl+Z undoes it", f, r.cuts.len() - f));
+                    step("Auto cut", "done", format!("{} filler words and {} still pauses removed. Ctrl+Z undoes it", f, r.cuts.len() - f),
+                    );
                 }
                 Err(err) => step("Auto cut", "failed", err.to_string()),
             }
         }
+        check_cancelled()?;
     }
 
     if o.blur {
+        check_cancelled()?;
         progress(0.55, "Scanning frames for secrets...");
         if models::first_installed(models::Kind::Ocr).is_none() || models::require("ocr-detection").is_err() || models::require("ocr-recognition").is_err() {
-            step("Blur secrets", "skipped", "download the two text recognition models (13 MB) in Models".into());
+            step("Blur secrets", "skipped", "download the two text recognition models (13 MB) in Models".into(),
+            );
         } else {
-            match redact_project(p, 500.0, false, |f| progress(0.55 + f * 0.4, "Scanning frames for secrets...")) {
-                Ok(r) if r.found.is_empty() => step("Blur secrets", "done", "nothing sensitive found".into()),
+            match redact_project_cancellable(p, 500.0, false, |f| progress(0.55 + f * 0.4, "Scanning frames for secrets..."),
+                &cancelled,
+            ) {
+                Ok(r) if r.found.is_empty() => {
+                    step("Blur secrets", "done", "nothing sensitive found".into())
+                }
                 Ok(r) => {
                     let mut kinds: Vec<&str> = Vec::new();
                     for (k, _) in &r.found {
@@ -392,14 +477,18 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
                 Err(err) => step("Blur secrets", "failed", err.to_string()),
             }
         }
+        check_cancelled()?;
     }
 
     if o.denoise && has_audio {
+        check_cancelled()?;
         p.audio.denoise = true;
         step("Clean audio", "done", "background noise removal on".into());
     }
+    check_cancelled()?;
     progress(1.0, "Done");
-    ReadyReport { steps, before_ms, after_ms: p.output_duration_ms() }
+    Ok(ReadyReport { steps, before_ms, after_ms: p.output_duration_ms(),
+    })
 }
 
 /// The regression behind "my video was trimmed for no reason": a demo given
@@ -408,6 +497,18 @@ pub fn demo_ready(p: &mut Project, o: &ReadyOptions, mut progress: impl FnMut(f6
 mod silent_demo_tests {
     use super::*;
     use booya_core::events::{Event, EventKind, EventLog, MouseButton};
+
+    #[test]
+    fn auto_edit_can_be_cancelled_before_it_changes_the_project() {
+        let mut p = Project::new("not-opened.mp4".into(), None, 1280, 720, 10_000.0);
+        let before = p.clone();
+        let result = demo_ready_cancellable(&mut p, &ReadyOptions::default(), |_, _| {}, || true);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Auto edit cancelled"));
+        assert_eq!(p, before);
+    }
 
     /// A 14 s 640x360 video with a silent audio track. A box changes at the
     /// given times (so the picture is "active" there); the pointer moves in
@@ -419,7 +520,8 @@ mod silent_demo_tests {
         let enable = flashes.iter().map(|t| format!("between(t,{t},{})", t + 0.4)).collect::<Vec<_>>().join("+");
         let vf = if flashes.is_empty() { "null".to_string() } else { format!("drawbox=x=100:y=100:w=200:h=100:color=white:t=fill:enable='{enable}'") };
         let ok = std::process::Command::new(booya_core::ffmpeg::ffmpeg_bin()) // proc:allow
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=15:d=14", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-vf", &vf, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=15:d=14", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-vf", &vf, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            ])
             .arg(&video)
             .status()
             .map(|s| s.success())
@@ -431,12 +533,16 @@ mod silent_demo_tests {
         for &(a, b) in moving {
             let mut t = a;
             while t < b {
-                log.events.push(Event { t, kind: EventKind::Move { x: 50.0 + (t / 20.0) % 400.0, y: 80.0 } });
+                log.events.push(Event { t, kind: EventKind::Move { x: 50.0 + (t / 20.0) % 400.0, y: 80.0,
+                    },
+                });
                 t += 100.0;
             }
         }
         for &t in clicks {
-            log.events.push(Event { t, kind: EventKind::Click { x: 100.0, y: 100.0, button: MouseButton::Left } });
+            log.events.push(Event { t, kind: EventKind::Click { x: 100.0, y: 100.0, button: MouseButton::Left,
+                },
+            });
         }
         log.events.sort_by(|a, b| a.t.total_cmp(&b.t));
         let ev = dir.join("demo.events.jsonl");
@@ -445,14 +551,16 @@ mod silent_demo_tests {
     }
 
     fn silences_only() -> AutoCutOptions {
-        AutoCutOptions { cut_fillers: false, cut_silences: true, min_silence_ms: 700.0, keep_ms: 180.0 }
+        AutoCutOptions { cut_fillers: false, cut_silences: true, min_silence_ms: 700.0, keep_ms: 180.0,
+        }
     }
 
     #[test]
     fn a_silent_demo_with_activity_all_the_way_loses_nothing() {
         // Clicks about every 1.2 s with the pointer travelling in between, as in the report.
         let clicks: Vec<f64> = (1..12).map(|i| i as f64 * 1200.0).collect();
-        let Some(mut p) = demo("busy", &[2.0, 5.0, 8.0, 11.0], &[(0.0, 13_000.0)], &clicks) else { return };
+        let Some(mut p) = demo("busy", &[2.0, 5.0, 8.0, 11.0], &[(0.0, 13_000.0)], &clicks) else { return;
+        };
         let r = autocut_project(&mut p, &silences_only(), false).unwrap();
         assert!(r.cuts.is_empty(), "silent but busy: {:?}", r.cuts);
         assert_eq!(p.clips.len(), 1);
@@ -461,7 +569,8 @@ mod silent_demo_tests {
     #[test]
     fn only_a_stretch_that_is_quiet_and_still_is_cut_and_with_padding() {
         // Busy until 5 s, then nothing at all until the end.
-        let Some(mut p) = demo("tail", &[1.0, 3.0], &[(0.0, 5_000.0)], &[2_000.0, 4_800.0]) else { return };
+        let Some(mut p) = demo("tail", &[1.0, 3.0], &[(0.0, 5_000.0)], &[2_000.0, 4_800.0]) else { return;
+        };
         let r = autocut_project(&mut p, &silences_only(), true).unwrap();
         assert!(!r.cuts.is_empty(), "a long still and silent stretch is cut");
         for &(s, e, _) in &r.cuts {
@@ -475,7 +584,8 @@ mod silent_demo_tests {
     #[test]
     fn something_changing_on_screen_without_any_input_is_not_cut() {
         // No pointer, no keys: only a loading screen that keeps changing.
-        let Some(mut p) = demo("loading", &[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0], &[], &[]) else { return };
+        let Some(mut p) = demo("loading", &[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0], &[], &[]) else { return;
+        };
         let r = autocut_project(&mut p, &silences_only(), true).unwrap();
         for &(s, e, _) in &r.cuts {
             for t in [1000.0, 3000.0, 5000.0, 7000.0, 9000.0, 11000.0, 13000.0] {

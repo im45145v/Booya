@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Background {
+    /// A plain black canvas without a decorative wallpaper.
+    None,
     Solid { color: [u8; 3] },
     /// Linear gradient, `angle_deg` 0 = left to right, 90 = top to bottom.
     Gradient { from: [u8; 3], to: [u8; 3], angle_deg: f64 },
@@ -455,6 +457,25 @@ pub enum WebcamLayout {
     Side,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebcamShape {
+    Circle,
+    RoundedSquare,
+    Square,
+    Rectangle,
+}
+
+impl Webcam {
+    pub fn shape(&self) -> WebcamShape {
+        self.shape.unwrap_or(if self.circle {
+            WebcamShape::Circle
+        } else {
+            WebcamShape::RoundedSquare
+        })
+    }
+}
+
 /// A line of text in a corner of every frame, such as a product name or URL.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Watermark {
@@ -578,11 +599,16 @@ pub struct Webcam {
     /// Flip left to right, like a mirror (what video calls show).
     #[serde(default)]
     pub mirror: bool,
+    /// Camera framing. Missing in older projects, which use `circle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<WebcamShape>,
 }
 
 impl Webcam {
     pub fn new(path: PathBuf) -> Self {
-        Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0, layout: WebcamLayout::Bubble, mirror: false }
+        Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0, layout: WebcamLayout::Bubble, mirror: false,
+            shape: None,
+        }
     }
 }
 
@@ -652,6 +678,9 @@ pub struct Layouts {
     /// cursor instead of shrinking the whole screen to fit.
     #[serde(default = "yes")]
     pub follow_cursor: bool,
+    /// Share of the output assigned to the camera in a split layout.
+    #[serde(default = "default_split_camera_fraction")]
+    pub split_camera_fraction: f64,
 }
 
 fn default_scene_transition() -> f64 {
@@ -662,9 +691,15 @@ fn yes() -> bool {
     true
 }
 
+fn default_split_camera_fraction() -> f64 {
+    0.34
+}
+
 impl Default for Layouts {
     fn default() -> Self {
-        Self { base: None, segments: Vec::new(), transition_ms: default_scene_transition(), follow_cursor: true }
+        Self { base: None, segments: Vec::new(), transition_ms: default_scene_transition(), follow_cursor: true,
+            split_camera_fraction: default_split_camera_fraction(),
+        }
     }
 }
 
@@ -802,7 +837,10 @@ impl Project {
         let mut p: Project = serde_json::from_str(&s)?;
         // Relative media paths are resolved against the project file, so a
         // project works no matter which folder it is opened from.
-        let base = path.parent().map(|d| if d.as_os_str().is_empty() { Path::new(".") } else { d }).unwrap_or(Path::new("."));
+        let base = path.parent().map(|d| {
+                if d.as_os_str().is_empty() { Path::new(".") } else { d
+                }
+            }).unwrap_or(Path::new("."));
         let fix = |f: &mut PathBuf| {
             if f.is_relative() && !f.exists() && base.join(&*f).exists() {
                 *f = base.join(&*f);
@@ -926,7 +964,9 @@ impl Project {
 
     /// Lengths of the intro and outro cards in ms (0 when absent or empty).
     pub fn card_lengths_ms(&self) -> (f64, f64) {
-        let len = |c: &Option<Card>| c.as_ref().filter(|c| !c.is_empty()).map(Card::length_ms).unwrap_or(0.0);
+        let len = |c: &Option<Card>| {
+            c.as_ref().filter(|c| !c.is_empty()).map(Card::length_ms).unwrap_or(0.0)
+        };
         (len(&self.intro), len(&self.outro))
     }
 
@@ -1152,5 +1192,33 @@ mod tests {
         assert_eq!(Aspect::Landscape.size(2160), (3840, 2160));
         assert_eq!(Aspect::Portrait.size(1080), (1080, 1920));
         assert_eq!(Aspect::Square.size(720), (720, 720));
+    }
+
+    #[test]
+    fn new_style_options_round_trip_and_old_camera_shapes_still_load() {
+        let mut p = Project::new("a.mp4".into(), None, 1280, 720, 1000.0);
+        p.style.background = Background::None;
+        p.webcam = Some(Webcam::new("cam.mkv".into()));
+        p.webcam.as_mut().unwrap().shape = Some(WebcamShape::Rectangle);
+        p.layouts.split_camera_fraction = 0.48;
+        let back: Project = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.style.background, Background::None);
+        assert_eq!(back.webcam.unwrap().shape, Some(WebcamShape::Rectangle));
+        assert_eq!(back.layouts.split_camera_fraction, 0.48);
+
+        let mut old = serde_json::to_value(&p).unwrap();
+        let camera = old["webcam"].as_object_mut().unwrap();
+        camera.remove("shape");
+        camera.insert("circle".into(), serde_json::Value::Bool(false));
+        old["layouts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("split_camera_fraction");
+        let old: Project = serde_json::from_value(old).unwrap();
+        assert_eq!(old.webcam.unwrap().shape(), WebcamShape::RoundedSquare);
+        assert_eq!(
+            old.layouts.split_camera_fraction,
+            default_split_camera_fraction()
+        );
     }
 }

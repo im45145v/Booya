@@ -24,10 +24,13 @@ pub enum MicState {
     Off,
     /// Opened, nothing measured yet.
     Starting,
-    Ok { peak_db: f32 },
+    Ok { peak_db: f32,
+    },
     /// Opened, but only digital silence arrives.
-    Silent { peak_db: f32 },
-    Failed { reason: String },
+    Silent { peak_db: f32,
+    },
+    Failed { reason: String,
+    },
 }
 
 impl MicState {
@@ -71,7 +74,8 @@ pub fn explain_error(text: &str) -> String {
 /// The device to open from a list of names (the default first when known).
 /// An exact match (ignoring case) wins, then a partial one; with no choice
 /// the default, then the first.
-pub fn pick_device_name(names: &[String], wanted: Option<&str>, default: Option<&str>) -> Option<String> {
+pub fn pick_device_name(names: &[String], wanted: Option<&str>, default: Option<&str>,
+) -> Option<String> {
     if let Some(w) = wanted.map(str::trim).filter(|w| !w.is_empty()) {
         let wl = w.to_lowercase();
         if let Some(n) = names.iter().find(|n| n.to_lowercase() == wl) {
@@ -116,7 +120,8 @@ pub(crate) fn parse_max_volume(text: &str) -> Option<f32> {
 }
 
 enum Backend {
-    Ffmpeg { child: Child, err: Arc<Mutex<String>> },
+    Ffmpeg { child: Child, err: Arc<Mutex<String>>,
+    },
     #[cfg(windows)]
     Wasapi(super::wasapi::Recorder),
 }
@@ -134,19 +139,23 @@ impl MicRec {
     /// Starts recording to `out` (Matroska, float samples). `epoch` is the
     /// unix time of the shared recording clock. Problems are logged and
     /// returned as the reason in `Err`.
-    pub fn start(device: Option<&str>, epoch: f64, out: &Path, log: &Path) -> Result<MicRec, String> {
+    pub fn start(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
+    ) -> Result<MicRec, String> {
         let _ = std::fs::remove_file(out);
         let mut reasons: Vec<String> = Vec::new();
         #[cfg(windows)]
         {
             let wav = out.with_extension("wav");
-            match super::wasapi::start(super::wasapi::Source::Mic(device.map(str::to_string)), epoch, &wav) {
+            match super::wasapi::start(super::wasapi::Source::Mic(device.map(str::to_string)), epoch, &wav,
+            ) {
                 Ok(r) => {
                     log_line(log, &format!("microphone: WASAPI, device \"{}\"", r.device));
-                    return Ok(MicRec { backend: Some(Backend::Wasapi(r)), out: out.to_path_buf(), log: log.to_path_buf(), started: Instant::now(), name: "WASAPI", last: MicState::Starting });
+                    return Ok(MicRec { backend: Some(Backend::Wasapi(r)), out: out.to_path_buf(), log: log.to_path_buf(), started: Instant::now(), name: "WASAPI", last: MicState::Starting,
+                    });
                 }
                 Err(e) => {
-                    log_line(log, &format!("WASAPI could not open the microphone: {e:#}; trying DirectShow"));
+                    log_line(log, &format!("WASAPI could not open the microphone: {e:#}; trying DirectShow"),
+                    );
                     reasons.push(explain_error(&format!("{e:#}")));
                 }
             }
@@ -180,11 +189,13 @@ impl MicRec {
             None => MicState::Off,
             Some(Backend::Ffmpeg { child, err }) => {
                 if let Ok(Some(st)) = child.try_wait() {
-                    return MicState::Failed { reason: format!("the microphone recorder stopped ({st}): {}", explain_error(&err.lock().unwrap())) };
+                    return MicState::Failed { reason: format!("the microphone recorder stopped ({st}): {}", explain_error(&err.lock().unwrap())),
+                    };
                 }
                 let size = std::fs::metadata(&self.out).map(|m| m.len()).unwrap_or(0);
                 if size < 20_000 || self.started.elapsed() < Duration::from_millis(1200) {
-                    return if self.started.elapsed() > Duration::from_secs(4) { MicState::Failed { reason: "no audio arrived from the microphone".into() } } else { MicState::Starting };
+                    return if self.started.elapsed() > Duration::from_secs(4) { MicState::Failed { reason: "no audio arrived from the microphone".into(),
+                        } } else { MicState::Starting };
                 }
                 match file_peak_db(&self.out, 3.0) {
                     Some(db) if db < SILENT_DB => MicState::Silent { peak_db: db },
@@ -195,7 +206,8 @@ impl MicRec {
             #[cfg(windows)]
             Some(Backend::Wasapi(r)) => {
                 if let Some(e) = r.error() {
-                    return MicState::Failed { reason: explain_error(&e) };
+                    return MicState::Failed { reason: explain_error(&e),
+                    };
                 }
                 if r.probe.frames() == 0 {
                     return if r.age() > Duration::from_secs(3) { MicState::Failed { reason: "Windows opened the microphone but delivered no audio. It may be blocked by the privacy setting. ".to_string() + privacy_hint() } } else { MicState::Starting };
@@ -220,7 +232,8 @@ impl MicRec {
                 finish(&mut child, false);
                 let e = err.lock().unwrap().clone();
                 if !e.trim().is_empty() {
-                    log_line(&self.log, &format!("ffmpeg microphone stderr: {}", e.trim()));
+                    log_line(&self.log, &format!("ffmpeg microphone stderr: {}", e.trim()),
+                    );
                 }
                 if died {
                     mid
@@ -228,7 +241,8 @@ impl MicRec {
                     match file_peak_db(&self.out, 3600.0) {
                         Some(db) if db < SILENT_DB => MicState::Silent { peak_db: db },
                         Some(db) => MicState::Ok { peak_db: db },
-                        None => MicState::Failed { reason: "the microphone file could not be read".into() },
+                        None => MicState::Failed { reason: "the microphone file could not be read".into(),
+                        },
                     }
                 }
             }
@@ -242,7 +256,8 @@ impl MicRec {
                         log_line(&self.log, &format!("WASAPI finished: {frames} frames from \"{device}\", peak {db:.1} dBFS"));
                         if db < SILENT_DB { MicState::Silent { peak_db: db } } else { MicState::Ok { peak_db: db } }
                     }
-                    Err(e) => MicState::Failed { reason: explain_error(&format!("{e:#}")) },
+                    Err(e) => MicState::Failed { reason: explain_error(&format!("{e:#}")),
+                    },
                 }
             }
         };
@@ -251,22 +266,27 @@ impl MicRec {
     }
 }
 
-fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path) -> Result<MicRec, String> {
+fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
+) -> Result<MicRec, String> {
     let input = super::mics::input_args(device).map_err(|e| e.to_string())?;
-    log_line(log, &format!("microphone: ffmpeg input {}", input.join(" ")));
+    log_line(log, &format!("microphone: ffmpeg input {}", input.join(" ")),
+    );
     let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
-    cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
+    cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}"),
+    ]);
     cmd.args(&input);
     cmd.args(["-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut c = cmd.spawn().map_err(|e| format!("could not start ffmpeg for the microphone: {e}"))?;
     let err = drain_stderr(&mut c);
     match wait_until_writing(&mut c, out, &err, FIRST_OUTPUT_TIMEOUT) {
-        Ok(()) => Ok(MicRec { backend: Some(Backend::Ffmpeg { child: c, err }), out: out.to_path_buf(), log: log.to_path_buf(), started: Instant::now(), name: if cfg!(windows) { "DirectShow" } else { "ffmpeg" }, last: MicState::Starting }),
+        Ok(started) => Ok(MicRec { backend: Some(Backend::Ffmpeg { child: c, err }), out: out.to_path_buf(), log: log.to_path_buf(), started, name: if cfg!(windows) { "DirectShow" } else { "ffmpeg" }, last: MicState::Starting,
+        }),
         Err(e) => {
             let text = if e.starts_with("TIMEOUT") { "the microphone did not respond".to_string() } else { e.clone() };
-            log_line(log, &format!("ffmpeg could not open the microphone: {}", err.lock().unwrap().trim()));
+            log_line(log, &format!("ffmpeg could not open the microphone: {}", err.lock().unwrap().trim()),
+            );
             let _ = c.kill();
             let _ = c.wait();
             Err(explain_error(&text))
@@ -295,7 +315,8 @@ pub fn check_audio(device: Option<&str>, secs: f64) -> AudioCheck {
     log_line(&log, &format!("devices: {devices:?}"));
     let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     match MicRec::start(device, epoch, &out, &log) {
-        Err(reason) => AudioCheck { backend: "none".into(), devices, state: MicState::Failed { reason }, peak_db: None, log },
+        Err(reason) => AudioCheck { backend: "none".into(), devices, state: MicState::Failed { reason }, peak_db: None, log,
+        },
         Ok(rec) => {
             let backend = rec.backend_name().to_string();
             std::thread::sleep(Duration::from_secs_f64(secs));
@@ -304,7 +325,8 @@ pub fn check_audio(device: Option<&str>, secs: f64) -> AudioCheck {
                 MicState::Ok { peak_db } | MicState::Silent { peak_db } => Some(*peak_db),
                 _ => None,
             };
-            AudioCheck { backend, devices, state, peak_db, log }
+            AudioCheck { backend, devices, state, peak_db, log,
+            }
         }
     }
 }
@@ -323,7 +345,8 @@ mod tests {
 
     #[test]
     fn the_microphone_is_picked_by_name_then_default() {
-        let names = vec!["Microphone (Realtek Audio)".to_string(), "Headset (USB)".to_string()];
+        let names = vec!["Microphone (Realtek Audio)".to_string(), "Headset (USB)".to_string(),
+        ];
         assert_eq!(pick_device_name(&names, Some("headset (usb)"), None).as_deref(), Some("Headset (USB)"));
         assert_eq!(pick_device_name(&names, Some("Headset"), None).as_deref(), Some("Headset (USB)"));
         assert_eq!(pick_device_name(&names, None, Some("Headset (USB)")).as_deref(), Some("Headset (USB)"));
@@ -353,7 +376,8 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let make = |src: &str, name: &str| {
             let p = d.join(name);
-            let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-v", "error", "-y", "-f", "lavfi", "-i", src, "-t", "1", "-c:a", "pcm_f32le"]).arg(&p).status().unwrap().success();
+            let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-v", "error", "-y", "-f", "lavfi", "-i", src, "-t", "1", "-c:a", "pcm_f32le",
+                ]).arg(&p).status().unwrap().success();
             assert!(ok);
             p
         };

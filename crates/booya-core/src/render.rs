@@ -3,8 +3,8 @@
 //! exporter both call it, so what you see is exactly what you export.
 
 use crate::events::{CursorTrack, EventLog};
-use crate::text;
 use crate::project::{Background, BlurBox, Project, SceneKind};
+use crate::text;
 use crate::zoom::{camera_at_mapped, Camera, CameraTiming};
 use rayon::prelude::*;
 
@@ -18,7 +18,8 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(w: u32, h: u32) -> Self {
-        Self { w, h, data: vec![0; (w * h * 4) as usize] }
+        Self { w, h, data: vec![0; (w * h * 4) as usize],
+        }
     }
 
     #[inline]
@@ -223,11 +224,13 @@ pub struct KeyLabel {
 pub fn build_key_labels(log: &EventLog, k: &crate::project::KeyOverlay) -> Vec<KeyLabel> {
     crate::keylabels::build_key_labels(
         log,
-        &crate::keylabels::LabelOptions { hold_ms: k.hold_ms, shortcuts_only: k.shortcuts_only, symbols: k.symbols },
+        &crate::keylabels::LabelOptions { hold_ms: k.hold_ms, shortcuts_only: k.shortcuts_only, symbols: k.symbols,
+        },
     )
 }
 
-const ARROW: [(f64, f64); 7] = [(0.0, 0.0), (0.0, 17.0), (4.2, 13.2), (7.0, 19.5), (9.6, 18.4), (6.9, 12.2), (12.2, 12.2)];
+const ARROW: [(f64, f64); 7] = [(0.0, 0.0), (0.0, 17.0), (4.2, 13.2), (7.0, 19.5), (9.6, 18.4), (6.9, 12.2), (12.2, 12.2),
+];
 
 fn point_in_poly(x: f64, y: f64, poly: &[(f64, f64)]) -> bool {
     let mut inside = false;
@@ -267,11 +270,13 @@ pub(crate) fn fill_circle(f: &mut Frame, cx: f64, cy: f64, r: f64, rgb: [f32; 3]
     fill_round_rect(f, cx - r, cy - r, 2.0 * r, 2.0 * r, r, rgb, alpha);
 }
 
-pub(crate) fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32) {
+pub(crate) fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32,
+) {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
     for py in (y.floor() as i64)..=((y + h).ceil() as i64) {
         for px in (x.floor() as i64)..=((x + w).ceil() as i64) {
-            let d = sd_round_rect(px as f64 + 0.5, py as f64 + 0.5, cx, cy, w / 2.0, h / 2.0, r);
+            let d = sd_round_rect(px as f64 + 0.5, py as f64 + 0.5, cx, cy, w / 2.0, h / 2.0, r,
+            );
             let cov = (0.5 - d).clamp(0.0, 1.0) as f32;
             f.blend(px, py, rgb, alpha * cov);
         }
@@ -282,7 +287,8 @@ pub(crate) fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: 
 /// tinted and lit, and the edge gets a bright rim that is strongest towards the
 /// top left (like light catching a glass pane). `alpha` fades all of it.
 #[allow(clippy::too_many_arguments)]
-pub fn frost_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, radius: f64, blur_px: f64, tint: [f32; 3], tint_op: f32, highlight: f32, alpha: f32) {
+pub fn frost_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, radius: f64, blur_px: f64, tint: [f32; 3], tint_op: f32, highlight: f32, alpha: f32,
+) {
     if alpha <= 0.0 || w < 2.0 || h < 2.0 {
         return;
     }
@@ -302,7 +308,8 @@ pub fn frost_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, radius: f64, bl
         tile.data[dst..dst + rw as usize * 4].copy_from_slice(&f.data[src..src + rw as usize * 4]);
     }
     if blur_px >= 1.0 {
-        let b = BlurBox { x: 0.0, y: 0.0, w: rw as f64, h: rh as f64, start_ms: 0.0, end_ms: 0.0, radius: (blur_px * 2.0).round().max(2.0) as u32 };
+        let b = BlurBox { x: 0.0, y: 0.0, w: rw as f64, h: rh as f64, start_ms: 0.0, end_ms: 0.0, radius: (blur_px * 2.0).round().max(2.0) as u32,
+        };
         blur_region(&mut tile, &b);
     }
     let (cx, cy, hw, hh) = (x + w / 2.0, y + h / 2.0, w / 2.0, h / 2.0);
@@ -431,7 +438,8 @@ impl Renderer {
 
     /// `bg_image` is an RGBA image already scaled to the output size; only
     /// used with `Background::Image`.
-    pub fn new(project: Project, log: Option<&EventLog>, out_w: u32, out_h: u32, bg_image: Option<Frame>) -> Self {
+    pub fn new(project: Project, log: Option<&EventLog>, out_w: u32, out_h: u32, bg_image: Option<Frame>,
+    ) -> Self {
         let track = log.map(CursorTrack::new).filter(|t| !t.is_empty());
         let clicks = log.map(|l| l.clicks().collect()).unwrap_or_default();
         let touches = log.map(|l| l.touches().collect()).unwrap_or_default();
@@ -448,12 +456,14 @@ impl Renderer {
         kinds.insert(0, main);
         let scenes: Vec<Scene> = kinds.into_iter().map(|k| Self::build_scene(&project, k, out_w, out_h, &card_bg, track.as_ref())).collect();
         let (layout, panel) = (scenes[0].layout, scenes[0].panel);
-        Self { project, out_w, out_h, track, clicks, touches, labels, card_bg, scenes, layout, panel, glass }
+        Self { project, out_w, out_h, track, clicks, touches, labels, card_bg, scenes, layout, panel, glass,
+        }
     }
 
     /// Build one more layout. Public so the editor can ask for a layout that
     /// is not in the project yet.
-    fn build_scene(project: &Project, kind: SceneKind, out_w: u32, out_h: u32, backdrop: &Frame, track: Option<&CursorTrack>) -> Scene {
+    fn build_scene(project: &Project, kind: SceneKind, out_w: u32, out_h: u32, backdrop: &Frame, track: Option<&CursorTrack>,
+    ) -> Scene {
         use crate::project::Corner;
         let glass = project.style.glass.clamped();
         let short = out_w.min(out_h) as f64;
@@ -473,38 +483,55 @@ impl Renderer {
         let mut cam: Option<CamPane> = None;
         let corner = cam_style.map(|w| w.corner).unwrap_or(Corner::BottomRight);
         let size = cam_style.map(|w| w.size.clamp(0.08, 0.5)).unwrap_or(0.24);
-        let circle = cam_style.map(|w| w.circle).unwrap_or(true);
+        let cam_shape = cam_style.map(|w| w.shape()).unwrap_or(crate::project::WebcamShape::Circle);
+        let cam_radius = |w: f64, h: f64| match cam_shape {
+            crate::project::WebcamShape::Circle => w.min(h) / 2.0,
+            crate::project::WebcamShape::RoundedSquare => w.min(h) * 0.16,
+            crate::project::WebcamShape::Square => 0.0,
+            crate::project::WebcamShape::Rectangle => w.min(h) * 0.06,
+        };
         match kind {
             SceneKind::Screen => {}
             SceneKind::Bubble => {
                 let d = ((size * short).round() as u32 & !1).max(16) as f64;
-                let (x, y) = corner.place(ow, oh, d, d, m);
-                cam = Some(CamPane { x, y, w: d, h: d, radius: if circle { d / 2.0 } else { d * 0.16 }, floating: true });
+                let (cw, ch) = if cam_shape == crate::project::WebcamShape::Rectangle {
+                    (d * 1.5, d)
+                } else {
+                    (d, d)
+                };
+                let (x, y) = corner.place(ow, oh, cw, ch, m);
+                cam = Some(CamPane { x, y, w: cw, h: ch, radius: cam_radius(cw, ch), floating: true,
+                });
             }
             SceneKind::Split if !tall => {
-                // A column beside the recording, nothing covered.
-                let d = ((((size * 1.6).min(0.45) * short).max(16.0)).round() as u32 & !1).max(16) as f64;
-                let col = d + m;
+                let col = (aw * project.layouts.split_camera_fraction.clamp(0.2, 0.55)).max(16.0);
+                let gap = m.min(col * 0.12);
                 let left = corner.is_left();
-                ax = if left { col + pad } else { pad };
-                aw = ow - 2.0 * pad - col;
-                let x = if left { m } else { ow - d - m };
-                cam = Some(CamPane { x, y: (oh - d) / 2.0, w: d, h: d, radius: if circle { d / 2.0 } else { d * 0.16 }, floating: true });
+                ax = if left { pad + col + gap } else { pad };
+                aw -= col + gap;
+                let x = if left { pad } else { ow - pad - col };
+                cam = Some(CamPane { x, y: pad,
+                    w: col,
+                    h: ah,
+                    radius: radius.min(col.min(ah) / 2.0), floating: false,
+                });
             }
             SceneKind::Split => {
                 // Camera on top (or below), the recording in the rest.
-                let ch = (ah * if out_w == out_h { 0.40 } else { 0.34 }).round();
+                let ch = (ah * project.layouts.split_camera_fraction.clamp(0.2, 0.55)).round();
                 let gap = (short * 0.025).max(pad * 0.5);
                 let top = corner.is_top();
                 let y = if top { pad } else { oh - pad - ch };
-                cam = Some(CamPane { x: pad, y, w: aw, h: ch, radius, floating: false });
+                cam = Some(CamPane { x: pad, y, w: aw, h: ch, radius, floating: false,
+                });
                 if top {
                     ay += ch + gap;
                 }
                 ah -= ch + gap;
             }
             SceneKind::Camera => {
-                cam = Some(CamPane { x: pad, y: pad, w: aw, h: ah, radius, floating: false });
+                cam = Some(CamPane { x: pad, y: pad, w: aw, h: ah, radius, floating: false,
+                });
             }
         }
         if framed {
@@ -520,7 +547,8 @@ impl Renderer {
         let mut crop = false;
         if kind == SceneKind::Camera {
             let c = cam.expect("camera pane");
-            layout = Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius };
+            layout = Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius,
+            };
         } else {
             // In a tall or square picture the whole screen would be tiny:
             // show a window of it that follows the cursor instead.
@@ -532,7 +560,8 @@ impl Renderer {
             } else {
                 (aw, aw / src_aspect)
             };
-            layout = Layout { x: ax + (aw - w) / 2.0, y: ay + (ah - h) / 2.0, w, h, radius: radius.min(w.min(h) / 2.0) };
+            layout = Layout { x: ax + (aw - w) / 2.0, y: ay + (ah - h) / 2.0, w, h, radius: radius.min(w.min(h) / 2.0),
+            };
             if let Some(r) = crate::frames::screen_radius(frame, short) {
                 layout.radius = r.min(layout.w.min(layout.h) / 2.0);
             }
@@ -541,29 +570,38 @@ impl Renderer {
                 let pr = (glass.radius * short).min(pw.min(ph) / 2.0);
                 // Concentric corners: the recording's radius follows the panel's.
                 layout.radius = layout.radius.max((pr - inset_px).max(0.0)).min(layout.w.min(layout.h) / 2.0);
-                panel = Some(Layout { x: layout.x - inset_px, y: layout.y - inset_px, w: pw, h: ph, radius: pr });
+                panel = Some(Layout { x: layout.x - inset_px, y: layout.y - inset_px, w: pw, h: ph, radius: pr,
+                });
             }
         }
         let mut background = backdrop.clone();
         if framed {
             let (ox, oy, ow2, oh2, r) = crate::frames::outer(frame, (layout.x, layout.y, layout.w, layout.h), short);
-            Self::bake_shadow(&mut background, project, Layout { x: ox, y: oy, w: ow2, h: oh2, radius: r }, out_w, out_h);
-            crate::frames::draw(&mut background, frame, (layout.x, layout.y, layout.w, layout.h), short);
+            Self::bake_shadow(&mut background, project, Layout { x: ox, y: oy, w: ow2, h: oh2, radius: r,
+                }, out_w, out_h,
+            );
+            crate::frames::draw(&mut background, frame, (layout.x, layout.y, layout.w, layout.h), short,
+            );
         } else {
-            Self::bake_shadow(&mut background, project, panel.unwrap_or(layout), out_w, out_h);
+            Self::bake_shadow(&mut background, project, panel.unwrap_or(layout), out_w, out_h,
+            );
         }
         if let Some(c) = cam.filter(|c| !c.floating && kind != SceneKind::Camera) {
-            Self::bake_shadow(&mut background, project, Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius }, out_w, out_h);
+            Self::bake_shadow(&mut background, project, Layout { x: c.x, y: c.y, w: c.w, h: c.h, radius: c.radius,
+                }, out_w, out_h,
+            );
         }
         if let Some(pl) = panel {
             let t = glass.tint.map(|v| v as f32);
-            frost_rect(&mut background, pl.x, pl.y, pl.w, pl.h, pl.radius, glass.blur * short, t, glass.tint_opacity as f32, glass.highlight as f32, 1.0);
+            frost_rect(&mut background, pl.x, pl.y, pl.w, pl.h, pl.radius, glass.blur * short, t, glass.tint_opacity as f32, glass.highlight as f32, 1.0,
+            );
         }
         let follow = match (crop, track) {
             (true, Some(tr)) => Self::follow_table(tr, project, layout.w / layout.h),
             _ => Vec::new(),
         };
-        Scene { kind, layout, panel, background, cam, crop, follow }
+        Scene { kind, layout, panel, background, cam, crop, follow,
+        }
     }
 
     /// Where the window on the screen is centred over time. The cursor can
@@ -596,7 +634,8 @@ impl Renderer {
 
     /// The visible rectangle of the source in a layout, in source pixels.
     fn view_rect(&self, sc: &Scene, zcam: &Camera, src_t: f64) -> (f64, f64, f64, f64) {
-        let (sw, sh) = (self.project.source_width as f64, self.project.source_height as f64);
+        let (sw, sh) = (self.project.source_width as f64, self.project.source_height as f64,
+        );
         if !sc.crop {
             return zcam.view_rect(sw, sh);
         }
@@ -611,13 +650,15 @@ impl Renderer {
             let i = (f.floor() as usize).min(sc.follow.len() - 1);
             let j = (i + 1).min(sc.follow.len() - 1);
             let u = f - f.floor();
-            (sc.follow[i].0 + (sc.follow[j].0 - sc.follow[i].0) * u, sc.follow[i].1 + (sc.follow[j].1 - sc.follow[i].1) * u)
+            (sc.follow[i].0 + (sc.follow[j].0 - sc.follow[i].0) * u, sc.follow[i].1 + (sc.follow[j].1 - sc.follow[i].1) * u,
+            )
         };
         // While a zoom is in, the zoom decides where to look.
         let k = ((zcam.scale - 1.0) / 0.25).clamp(0.0, 1.0);
         let k = k * k * (3.0 - 2.0 * k);
         let (cx, cy) = (fx + (zcam.cx - fx) * k, fy + (zcam.cy - fy) * k);
-        let (cx, cy) = (cx.clamp(vw / 2.0, (sw - vw / 2.0).max(vw / 2.0)), cy.clamp(vh / 2.0, (sh - vh / 2.0).max(vh / 2.0)));
+        let (cx, cy) = (cx.clamp(vw / 2.0, (sw - vw / 2.0).max(vw / 2.0)), cy.clamp(vh / 2.0, (sh - vh / 2.0).max(vh / 2.0)),
+        );
         (cx - vw / 2.0, cy - vh / 2.0, vw, vh)
     }
 
@@ -694,15 +735,19 @@ impl Renderer {
             return paint_mesh(f, colors);
         }
         let (from, to, angle) = match bg {
+            Background::None => ([0, 0, 0], [0, 0, 0], 0.0),
             Background::Solid { color } => (*color, *color, 0.0),
-            Background::Gradient { from, to, angle_deg } => (*from, *to, *angle_deg),
+            Background::Gradient { from, to, angle_deg,
+            } => (*from, *to, *angle_deg),
             Background::Image { .. } | Background::Mesh { .. } => ([24, 24, 27], [24, 24, 27], 0.0),
         };
         let (dx, dy) = (angle.to_radians().cos(), angle.to_radians().sin());
         // Project corners to find the gradient range.
         let proj = |x: f64, y: f64| x * dx + y * dy;
-        let cs = [proj(0.0, 0.0), proj(w as f64, 0.0), proj(0.0, h as f64), proj(w as f64, h as f64)];
-        let (lo, hi) = (cs.iter().cloned().fold(f64::MAX, f64::min), cs.iter().cloned().fold(f64::MIN, f64::max));
+        let cs = [proj(0.0, 0.0), proj(w as f64, 0.0), proj(0.0, h as f64), proj(w as f64, h as f64),
+        ];
+        let (lo, hi) = (cs.iter().cloned().fold(f64::MAX, f64::min), cs.iter().cloned().fold(f64::MIN, f64::max),
+        );
         f.data.par_chunks_mut((w * 4) as usize).enumerate().for_each(|(y, row)| {
             for x in 0..w as usize {
                 let t = (proj(x as f64, y as f64) - lo) / (hi - lo).max(1e-6);
@@ -716,11 +761,13 @@ impl Renderer {
     /// The plate behind captions, callouts and key labels: a dark translucent
     /// pill, or frosted glass when the glass style is on. `fade` is 0 to 1.
     #[allow(clippy::too_many_arguments)]
-    fn plate(&self, out: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32, fade: f32) {
+    fn plate(&self, out: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32, fade: f32,
+    ) {
         let g = &self.glass;
         if g.enabled && g.overlays {
             let short = self.out_w.min(self.out_h) as f64;
-            frost_rect(out, x, y, w, h, r, (g.blur * short * 0.7).max(3.0), [18.0, 20.0, 28.0], 0.55, g.highlight as f32, fade);
+            frost_rect(out, x, y, w, h, r, (g.blur * short * 0.7).max(3.0), [18.0, 20.0, 28.0], 0.55, g.highlight as f32, fade,
+            );
         } else {
             fill_round_rect(out, x, y, w, h, r, rgb, alpha * fade);
         }
@@ -753,7 +800,8 @@ impl Renderer {
         let block_w = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.4;
         let bx = (self.out_w as f32 - block_w) / 2.0;
         let by = self.out_h as f32 - block_h - (short as f32 * 0.05);
-        self.plate(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32, 1.0);
+        self.plate(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32, 1.0,
+        );
         // Which word is being spoken now (by index into the caption's words).
         let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
         let col = st.color.map(|v| v as f32);
@@ -776,7 +824,8 @@ impl Renderer {
     /// own shape; it is cropped to fill the pane (a face stays centred).
     fn draw_cam(&self, out: &mut Frame, pane: &CamPane, cam: &Frame) {
         let mirror = self.project.webcam.as_ref().is_some_and(|w| w.mirror);
-        let (cx, cy, hw, hh) = (pane.x + pane.w / 2.0, pane.y + pane.h / 2.0, pane.w / 2.0, pane.h / 2.0);
+        let (cx, cy, hw, hh) = (pane.x + pane.w / 2.0, pane.y + pane.h / 2.0, pane.w / 2.0, pane.h / 2.0,
+        );
         let (ca, pa) = (cam.w as f64 / cam.h.max(1) as f64, pane.w / pane.h.max(1.0));
         let colour = |fx: f64, fy: f64| -> [f32; 3] {
             let mut u = (fx - pane.x) / pane.w;
@@ -840,10 +889,12 @@ impl Renderer {
     /// zoom instead of making the picture jump between two camera states.
     pub fn camera(&self, src_t: f64) -> Camera {
         let p = &self.project;
-        let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0));
+        let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0),
+        );
         t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
         let segs = p.zoom_on_output();
-        camera_at_mapped(p.src_to_out(src_t), &segs, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o))
+        camera_at_mapped(p.src_to_out(src_t), &segs, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o),
+        )
     }
 
     /// Render one output frame. `src` must be the source frame at `src_t`;
@@ -861,7 +912,8 @@ impl Renderer {
     /// How fast the camera is moving at `src_t`, as the share of the screen
     /// width it travels (position) plus the zoom it changes, over the shutter.
     pub fn camera_motion(&self, src_t: f64) -> f64 {
-        let (a, b) = (self.camera(src_t - MOTION_BLUR_MS / 2.0), self.camera(src_t + MOTION_BLUR_MS / 2.0));
+        let (a, b) = (self.camera(src_t - MOTION_BLUR_MS / 2.0), self.camera(src_t + MOTION_BLUR_MS / 2.0),
+        );
         let w = self.project.source_width.max(1) as f64;
         ((b.cx - a.cx).abs() + (b.cy - a.cy).abs()) / w * b.scale.max(a.scale) + (b.scale - a.scale).abs()
     }
@@ -907,7 +959,8 @@ impl Renderer {
         f
     }
 
-    fn render_scene(&self, sc: &Scene, src: &Frame, src_t: f64, cam_frame: Option<&Frame>) -> Frame {
+    fn render_scene(&self, sc: &Scene, src: &Frame, src_t: f64, cam_frame: Option<&Frame>,
+    ) -> Frame {
         let p = &self.project;
         // 1. Blur boxes are applied in source space, so they move with zoom.
         let blurs: Vec<&BlurBox> = p.blur.iter().filter(|b| src_t >= b.start_ms && src_t <= b.end_ms).collect();
@@ -980,7 +1033,9 @@ impl Renderer {
         let to_out = |sx: f64, sy: f64| (l.x + (sx - vx) / vw * l.w, l.y + (sy - vy) / vh * l.h);
         let px_per_src = l.w / vw;
         // Marks of the recording outside the window shown (a tall picture) are skipped.
-        let within = |x: f64, y: f64| !sc.crop || (x >= l.x - 40.0 && x <= l.x + l.w + 40.0 && y >= l.y - 40.0 && y <= l.y + l.h + 40.0);
+        let within = |x: f64, y: f64| {
+            !sc.crop || (x >= l.x - 40.0 && x <= l.x + l.w + 40.0 && y >= l.y - 40.0 && y <= l.y + l.h + 40.0)
+        };
         let base = (p.source_width as f64 / 1440.0).max(0.75);
 
         // 3. Click ripples.
@@ -1099,9 +1154,13 @@ impl Renderer {
                 let top = (short * 0.045).max(pady);
                 let margin = short * 0.06;
                 let hits = |y: f64| {
-                    let inside = |(x0, y0): (f64, f64)| x0 >= bx - margin && x0 <= bx + bw + margin && y0 >= y - margin && y0 <= y + bh + margin;
+                    let inside = |(x0, y0): (f64, f64)| {
+                        x0 >= bx - margin && x0 <= bx + bw + margin && y0 >= y - margin && y0 <= y + bh + margin
+                    };
                     let cursor = cursor_out.is_some_and(inside);
-                    let click = self.clicks.iter().any(|&(t, x, y2)| (0.0..1500.0).contains(&(src_t - t)) && inside(to_out(x, y2)));
+                    let click = self.clicks.iter().any(|&(t, x, y2)| {
+                        (0.0..1500.0).contains(&(src_t - t)) && inside(to_out(x, y2))
+                    });
                     cursor || click
                 };
                 let by = if hits(bottom) && !hits(top) { top } else { bottom };
@@ -1112,7 +1171,8 @@ impl Renderer {
                     let rgb = if parts.len() > 1 && last_key { [48.0, 48.0, 56.0] } else { [15.0, 15.0, 18.0] };
                     self.plate(&mut out, x, by, *w, bh, bh * 0.3, rgb, 0.86, a);
                     let tw = text::measure(part, px) as f64;
-                    text::draw(&mut out, (x + (w - tw) / 2.0) as f32, (by + pady) as f32, px, part, [250.0, 250.0, 250.0], a);
+                    text::draw(&mut out, (x + (w - tw) / 2.0) as f32, (by + pady) as f32, px, part, [250.0, 250.0, 250.0], a,
+                    );
                     x += w + gap;
                 }
             }
@@ -1146,7 +1206,8 @@ impl Renderer {
             let k = (k * k * (3.0 - 2.0 * k)) as f32;
             let rgb = s.rgb();
             let lw = (s.width.clamp(0.001, 0.05) * short).max(2.0);
-            let (x1, y1, x2, y2) = (s.x1.clamp(0.0, 1.0) * w, s.y1.clamp(0.0, 1.0) * h, s.x2.clamp(0.0, 1.0) * w, s.y2.clamp(0.0, 1.0) * h);
+            let (x1, y1, x2, y2) = (s.x1.clamp(0.0, 1.0) * w, s.y1.clamp(0.0, 1.0) * h, s.x2.clamp(0.0, 1.0) * w, s.y2.clamp(0.0, 1.0) * h,
+            );
             let (bx0, bx1, by0, by1) = (x1.min(x2), x1.max(x2), y1.min(y2), y1.max(y2));
             let pad = lw * 2.0 + 2.0;
             let region = |f: &mut Frame, x0: f64, y0: f64, x1: f64, y1: f64, sd: &dyn Fn(f64, f64) -> f64, fill: bool, alpha: f32| {
@@ -1161,7 +1222,8 @@ impl Renderer {
             };
             match s.kind {
                 ShapeKind::Highlight | ShapeKind::Box => {
-                    let (cx, cy, hw, hh) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0));
+                    let (cx, cy, hw, hh) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0),
+                    );
                     let r = (short * 0.012).min(hw).min(hh);
                     let sd = move |px: f64, py: f64| sd_round_rect(px, py, cx, cy, hw, hh, r);
                     if s.kind == ShapeKind::Highlight {
@@ -1171,7 +1233,8 @@ impl Renderer {
                     }
                 }
                 ShapeKind::Ellipse => {
-                    let (cx, cy, rx, ry) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0));
+                    let (cx, cy, rx, ry) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0, ((bx1 - bx0) / 2.0).max(2.0), ((by1 - by0) / 2.0).max(2.0),
+                    );
                     // First order distance to an ellipse: good enough for strokes.
                     let sd = move |px: f64, py: f64| {
                         let (nx, ny) = ((px - cx) / rx, (py - cy) / ry);
@@ -1191,8 +1254,10 @@ impl Renderer {
                     let head = (lw * 4.5).min(len * 0.6);
                     let (sx, sy) = (x2 - ux * head * 0.8, y2 - uy * head * 0.8);
                     let (nx, ny) = (-uy, ux);
-                    let (ax, ay) = (x2 - ux * head + nx * head * 0.5, y2 - uy * head + ny * head * 0.5);
-                    let (cx2, cy2) = (x2 - ux * head - nx * head * 0.5, y2 - uy * head - ny * head * 0.5);
+                    let (ax, ay) = (x2 - ux * head + nx * head * 0.5, y2 - uy * head + ny * head * 0.5,
+                    );
+                    let (cx2, cy2) = (x2 - ux * head - nx * head * 0.5, y2 - uy * head - ny * head * 0.5,
+                    );
                     // Filled head (triangle) and a shaft that ends inside it.
                     let sd = move |px: f64, py: f64| {
                         let shaft = sd_segment(px, py, x1, y1, sx, sy) - lw / 2.0;
@@ -1223,10 +1288,12 @@ impl Renderer {
             let bh = lh * lines.len() as f32 + pad * 1.2;
             let bx = (c.x.clamp(0.0, 1.0) as f32 * self.out_w as f32 - bw / 2.0).clamp(4.0, (self.out_w as f32 - bw - 4.0).max(4.0));
             let by = (c.y.clamp(0.0, 1.0) as f32 * self.out_h as f32 - bh / 2.0).clamp(4.0, (self.out_h as f32 - bh - 4.0).max(4.0));
-            self.plate(out, bx as f64, by as f64, bw as f64, bh as f64, (bh * 0.32) as f64, [20.0, 20.0, 26.0], 0.86, k);
+            self.plate(out, bx as f64, by as f64, bw as f64, bh as f64, (bh * 0.32) as f64, [20.0, 20.0, 26.0], 0.86, k,
+            );
             for (i, line) in lines.iter().enumerate() {
                 let x = bx + (bw - text::measure(line, px)) / 2.0;
-                text::draw(out, x, by + pad * 0.6 + i as f32 * lh, px, line, [255.0, 255.0, 255.0], k);
+                text::draw(out, x, by + pad * 0.6 + i as f32 * lh, px, line, [255.0, 255.0, 255.0], k,
+                );
             }
         }
     }
@@ -1273,7 +1340,8 @@ impl Renderer {
 
     /// The watermark text, in its corner with a soft shadow so it reads on any background.
     fn draw_watermark(&self, out: &mut Frame) {
-        let Some(w) = self.project.watermark.as_ref().filter(|w| !w.text.trim().is_empty()) else { return };
+        let Some(w) = self.project.watermark.as_ref().filter(|w| !w.text.trim().is_empty()) else { return;
+        };
         let short = self.out_w.min(self.out_h) as f32;
         let px = (w.size.clamp(0.012, 0.08) as f32 * short).max(10.0);
         let alpha = w.opacity.clamp(0.1, 1.0) as f32;
@@ -1281,9 +1349,11 @@ impl Renderer {
         let tw = text::measure(&text, px);
         let m = short * 0.035;
         let lh = text::line_height(px);
-        let (x, y) = w.corner.place(self.out_w as f64, self.out_h as f64, tw as f64, lh as f64, m as f64);
+        let (x, y) = w.corner.place(self.out_w as f64, self.out_h as f64, tw as f64, lh as f64, m as f64,
+        );
         let (x, y) = (x as f32, y as f32);
-        text::draw(out, x + 1.5, y + 1.5, px, &text, [0.0, 0.0, 0.0], alpha * 0.55);
+        text::draw(out, x + 1.5, y + 1.5, px, &text, [0.0, 0.0, 0.0], alpha * 0.55,
+        );
         text::draw(out, x, y, px, &text, [255.0, 255.0, 255.0], alpha);
     }
 }
@@ -1299,10 +1369,13 @@ mod tests {
         log.header.platform = "linux".into();
         let k = |t: f64, key: &str, m: &[&str]| Event {
             t,
-            kind: EventKind::Key { key: key.into(), modifiers: m.iter().map(|s| s.to_string()).collect() },
+            kind: EventKind::Key { key: key.into(), modifiers: m.iter().map(|s| s.to_string()).collect(),
+            },
         };
-        log.events = vec![k(0.0, "h", &[]), k(100.0, "i", &[]), k(500.0, "S", &["Ctrl"]), k(3000.0, "Enter", &[])];
-        let mut ko = crate::project::KeyOverlay { enabled: true, shortcuts_only: false, hold_ms: 1000.0, symbols: false };
+        log.events = vec![k(0.0, "h", &[]), k(100.0, "i", &[]), k(500.0, "S", &["Ctrl"]), k(3000.0, "Enter", &[]),
+        ];
+        let mut ko = crate::project::KeyOverlay { enabled: true, shortcuts_only: false, hold_ms: 1000.0, symbols: false,
+        };
         let labels = build_key_labels(&log, &ko);
         let texts: Vec<_> = labels.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, vec!["Typing...", "Ctrl + S", "Enter"]);
@@ -1319,12 +1392,16 @@ mod tests {
             let mut log = EventLog::new(64, 36);
             log.header.platform = "linux".into();
             for (i, (k, m)) in keys.iter().enumerate() {
-                log.events.push(Event { t: 100.0 + i as f64 * 50.0, kind: EventKind::Key { key: k.to_string(), modifiers: m.iter().map(|s| s.to_string()).collect() } });
+                log.events.push(Event { t: 100.0 + i as f64 * 50.0, kind: EventKind::Key { key: k.to_string(), modifiers: m.iter().map(|s| s.to_string()).collect(),
+                    },
+                });
             }
             let mut p = Project::new("x".into(), None, 64, 36, 5000.0);
-            p.style.background = Background::Solid { color: [140, 140, 140] };
+            p.style.background = Background::Solid { color: [140, 140, 140],
+            };
             p.style.shadow = 0.0;
-            p.keys = crate::project::KeyOverlay { enabled: true, shortcuts_only: true, hold_ms: 1500.0, symbols: false };
+            p.keys = crate::project::KeyOverlay { enabled: true, shortcuts_only: true, hold_ms: 1500.0, symbols: false,
+            };
             let r = Renderer::new(p, Some(&log), 640, 360, None);
             let mut src = Frame::new(64, 36);
             src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[140, 140, 140, 255]));
@@ -1364,8 +1441,10 @@ mod tests {
     #[test]
     fn burned_in_captions_match_the_srt_through_cuts_and_speed() {
         use crate::project::CaptionWord;
-        let w = |a: f64, b: f64, t: &str| CaptionWord { start_ms: a, end_ms: b, text: t.into() };
-        let words = vec![w(1000.0, 1400.0, "Open"), w(1500.0, 1900.0, "the"), w(2000.0, 2400.0, "settings"), w(6000.0, 6400.0, "Then"), w(6500.0, 6900.0, "click"), w(7000.0, 7400.0, "save"), w(12000.0, 12400.0, "Done")];
+        let w = |a: f64, b: f64, t: &str| CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
+        let words = vec![w(1000.0, 1400.0, "Open"), w(1500.0, 1900.0, "the"), w(2000.0, 2400.0, "settings"), w(6000.0, 6400.0, "Then"), w(6500.0, 6900.0, "click"), w(7000.0, 7400.0, "save"), w(12000.0, 12400.0, "Done"),
+        ];
         let mut p = Project::new("x".into(), None, 64, 36, 20_000.0);
         p.captions = crate::captions::words_to_captions(&words, 42, 700.0);
         p.caption_style.burn_in = true;
@@ -1400,7 +1479,8 @@ mod tests {
     #[test]
     fn render_produces_padded_frame() {
         let mut p = Project::new("x".into(), None, 64, 36, 1000.0);
-        p.style.background = Background::Solid { color: [10, 20, 30] };
+        p.style.background = Background::Solid { color: [10, 20, 30],
+        };
         p.style.shadow = 0.0;
         let r = Renderer::new(p, None, 320, 180, None);
         let mut src = Frame::new(64, 36);
@@ -1418,7 +1498,8 @@ mod tests {
         let (w, h) = r.decode_size();
         assert!(w < 2880 && w as f64 >= r.layout.w && w % 2 == 0 && h % 2 == 0);
         // A deep zoom needs every source pixel.
-        p.zoom.push(crate::zoom::ZoomSegment { start_ms: 0.0, end_ms: 500.0, scale: 2.5, follow_cursor: false, focus: (10.0, 10.0), reason: Default::default() });
+        p.zoom.push(crate::zoom::ZoomSegment { start_ms: 0.0, end_ms: 500.0, scale: 2.5, follow_cursor: false, focus: (10.0, 10.0), reason: Default::default(),
+        });
         let r = Renderer::new(p, None, 1920, 1080, None);
         assert_eq!(r.decode_size(), (2880, 1800));
     }
@@ -1426,7 +1507,8 @@ mod tests {
     #[test]
     fn baked_shadow_darkens_only_outside_the_card() {
         let mut p = Project::new("x".into(), None, 64, 36, 1000.0);
-        p.style.background = Background::Solid { color: [200, 200, 200] };
+        p.style.background = Background::Solid { color: [200, 200, 200],
+        };
         p.style.shadow = 0.05;
         p.style.shadow_opacity = 0.5;
         let r = Renderer::new(p, None, 320, 180, None);
@@ -1445,7 +1527,8 @@ mod tests {
         let mut p = Project::new("x".into(), None, 200, 100, 1000.0);
         p.style.shadow = 0.0;
         p.style.padding = 0.0;
-        p.blur.push(BlurBox { x: 0.0, y: 0.0, w: 100.0, h: 100.0, start_ms: 0.0, end_ms: 1000.0, radius: 20, ..serde_json::from_str::<BlurBox>(r#"{"x":0,"y":0,"w":1,"h":1,"start_ms":0,"end_ms":1}"#).unwrap() });
+        p.blur.push(BlurBox { x: 0.0, y: 0.0, w: 100.0, h: 100.0, start_ms: 0.0, end_ms: 1000.0, radius: 20, ..serde_json::from_str::<BlurBox>(r#"{"x":0,"y":0,"w":1,"h":1,"start_ms":0,"end_ms":1}"#,
+            ).unwrap() });
         let r = Renderer::new(p, None, 200, 100, None);
         // Half-size source with a sharp stripe pattern in the blurred half.
         let mut src = Frame::new(100, 50);
@@ -1477,12 +1560,15 @@ mod webcam_layout_tests {
 
     #[test]
     fn side_layout_shrinks_the_screen_and_keeps_the_camera_clear_of_it() {
-        let bubble = Renderer::new(project(WebcamLayout::Bubble, Corner::BottomLeft), None, 1280, 720, None);
-        let side = Renderer::new(project(WebcamLayout::Side, Corner::BottomLeft), None, 1280, 720, None);
+        let bubble = Renderer::new(project(WebcamLayout::Bubble, Corner::BottomLeft), None, 1280, 720, None,
+        );
+        let side = Renderer::new(project(WebcamLayout::Side, Corner::BottomLeft), None, 1280, 720, None,
+        );
         assert!(side.layout.w < bubble.layout.w);
         let cam_right_edge = 720.0 * 0.035 / 1.0 + side.scenes[0].cam.unwrap().w;
         assert!(side.layout.x >= cam_right_edge - 1.0, "screen starts at {} but the camera ends at {}", side.layout.x, cam_right_edge);
-        let right = Renderer::new(project(WebcamLayout::Side, Corner::TopRight), None, 1280, 720, None);
+        let right = Renderer::new(project(WebcamLayout::Side, Corner::TopRight), None, 1280, 720, None,
+        );
         assert!(right.layout.x + right.layout.w <= 1280.0 - right.scenes[0].cam.unwrap().w);
     }
 }
@@ -1498,11 +1584,16 @@ mod watermark_tests {
         p.style.padding = 0.0;
         p.watermark = Some(Watermark { text: "acme.com".into(), opacity: 1.0, ..Default::default() });
         let r = Renderer::new(p.clone(), None, 640, 360, None);
-        let src = Frame { w: 640, h: 360, data: vec![0; 640 * 360 * 4].chunks_exact_mut(4).flat_map(|_| [10u8, 10, 10, 255]).collect() };
+        let src = Frame { w: 640, h: 360, data: vec![0; 640 * 360 * 4].chunks_exact_mut(4).flat_map(|_| [10u8, 10, 10, 255]).collect(),
+        };
         let with = r.render(&src, 0.0, None);
         p.watermark = None;
         let without = Renderer::new(p, None, 640, 360, None).render(&src, 0.0, None);
-        let diff = |x0: usize, x1: usize, y0: usize, y1: usize| (y0..y1).any(|y| (x0..x1).any(|x| with.data[(y * 640 + x) * 4] != without.data[(y * 640 + x) * 4]));
+        let diff = |x0: usize, x1: usize, y0: usize, y1: usize| {
+            (y0..y1).any(|y| {
+                (x0..x1).any(|x| with.data[(y * 640 + x) * 4] != without.data[(y * 640 + x) * 4])
+            })
+        };
         assert!(diff(480, 640, 300, 360), "nothing drawn in the bottom right");
         assert!(!diff(0, 320, 0, 180), "something drawn far from the corner");
     }
@@ -1516,9 +1607,11 @@ mod card_tests {
     #[test]
     fn a_card_draws_its_title_in_the_middle_and_can_fade() {
         let mut p = Project::new("a.mp4".into(), None, 640, 360, 1000.0);
-        p.style.background = crate::project::Background::Solid { color: [10, 10, 10] };
+        p.style.background = crate::project::Background::Solid { color: [10, 10, 10],
+        };
         let r = Renderer::new(p, None, 640, 360, None);
-        let card = Card { title: "Hello".into(), subtitle: "World".into(), duration_ms: 2000.0 };
+        let card = Card { title: "Hello".into(), subtitle: "World".into(), duration_ms: 2000.0,
+        };
         let on = r.card_frame(&card, 1.0);
         let off = r.card_frame(&card, 0.0);
         assert_ne!(on.data, off.data, "text should show");
@@ -1537,9 +1630,11 @@ mod callout_tests {
     fn a_callout_shows_only_inside_its_time_range() {
         let mut p = Project::new("a.mp4".into(), None, 640, 360, 10_000.0);
         p.style.padding = 0.0;
-        p.callouts.push(Callout { text: "Click here".into(), start_ms: 1000.0, end_ms: 4000.0, x: 0.5, y: 0.8 });
+        p.callouts.push(Callout { text: "Click here".into(), start_ms: 1000.0, end_ms: 4000.0, x: 0.5, y: 0.8,
+        });
         let r = Renderer::new(p, None, 640, 360, None);
-        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
+        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect(),
+        };
         let before = r.render(&src, 500.0, None);
         let during = r.render(&src, 2500.0, None);
         let after = r.render(&src, 4500.0, None);
@@ -1554,7 +1649,8 @@ mod shape_tests {
     use crate::project::{Shape, ShapeKind};
 
     fn shape(kind: ShapeKind) -> Shape {
-        Shape { kind, start_ms: 1000.0, end_ms: 4000.0, x1: 0.2, y1: 0.2, x2: 0.7, y2: 0.6, color: "#ff0000".into(), width: 0.008 }
+        Shape { kind, start_ms: 1000.0, end_ms: 4000.0, x1: 0.2, y1: 0.2, x2: 0.7, y2: 0.6, color: "#ff0000".into(), width: 0.008,
+        }
     }
 
     fn frames(kind: ShapeKind) -> (Frame, Frame, Frame) {
@@ -1562,13 +1658,16 @@ mod shape_tests {
         p.style.padding = 0.0;
         p.shapes.push(shape(kind));
         let r = Renderer::new(p, None, 640, 360, None);
-        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect() };
-        (r.render(&src, 500.0, None), r.render(&src, 2500.0, None), r.render(&src, 4500.0, None))
+        let src = Frame { w: 640, h: 360, data: [10u8, 10, 10, 255].iter().cycle().take(640 * 360 * 4).copied().collect(),
+        };
+        (r.render(&src, 500.0, None), r.render(&src, 2500.0, None), r.render(&src, 4500.0, None),
+        )
     }
 
     #[test]
     fn every_shape_shows_only_inside_its_time_range() {
-        for k in [ShapeKind::Arrow, ShapeKind::Box, ShapeKind::Ellipse, ShapeKind::Highlight] {
+        for k in [ShapeKind::Arrow, ShapeKind::Box, ShapeKind::Ellipse, ShapeKind::Highlight,
+        ] {
             let (before, during, after) = frames(k);
             assert_eq!(before.data, after.data, "{k:?}");
             assert_ne!(before.data, during.data, "{k:?}");
@@ -1612,7 +1711,10 @@ mod mesh_tests {
     fn a_mesh_wallpaper_blends_its_four_corners() {
         let colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
         let f = paint_mesh(Frame::new(200, 120), &colors);
-        let px = |x: usize, y: usize| [f.data[(y * 200 + x) * 4], f.data[(y * 200 + x) * 4 + 1], f.data[(y * 200 + x) * 4 + 2]];
+        let px = |x: usize, y: usize| {
+            [f.data[(y * 200 + x) * 4], f.data[(y * 200 + x) * 4 + 1], f.data[(y * 200 + x) * 4 + 2],
+            ]
+        };
         assert!(px(1, 1)[0] > 200 && px(1, 1)[2] < 60, "top left is red: {:?}", px(1, 1));
         assert!(px(198, 118)[0] > 200 && px(198, 118)[1] > 200, "bottom right is yellow: {:?}", px(198, 118));
         assert_ne!(px(100, 60), px(1, 1));
@@ -1620,7 +1722,8 @@ mod mesh_tests {
 
     #[test]
     fn mesh_round_trips_through_json() {
-        let b = Background::Mesh { colors: [[1, 2, 3]; 4] };
+        let b = Background::Mesh { colors: [[1, 2, 3]; 4],
+        };
         let s = serde_json::to_string(&b).unwrap();
         assert!(s.contains("\"type\":\"mesh\""));
         assert_eq!(serde_json::from_str::<Background>(&s).unwrap(), b);
@@ -1651,7 +1754,8 @@ mod glass_tests {
     fn frost_blurs_inside_and_leaves_the_outside_alone() {
         let before = checker(200, 120);
         let mut f = before.clone();
-        frost_rect(&mut f, 40.0, 30.0, 120.0, 60.0, 12.0, 8.0, [255.0; 3], 0.0, 0.0, 1.0);
+        frost_rect(&mut f, 40.0, 30.0, 120.0, 60.0, 12.0, 8.0, [255.0; 3], 0.0, 0.0, 1.0,
+        );
         assert_eq!(at(&f, 5, 5), at(&before, 5, 5), "outside must not change");
         assert_eq!(at(&f, 195, 115), at(&before, 195, 115));
         // The checkerboard collapses towards its mean inside.
@@ -1668,7 +1772,8 @@ mod glass_tests {
         for px in f.data.chunks_exact_mut(4) {
             px.copy_from_slice(&[40, 40, 40, 255]);
         }
-        frost_rect(&mut f, 20.0, 20.0, 160.0, 80.0, 16.0, 0.0, [40.0; 3], 0.0, 1.0, 1.0);
+        frost_rect(&mut f, 20.0, 20.0, 160.0, 80.0, 16.0, 0.0, [40.0; 3], 0.0, 1.0, 1.0,
+        );
         let rim = |x: u32, y: u32| (0..4).map(|d| at(&f, x, y + d)).max().unwrap();
         // Top edge, left of centre, versus the bottom edge, right of centre.
         let top_left = (0..4).map(|d| at(&f, 50, 20 + d)).max().unwrap();
@@ -1691,7 +1796,8 @@ mod glass_tests {
             f
         };
         let bare = plain.render(&grey(1920, 1080), 1000.0, None);
-        for dev in [DeviceFrame::Laptop, DeviceFrame::Browser, DeviceFrame::Phone] {
+        for dev in [DeviceFrame::Laptop, DeviceFrame::Browser, DeviceFrame::Phone,
+        ] {
             let mut p = base.clone();
             p.style.frame = dev;
             let r = Renderer::new(p, None, 1280, 720, None);
@@ -1734,7 +1840,8 @@ mod glass_tests {
     fn motion_blur_smears_only_while_the_camera_moves() {
         use crate::zoom::ZoomSegment;
         let mut p = Project::new("a.mp4".into(), None, 640, 360, 20_000.0);
-        p.zoom = vec![ZoomSegment { start_ms: 4000.0, end_ms: 14_000.0, scale: 2.0, follow_cursor: false, focus: (400.0, 200.0), reason: "click".into() }];
+        p.zoom = vec![ZoomSegment { start_ms: 4000.0, end_ms: 14_000.0, scale: 2.0, follow_cursor: false, focus: (400.0, 200.0), reason: "click".into(),
+        }];
         p.style.padding = 0.0;
         p.style.shadow = 0.0;
         p.style.corner_radius = 0.0;
@@ -1751,10 +1858,16 @@ mod glass_tests {
         let mid = 4000.0 + 450.0;
         assert!(blur.camera_motion(mid) > 0.004, "{}", blur.camera_motion(mid));
         let (a, b) = (sharp.render(&src, mid, None), blur.render(&src, mid, None));
-        let diff = |x: &Frame, y: &Frame| x.data.iter().zip(&y.data).map(|(a, b)| (*a as i64 - *b as i64).unsigned_abs()).sum::<u64>();
+        let diff = |x: &Frame, y: &Frame| {
+            x.data.iter().zip(&y.data).map(|(a, b)| (*a as i64 - *b as i64).unsigned_abs()).sum::<u64>()
+        };
         assert!(diff(&a, &b) > 1000, "blur must change the picture while moving");
         // Contrast falls: the stripes are less sharp.
-        let contrast = |f: &Frame| (0..64u32).map(|x| (at(f, 100 + x, 100) as i32 - at(f, 101 + x, 100) as i32).unsigned_abs() as u64).sum::<u64>();
+        let contrast = |f: &Frame| {
+            (0..64u32).map(|x| {
+                    (at(f, 100 + x, 100) as i32 - at(f, 101 + x, 100) as i32).unsigned_abs() as u64
+                }).sum::<u64>()
+        };
         assert!(contrast(&b) < contrast(&a), "{} vs {}", contrast(&b), contrast(&a));
         // Held still (the zoom is fully in) the two are identical.
         assert_eq!(diff(&sharp.render(&src, 9000.0, None), &blur.render(&src, 9000.0, None)), 0);
@@ -1780,7 +1893,8 @@ mod glass_tests {
     fn glass_overlays_differ_from_the_flat_pill() {
         use crate::project::Callout;
         let mut p = Project::new("a.mp4".into(), None, 640, 360, 4000.0);
-        p.callouts.push(Callout { text: "Hello".into(), x: 0.5, y: 0.5, start_ms: 0.0, end_ms: 3000.0 });
+        p.callouts.push(Callout { text: "Hello".into(), x: 0.5, y: 0.5, start_ms: 0.0, end_ms: 3000.0,
+        });
         let src = checker(640, 360);
         let flat = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0, None);
         p.style.glass.enabled = true;
@@ -1800,7 +1914,8 @@ mod layout_scene_tests {
     use crate::project::{Aspect, Corner, SceneSegment, Webcam};
 
     fn grey(w: u32, h: u32, v: u8) -> Frame {
-        Frame { w, h, data: (0..w * h).flat_map(|_| [v, v, v, 255]).collect() }
+        Frame { w, h, data: (0..w * h).flat_map(|_| [v, v, v, 255]).collect(),
+        }
     }
 
     fn with_camera() -> Project {
@@ -1823,7 +1938,8 @@ mod layout_scene_tests {
     fn a_project_without_a_camera_is_always_the_screen() {
         let mut p = with_camera();
         p.webcam = None;
-        p.layouts.segments.push(SceneSegment { start_ms: 1000.0, end_ms: 2000.0, kind: SceneKind::Camera });
+        p.layouts.segments.push(SceneSegment { start_ms: 1000.0, end_ms: 2000.0, kind: SceneKind::Camera,
+        });
         assert_eq!(p.scene_runs().len(), 1);
         assert_eq!(p.scene_at(1500.0).kind, SceneKind::Screen);
     }
@@ -1833,8 +1949,10 @@ mod layout_scene_tests {
         let mut p = with_camera();
         p.layouts.base = Some(SceneKind::Screen);
         p.layouts.segments = vec![
-            SceneSegment { start_ms: 2000.0, end_ms: 4000.0, kind: SceneKind::Camera },
-            SceneSegment { start_ms: 3000.0, end_ms: 6000.0, kind: SceneKind::Split },
+            SceneSegment { start_ms: 2000.0, end_ms: 4000.0, kind: SceneKind::Camera,
+            },
+            SceneSegment { start_ms: 3000.0, end_ms: 6000.0, kind: SceneKind::Split,
+            },
         ];
         let runs = p.scene_runs();
         let kinds: Vec<_> = runs.iter().map(|r| (r.start_ms, r.end_ms, r.kind)).collect();
@@ -1847,7 +1965,8 @@ mod layout_scene_tests {
         let mut p = with_camera();
         p.layouts.base = Some(SceneKind::Screen);
         p.layouts.transition_ms = 400.0;
-        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera }];
+        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera,
+        }];
         assert_eq!(p.scene_at(1000.0).other, None);
         assert_eq!(p.scene_at(3700.0).other, None);
         let (k_before, k_mid, k_after) = (p.scene_at(3850.0), p.scene_at(4000.0), p.scene_at(4150.0));
@@ -1911,7 +2030,8 @@ mod layout_scene_tests {
         let mut p = with_camera();
         p.layouts.base = Some(SceneKind::Screen);
         p.layouts.transition_ms = 400.0;
-        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera }];
+        p.layouts.segments = vec![SceneSegment { start_ms: 4000.0, end_ms: 8000.0, kind: SceneKind::Camera,
+        }];
         let r = Renderer::new(p, None, 320, 180, None);
         let (screen, cam) = (grey(1920, 1080, 220), grey(320, 240, 20));
         let before = px(&r.render(&screen, 3000.0, Some(&cam)), 160, 90);
@@ -1929,7 +2049,8 @@ mod layout_scene_tests {
         for i in 0..=200 {
             let t = i as f64 * 50.0;
             let x = if t < 5000.0 { 100.0 } else { (100.0 + (t - 5000.0) * 1.0).min(1800.0) };
-            log.events.push(Event { t, kind: EventKind::Move { x, y: 540.0 } });
+            log.events.push(Event { t, kind: EventKind::Move { x, y: 540.0 },
+            });
         }
         log
     }
@@ -1997,5 +2118,35 @@ mod layout_scene_tests {
         let r = Renderer::new(with_camera(), None, 1920, 1080, None);
         let (w, h) = r.cam_decode_size((1920, 1080));
         assert!(w < 1920 && h < 1080 && w % 2 == 0 && h % 2 == 0);
+    }
+
+    #[test]
+    fn camera_shape_and_split_share_change_the_rendered_panes() {
+        use crate::project::WebcamShape;
+        let mut p = with_camera();
+        p.webcam.as_mut().unwrap().shape = Some(WebcamShape::Rectangle);
+        let rect = Renderer::new(p.clone(), None, 1280, 720, None)
+            .scene(SceneKind::Bubble)
+            .cam
+            .unwrap();
+        assert!(rect.w > rect.h);
+        p.layouts.base = Some(SceneKind::Split);
+        p.layouts.split_camera_fraction = 0.5;
+        let wide = Renderer::new(p.clone(), None, 1280, 720, None)
+            .scene(SceneKind::Split)
+            .cam
+            .unwrap();
+        p.layouts.split_camera_fraction = 0.2;
+        let narrow = Renderer::new(p, None, 1280, 720, None)
+            .scene(SceneKind::Split)
+            .cam
+            .unwrap();
+        assert!(wide.w > narrow.w);
+    }
+
+    #[test]
+    fn no_background_is_a_plain_black_canvas() {
+        let f = Renderer::paint_background(&crate::project::Background::None, 8, 8, None);
+        assert!(f.data.chunks_exact(4).all(|px| px == [0, 0, 0, 255]));
     }
 }

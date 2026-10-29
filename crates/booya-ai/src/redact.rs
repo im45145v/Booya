@@ -107,7 +107,10 @@ fn luhn(digits: &str) -> bool {
     if d.len() < 13 || d.len() > 19 {
         return false;
     }
-    let sum: u32 = d.iter().rev().enumerate().map(|(i, &x)| if i % 2 == 1 { let y = x * 2; if y > 9 { y - 9 } else { y } } else { x }).sum();
+    let sum: u32 = d.iter().rev().enumerate().map(|(i, &x)| {
+            if i % 2 == 1 { let y = x * 2; if y > 9 { y - 9 } else { y } } else { x
+            }
+        }).sum();
     sum % 10 == 0
 }
 
@@ -131,7 +134,8 @@ pub fn find_sensitive(text: &str) -> Vec<(Sensitive, std::ops::Range<usize>)> {
                 Sensitive::Iban => iban_ok(s),
                 // An email (with a dotted domain) is reported as an email.
                 Sensitive::Upi => !s.split('@').nth(1).unwrap_or("").contains('.'),
-                Sensitive::Phone => (10..=15).contains(&digits) && !luhn_like_date(s) && !card_like.iter().any(|r| r.start < m.end() && m.start() < r.end),
+                Sensitive::Phone => {
+                    (10..=15).contains(&digits) && !luhn_like_date(s) && !card_like.iter().any(|r| r.start < m.end() && m.start() < r.end)}
                 _ => true,
             };
             if ok {
@@ -200,9 +204,21 @@ pub fn hits_to_blur(hits: &[Hit], sample_ms: f64, pad: f64) -> Vec<BlurBox> {
 
 #[cfg(feature = "ocr")]
 pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) -> Result<Vec<Hit>> {
+    scan_cancellable(project, sample_ms, &mut progress, || false)
+}
+
+#[cfg(feature = "ocr")]
+pub fn scan_cancellable(
+    project: &Project,
+    sample_ms: f64,
+    mut progress: impl FnMut(f64),
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<Hit>> {
     use crate::models::require;
     use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
     use rten::Model;
+
+    anyhow::ensure!(!cancelled(), "redaction cancelled");
 
     let det = Model::load_file(require("ocr-detection")?)?;
     let rec = Model::load_file(require("ocr-recognition")?)?;
@@ -218,6 +234,7 @@ pub fn scan(project: &Project, sample_ms: f64, mut progress: impl FnMut(f64)) ->
     let mut last_sig: Option<Vec<u8>> = None;
     let mut last_hits: Vec<Hit> = Vec::new();
     while let Some(frame) = reader.next()? {
+        anyhow::ensure!(!cancelled(), "redaction cancelled");
         let t = i as f64 * sample_ms;
         i += 1;
         // Skip frames that are entirely cut from the output.
@@ -299,7 +316,8 @@ pub fn password_fields(lines: &[(String, [f64; 4])]) -> Vec<[f64; 4]> {
     let mut out = Vec::new();
     for (text, b) in lines {
         let lower = text.to_lowercase();
-        let Some(pos) = lower.find("password").or_else(|| lower.find("passcode")).or_else(|| lower.find("pin")) else { continue };
+        let Some(pos) = lower.find("password").or_else(|| lower.find("passcode")).or_else(|| lower.find("pin")) else { continue;
+        };
         if lower.contains("forgot") || lower.contains("reset") || (lower.starts_with("pin") && lower.len() > 12) {
             continue;
         }
@@ -354,6 +372,16 @@ pub fn self_test() -> Result<String> {
 
 #[cfg(not(feature = "ocr"))]
 pub fn scan(_project: &Project, _sample_ms: f64, _progress: impl FnMut(f64)) -> Result<Vec<Hit>> {
+    anyhow::bail!("this build of Booya has no OCR (built without the 'ocr' feature)")
+}
+
+#[cfg(not(feature = "ocr"))]
+pub fn scan_cancellable(
+    _project: &Project,
+    _sample_ms: f64,
+    _progress: impl FnMut(f64),
+    _cancelled: impl Fn() -> bool,
+) -> Result<Vec<Hit>> {
     anyhow::bail!("this build of Booya has no OCR (built without the 'ocr' feature)")
 }
 

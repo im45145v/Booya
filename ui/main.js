@@ -92,7 +92,7 @@ function syncPanel() {
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only; $('keys-sym').checked = project.keys.symbols !== false;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
-  if (w) { $('cam-visible').checked = w.visible; $('cam-circle').checked = w.circle; $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; }
+  if (w) { $('cam-visible').checked = w.visible; $('cam-shape').value = w.shape || (w.circle ? 'circle' : 'rounded-square'); $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; $('lay-share').value = L.split_camera_fraction ?? 0.34; }
   $('lay-follow').checked = (project.layouts || {}).follow_cursor !== false;
   const wm = project.watermark || {}; $('wm-text').value = wm.text || ''; $('wm-corner').value = wm.corner || 'bottom-right'; $('wm-opacity').value = wm.opacity || 0.7;
   const ic = project.intro || {}, oc = project.outro || {};
@@ -145,7 +145,7 @@ function outputs() {
 function readPanel() {
   const t = $('bg-type').value, s = project.style;
   s.bg_fit = $('bg-fit-seg').dataset.fit || 'fill'; s.bg_dim = +$('bg-dim').value;
-  s.background = t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
+  s.background = t === 'none' ? { type: t } : t === 'gradient' ? { type: t, from: rgb($('bg-from').value), to: rgb($('bg-to').value), angle_deg: +$('bg-angle').value }
     : t === 'solid' ? { type: t, color: rgb($('bg-from').value) } : t === 'mesh' ? s.background : { type: t, path: $('bg-image').value };
   s.padding = +$('padding').value; s.corner_radius = +$('radius').value; s.shadow = +$('shadow').value;
   s.frame = $('frame-sel').value; s.motion_blur = $('motion-blur').checked;
@@ -155,8 +155,8 @@ function readPanel() {
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked, symbols: $('keys-sym').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
-  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, circle: $('cam-circle').checked, size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
-  { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; }
+  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, shape: $('cam-shape').value, circle: $('cam-shape').value === 'circle', size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
+  { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; L.split_camera_fraction = +$('lay-share').value; $('lay-share-out').textContent = Math.round(L.split_camera_fraction * 100) + '%'; }
   if (project.webcam) { const L = project.layouts; L.base = $('cam-layout').value; L.transition_ms = +$('lay-trans').value; $('lay-trans-out').textContent = (L.transition_ms / 1000).toFixed(2) + ' s'; }
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
@@ -173,7 +173,7 @@ function setBgType(t) {
   $('bg-type').value = t;
   document.querySelectorAll('.seg button[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === t));
   $('bg-to-wrap').hidden = $('bg-angle-wrap').hidden = t !== 'gradient';
-  $('bg-colors').hidden = t === 'image' || t === 'mesh'; $('bg-image-row').hidden = t !== 'image';
+  $('bg-colors').hidden = t === 'image' || t === 'mesh' || t === 'none'; $('bg-image-row').hidden = t !== 'image';
   if (typeof markWall === 'function') markWall();
 }
 document.querySelectorAll('.seg button[data-bg]').forEach(b => (b.onclick = () => { setBgType(b.dataset.bg); if (project) { readPanel(); refresh(); } }));
@@ -522,7 +522,7 @@ document.querySelectorAll('.tab').forEach((t, i, all) => {
 
 // ---------- Templates ----------
 let templates = { builtin: [], user: [] };
-const bgCss = b => b.type === 'gradient' ? `linear-gradient(${90 + b.angle_deg}deg, ${hex(b.from)}, ${hex(b.to)})` : b.type === 'solid' ? hex(b.color) : 'var(--surface-3)';
+const bgCss = b => b.type === 'none' ? '#000' : b.type === 'gradient' ? `linear-gradient(${90 + b.angle_deg}deg, ${hex(b.from)}, ${hex(b.to)})` : b.type === 'solid' ? hex(b.color) : 'var(--surface-3)';
 async function loadTemplates() {
   templates = await invoke('list_presets');
   const all = [...templates.builtin, ...templates.user];
@@ -602,16 +602,21 @@ $('ex-reveal').onclick = () => lastExport && invoke('reveal', { path: lastExport
 function modal(title, html) { $('modal-title').textContent = title; $('modal-body').innerHTML = html; if (!$('modal').open) $('modal').showModal(); }
 $('modal-close').onclick = () => $('modal').close();
 
-async function aiTask(label, fn) {
+async function aiTask(label, fn, options = {}) {
   if (!project || busy) return;
   if (playing) setPlaying(false);
   busy = true; readPanel(); checkpoint(); enableControls();
+  $('ready-cancel').hidden = !options.cancellable;
+  $('ready-cancel').disabled = false;
   $('ai-bar-wrap').hidden = false; $('ai-bar-wrap').classList.add('indet'); status(label + '...', 'busy');
   try { await fn(); markDone(2); } catch (e) {
-    fail(e);
-    if (/model|install|download/i.test(String(e))) showModels(humanError(e));
+    if (/Auto edit cancelled/i.test(String(e))) status('Auto edit cancelled. No partial edits were applied.', 'info');
+    else {
+      fail(e);
+      if (/model|install|download/i.test(String(e))) showModels(humanError(e));
+    }
   }
-  busy = false; $('ai-bar-wrap').hidden = true; enableControls(); refreshModels(); loadAiStatus();
+  busy = false; $('ready-cancel').hidden = true; $('ai-bar-wrap').hidden = true; enableControls(); refreshModels(); loadAiStatus();
 }
 window.__TAURI__.event.listen('ai-progress', e => {
   const p = e.payload;
@@ -630,7 +635,12 @@ $('ready-btn').onclick = () => aiTask('Running auto edit', async () => {
     `<li class="done">${icon('i-check')}<span><b>Length</b><small>${fmt(r.report.before_ms)} to ${fmt(r.report.after_ms)}. Ctrl+Z undoes everything at once.</small></span></li>`;
   const skipped = r.report.steps.filter(s => s.state !== 'done').length;
   status(skipped ? `Auto edit done, ${skipped} step(s) skipped. The Auto edit tab says why.` : 'Auto edit done. Press Space to watch it, then Export.', 'success');
-});
+}, { cancellable: true });
+$('ready-cancel').onclick = async () => {
+  $('ready-cancel').disabled = true;
+  status('Cancelling at the next safe checkpoint...', 'busy');
+  try { await invoke('cancel_auto_edit'); } catch (e) { $('ready-cancel').disabled = false; fail(e); }
+};
 $('ai-transcribe').onclick = () => aiTask('Transcribing', async () => {
   const cloud = await confirmCloud('stt');
   if (cloud === null) return status('Cancelled. Nothing was sent.', 'info');
@@ -1529,7 +1539,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['frame-sel', 'card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-circle', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['frame-sel', 'card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-shape', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-share', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 // The permissions screen comes first (a Mac's first launch, or a permission that went off), then the privacy note.

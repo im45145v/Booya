@@ -5,15 +5,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
+use booya_ai::providers::{self, CloudConfig, Provider, Task};
 use booya_ai::{docs, llm::Llm, models, pipeline};
 use booya_core::captions::{self, AutoCutOptions};
-use booya_core::render::Renderer;
 use booya_core::capture::{self, CaptureTarget, RecordOptions, RecordingSession};
 use booya_core::preset::{self, Preset};
 use booya_core::project::Project;
+use booya_core::render::Renderer;
 use booya_core::shortcuts;
 use booya_core::{export, new_project, zoom, EventLog, ZoomSegment};
-use booya_ai::providers::{self, CloudConfig, Provider, Task};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -45,6 +45,9 @@ struct AppState {
     proxying: Mutex<HashSet<String>>,
     /// Set to abort the 3-2-1 countdown.
     cancel_countdown: std::sync::atomic::AtomicBool,
+    /// Auto edit observes cancellation between steps, transcription windows,
+    /// and OCR frames.
+    cancel_auto_edit: std::sync::atomic::AtomicBool,
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -71,7 +74,8 @@ fn check_write(app: &tauri::AppHandle, path: &str, exts: &[&str]) -> R<PathBuf> 
 /// Native save dialog run from Rust. The chosen path is remembered so the
 /// matching write command accepts it.
 #[tauri::command]
-async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: String, extensions: Vec<String>) -> R<Option<String>> {
+async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: String, extensions: Vec<String>,
+) -> R<Option<String>> {
     let a2 = app.clone();
     blocking(move || {
         let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
@@ -85,7 +89,8 @@ async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: St
                 d = d.set_file_name(f.to_string_lossy());
             }
         }
-        let Some(fp) = d.blocking_save_file() else { return Ok(None) };
+        let Some(fp) = d.blocking_save_file() else { return Ok(None);
+        };
         let mut p = fp.into_path().map_err(e)?;
         if p.extension().is_none() {
             if let Some(x) = extensions.first() {
@@ -100,11 +105,13 @@ async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: St
 
 /// Native open dialog run from Rust.
 #[tauri::command]
-async fn pick_open(app: tauri::AppHandle, name: String, extensions: Vec<String>) -> R<Option<String>> {
+async fn pick_open(app: tauri::AppHandle, name: String, extensions: Vec<String>,
+) -> R<Option<String>> {
     let a2 = app.clone();
     blocking(move || {
         let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
-        let Some(fp) = a2.dialog().file().add_filter(&name, &exts).blocking_pick_file() else { return Ok(None) };
+        let Some(fp) = a2.dialog().file().add_filter(&name, &exts).blocking_pick_file() else { return Ok(None);
+        };
         let p = fp.into_path().map_err(e)?;
         grant(&a2, &p);
         Ok(Some(p.to_string_lossy().to_string()))
@@ -128,7 +135,8 @@ fn open_recording(video: String, events: Option<String>) -> R<Project> {
             }
         }
     }
-    new_project(&PathBuf::from(video), events.filter(|s| !s.is_empty()).map(PathBuf::from).as_deref()).map_err(e)
+    new_project(&PathBuf::from(video), events.filter(|s| !s.is_empty()).map(PathBuf::from).as_deref(),
+    ).map_err(e)
 }
 
 #[tauri::command]
@@ -178,7 +186,9 @@ fn touch_recent(app: &tauri::AppHandle, path: &str) {
     let mut list = read_recent(app);
     list.retain(|r| r.path != path);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    list.insert(0, RecentProject { path: path.to_string(), opened: now });
+    list.insert(0, RecentProject { path: path.to_string(), opened: now,
+        },
+    );
     list.truncate(12);
     let f = recent_projects_path(app);
     if let Some(d) = f.parent() {
@@ -206,7 +216,8 @@ fn recent_projects(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 fn forget_recent(app: tauri::AppHandle, path: String) {
     let mut list = read_recent(&app);
     list.retain(|r| r.path != path);
-    let _ = std::fs::write(recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default());
+    let _ = std::fs::write(recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default(),
+    );
 }
 
 /// Open a project folder, its project.json, or an older loose project file.
@@ -226,7 +237,8 @@ async fn open_project(app: tauri::AppHandle, path: String) -> R<OpenedProject> {
             let r = booya_core::bundle::open(&a).ok().filter(|r| newer && r.project != o.project)?;
             Some(r.project)
         });
-        Ok(OpenedProject { project: o.project, path, missing: o.missing, recovered })
+        Ok(OpenedProject { project: o.project, path, missing: o.missing, recovered,
+        })
     })
     .await
 }
@@ -236,7 +248,8 @@ async fn open_project(app: tauri::AppHandle, path: String) -> R<OpenedProject> {
 async fn pick_folder(app: tauri::AppHandle) -> R<Option<String>> {
     let a2 = app.clone();
     blocking(move || {
-        let Some(fp) = a2.dialog().file().blocking_pick_folder() else { return Ok(None) };
+        let Some(fp) = a2.dialog().file().blocking_pick_folder() else { return Ok(None);
+        };
         let p = fp.into_path().map_err(e)?;
         grant(&a2, &p);
         Ok(Some(p.to_string_lossy().to_string()))
@@ -277,7 +290,8 @@ async fn duplicate_project(app: tauri::AppHandle, path: String, project: Project
 /// back to its own place; a fresh recording is saved in its recording folder,
 /// so closing the app never loses the edit. Returns where it saved, if it did.
 #[tauri::command]
-async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: Project) -> R<Option<String>> {
+async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: Project,
+) -> R<Option<String>> {
     blocking(move || {
         if let Some(path) = path {
             let p = PathBuf::from(&path);
@@ -293,7 +307,8 @@ async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: 
             return Ok(Some(path));
         }
         let root = recordings_dir(&app)?.canonicalize().map_err(e)?;
-        let Some(dir) = project.source.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(None) };
+        let Some(dir) = project.source.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(None);
+        };
         if dir.parent() != Some(root.as_path()) || !dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("recording-")) {
             return Ok(None);
         }
@@ -325,22 +340,26 @@ fn relocate_media(mut project: Project, field: String, path: String) -> R<serde_
 
 #[tauri::command]
 fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
-    let Some(ev) = &project.events else { return Ok(vec![]) };
+    let Some(ev) = &project.events else { return Ok(vec![]);
+    };
     let log = EventLog::load(ev).map_err(e)?;
-    Ok(zoom::generate_zoom_segments(&log, project.duration_ms, &project.zoom_config.to_config()))
+    Ok(zoom::generate_zoom_segments(&log, project.duration_ms, &project.zoom_config.to_config(),
+    ))
 }
 
 /// What the keystroke overlay shows and when, for the timeline's key lane.
 #[tauri::command]
 fn key_track(project: Project) -> R<Vec<booya_core::render::KeyLabel>> {
-    let Some(ev) = &project.events else { return Ok(vec![]) };
+    let Some(ev) = &project.events else { return Ok(vec![]);
+    };
     let log = EventLog::load(ev).map_err(e)?;
     Ok(booya_core::render::build_key_labels(&log, &project.keys))
 }
 
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
 #[tauri::command]
-async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_side: u32, playing: Option<bool>) -> R<String> {
+async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_side: u32, playing: Option<bool>,
+) -> R<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (w, h) = project.export.aspect.size(short_side);
         let key = serde_json::to_string(&project).map_err(e)?;
@@ -359,12 +378,16 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
         let (dw, dh) = r.decode_size();
         // The editor decodes the 720p proxy when it is ready and big enough.
         let decode_path = booya_core::proxy::existing(&cache_dir(&app), &project.source)
-            .filter(|_| booya_core::proxy::fits(booya_core::proxy::proxy_size(project.source_width, project.source_height), (dw, dh)))
+            .filter(|_| {
+                booya_core::proxy::fits(booya_core::proxy::proxy_size(project.source_width, project.source_height), (dw, dh),
+                )
+            })
             .unwrap_or_else(|| project.source.clone());
         let src = {
             let mut dec = state.decoder.lock().unwrap();
             if !dec.as_ref().is_some_and(|d| d.matches(&decode_path, dw, dh)) {
-                *dec = Some(booya_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh));
+                *dec = Some(booya_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh,
+                ));
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
@@ -395,7 +418,8 @@ async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R
 /// Project or video passed on the command line, e.g. `booya-app demo.booya.json`.
 #[tauri::command]
 fn initial_project(app: tauri::AppHandle) -> R<Option<serde_json::Value>> {
-    let Some(arg) = std::env::args().nth(1) else { return Ok(None) };
+    let Some(arg) = std::env::args().nth(1) else { return Ok(None);
+    };
     let path = PathBuf::from(arg);
     if path.extension().is_some_and(|e| e == "json") {
         let p = Project::load(&path).map_err(e)?;
@@ -476,7 +500,10 @@ async fn start_recording(
     if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
         m.stop();
     }
-    let res = blocking(move || capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height }).map_err(e)).await;
+    let res = blocking(move || {
+        capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height,
+        }).map_err(e)
+    }).await;
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().unwrap();
     match res {
@@ -511,7 +538,8 @@ fn watch_mic(app: tauri::AppHandle) {
             let st = mic_state_now(&app);
             let Some(st) = st else { return };
             let msg = st.message();
-            let _ = app.emit("rec-mic", serde_json::json!({ "state": st, "message": msg }));
+            let _ = app.emit("rec-mic", serde_json::json!({ "state": st, "message": msg }),
+            );
             if matches!(st, booya_core::capture::mic::MicState::Ok { .. } | booya_core::capture::mic::MicState::Off) {
                 return;
             }
@@ -540,7 +568,8 @@ fn rec_mic_status(app: tauri::AppHandle) -> serde_json::Value {
 /// Show the countdown window and wait. True when the user cancelled.
 fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
     use std::sync::atomic::Ordering;
-    let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()))
+    let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()),
+    )
         .title("Booya countdown")
         .inner_size(200.0, 200.0)
         .resizable(false)
@@ -671,7 +700,8 @@ async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Pr
                 new_project(&rec.video, Some(&rec.events)).map_err(e)
             }
             Some(ins) => {
-                let r = booya_core::splice::splice_take(&ins.project, &rec.video, Some(&rec.events), ins.at_ms, ins.until_ms).map_err(e)?;
+                let r = booya_core::splice::splice_take(&ins.project, &rec.video, Some(&rec.events), ins.at_ms, ins.until_ms,
+                ).map_err(e)?;
                 proxy_of(r.video.clone());
                 Ok(r.project)
             }
@@ -682,7 +712,8 @@ async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Pr
 
 /// Put a video file from disk into a project at `at_ms` (or over [at_ms, until_ms)).
 #[tauri::command]
-async fn import_clip(app: tauri::AppHandle, project: Project, path: String, at_ms: f64, until_ms: Option<f64>) -> R<Project> {
+async fn import_clip(app: tauri::AppHandle, project: Project, path: String, at_ms: f64, until_ms: Option<f64>,
+) -> R<Project> {
     blocking(move || {
         let r = booya_core::splice::splice_take(&project, &PathBuf::from(path), None, at_ms, until_ms).map_err(e)?;
         let src = r.video.clone();
@@ -718,11 +749,17 @@ async fn capture_sources() -> R<serde_json::Value> {
 /// Preview image and app icon for one source, as data URLs. Fetched one at a
 /// time by the picker as items scroll into view.
 #[tauri::command]
-async fn capture_thumb(kind: String, id: String, bundle: String, x: i32, y: i32, w: u32, h: u32) -> R<serde_json::Value> {
+async fn capture_thumb(kind: String, id: String, bundle: String, x: i32, y: i32, w: u32, h: u32,
+) -> R<serde_json::Value> {
     blocking(move || {
-        let src = capture::sources::SourceInfo { kind, id, title: String::new(), app: String::new(), bundle, x, y, w, h, z: 0 };
+        let src = capture::sources::SourceInfo { kind, id, title: String::new(), app: String::new(), bundle, x, y, w, h, z: 0,
+        };
         let t = capture::sources::thumbnail(&src).map_err(e)?;
-        let url = |b: Option<Vec<u8>>| b.map(|b| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)));
+        let url = |b: Option<Vec<u8>>| {
+            b.map(|b| {
+                format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b))
+            })
+        };
         Ok(serde_json::json!({ "image": url(t.image), "icon": url(t.icon) }))
     })
     .await
@@ -744,7 +781,8 @@ async fn screen_snapshot() -> R<serde_json::Value> {
 fn pause_recording(app: tauri::AppHandle, paused: Option<bool>) -> R<bool> {
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().unwrap();
-    let Some(RecSlot::Running(s)) = &mut *slot else { return Err("Not recording".into()) };
+    let Some(RecSlot::Running(s)) = &mut *slot else { return Err("Not recording".into());
+    };
     let want = paused.unwrap_or(!s.is_paused());
     s.set_paused(want);
     let _ = app.emit("rec-paused", want);
@@ -759,7 +797,8 @@ fn show_indicator(app: &tauri::AppHandle) {
     if app.get_webview_window("indicator").is_some() {
         return;
     }
-    let w = tauri::WebviewWindowBuilder::new(app, "indicator", tauri::WebviewUrl::App("indicator.html".into()))
+    let w = tauri::WebviewWindowBuilder::new(app, "indicator", tauri::WebviewUrl::App("indicator.html".into()),
+    )
         .title("Booya is recording")
         .inner_size(384.0, 52.0)
         .resizable(false)
@@ -776,7 +815,8 @@ fn show_indicator(app: &tauri::AppHandle) {
         #[cfg(target_os = "macos")]
         {
             use tauri::window::{Effect, EffectState, EffectsBuilder};
-            let _ = w.set_effects(EffectsBuilder::new().effect(Effect::HudWindow).state(EffectState::Active).radius(26.0).build());
+            let _ = w.set_effects(EffectsBuilder::new().effect(Effect::HudWindow).state(EffectState::Active).radius(26.0).build(),
+            );
         }
         if let Ok(Some(m)) = w.current_monitor().or_else(|_| w.primary_monitor()) {
             let sz = m.size();
@@ -814,7 +854,8 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { retention_days: None, glass_ui: false, menu_bar: true, shortcuts: Default::default() }
+        Self { retention_days: None, glass_ui: false, menu_bar: true, shortcuts: Default::default(),
+        }
     }
 }
 
@@ -870,7 +911,8 @@ fn glass_native(app: tauri::AppHandle, on: bool) -> bool {
         use tauri::window::{Effect, EffectState, EffectsBuilder};
         if let Some(w) = app.get_webview_window("main") {
             let r = if on {
-                w.set_effects(EffectsBuilder::new().effect(Effect::Sidebar).state(EffectState::FollowsWindowActiveState).build())
+                w.set_effects(EffectsBuilder::new().effect(Effect::Sidebar).state(EffectState::FollowsWindowActiveState).build(),
+                )
             } else {
                 w.set_effects(Option::<tauri::utils::config::WindowEffectsConfig>::None)
             };
@@ -917,8 +959,10 @@ fn set_menu_bar(app: tauri::AppHandle, enabled: bool) -> R<()> {
 
 /// Remove recording folders older than the retention setting.
 fn apply_retention(app: &tauri::AppHandle) -> usize {
-    let Some(days) = load_settings().retention_days else { return 0 };
-    let Ok(dir) = recordings_dir(app) else { return 0 };
+    let Some(days) = load_settings().retention_days else { return 0;
+    };
+    let Ok(dir) = recordings_dir(app) else { return 0;
+    };
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days as u64 * 86400);
     let mut n = 0;
     for ent in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
@@ -950,7 +994,8 @@ fn list_recordings(app: tauri::AppHandle) -> R<Vec<RecordingInfo>> {
         }
         let bytes = std::fs::read_dir(&p).into_iter().flatten().flatten().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum();
         let modified = ent.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-        out.push(RecordingInfo { path: p, bytes, modified });
+        out.push(RecordingInfo { path: p, bytes, modified,
+        });
     }
     out.sort_by_key(|r| std::cmp::Reverse(r.modified));
     Ok(out)
@@ -1088,7 +1133,8 @@ fn cloud_consent(provider: String, task: String, accepted: bool) -> R<()> {
 }
 
 #[tauri::command]
-fn cloud_configure(custom_base: Option<String>, models: Option<std::collections::BTreeMap<String, String>>, voice: Option<String>) -> R<()> {
+fn cloud_configure(custom_base: Option<String>, models: Option<std::collections::BTreeMap<String, String>>, voice: Option<String>,
+) -> R<()> {
     let mut cfg = CloudConfig::load();
     cfg.custom_base = custom_base.filter(|s| !s.trim().is_empty());
     if let Some(m) = models {
@@ -1103,19 +1149,23 @@ fn cloud_configure(custom_base: Option<String>, models: Option<std::collections:
 
 /// Exactly what a cloud call would send, for the confirm dialog.
 #[tauri::command]
-fn cloud_preview(task: String, project: Project, text: Option<String>) -> R<Option<providers::SendPreview>> {
+fn cloud_preview(task: String, project: Project, text: Option<String>,
+) -> R<Option<providers::SendPreview>> {
     let t = Task::parse(&task).map_err(e)?;
     let cfg = CloudConfig::load();
-    let Some(p) = cfg.active(t) else { return Ok(None) };
+    let Some(p) = cfg.active(t) else { return Ok(None);
+    };
     let (data, bytes) = match t {
-        Task::Stt => ("The audio track of this recording as 16 kHz mono WAV (no video, no event log)".to_string(), (project.duration_ms / 1000.0 * 32000.0) as u64 + 44),
+        Task::Stt => ("The audio track of this recording as 16 kHz mono WAV (no video, no event log)".to_string(), (project.duration_ms / 1000.0 * 32000.0) as u64 + 44,
+        ),
         Task::Llm => {
             let words: usize = project.captions.iter().map(|c| c.text.split_whitespace().count()).sum();
             (format!("The transcript text ({words} words), chapter timings and the project file name. No video, audio or key log."), (words as u64) * 7 + 1500)
         }
         Task::Tts => {
             let tx = text.unwrap_or_default();
-            (format!("The voiceover text ({} characters)", tx.chars().count()), tx.len() as u64)
+            (format!("The voiceover text ({} characters)", tx.chars().count()), tx.len() as u64,
+            )
         }
     };
     let mut pv = providers::preview(&cfg, p, t, &data, bytes).map_err(e)?;
@@ -1127,8 +1177,11 @@ fn cloud_preview(task: String, project: Project, text: Option<String>) -> R<Opti
 
 fn cloud_key_for(t: Task) -> R<Option<(CloudConfig, Provider, String)>> {
     let cfg = CloudConfig::load();
-    let Some(p) = cfg.active(t) else { return Ok(None) };
-    let key = get_key(p.id()).ok_or_else(|| format!("No API key saved for {}. Add one in Settings > Cloud AI or switch back to local.", p.info().name))?;
+    let Some(p) = cfg.active(t) else { return Ok(None);
+    };
+    let key = get_key(p.id()).ok_or_else(|| {
+        format!("No API key saved for {}. Add one in Settings > Cloud AI or switch back to local.", p.info().name)
+    })?;
     Ok(Some((cfg, p, key)))
 }
 
@@ -1190,7 +1243,9 @@ struct AiProgress {
 }
 
 fn progress(app: &tauri::AppHandle, task: &str, p: f64, msg: &str) {
-    let _ = app.emit("ai-progress", AiProgress { task: task.into(), progress: p, message: msg.into() });
+    let _ = app.emit("ai-progress", AiProgress { task: task.into(), progress: p, message: msg.into(),
+        },
+    );
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) -> R<T> {
@@ -1206,7 +1261,10 @@ fn models_list() -> serde_json::Value {
 async fn model_download(app: tauri::AppHandle, id: String) -> R<()> {
     blocking(move || {
         let task = format!("download:{id}");
-        models::download(&id, |d, t| progress(&app, &task, if t > 0 { d as f64 / t as f64 } else { 0.0 }, &format!("{} / {}", models::human(d), models::human(t))))
+        models::download(&id, |d, t| {
+            progress(&app, &task, if t > 0 { d as f64 / t as f64 } else { 0.0 }, &format!("{} / {}", models::human(d), models::human(t)),
+            )
+        })
             .map(|_| ())
             .map_err(e)
     })
@@ -1225,15 +1283,18 @@ struct AiResult<T> {
 }
 
 #[tauri::command]
-async fn ai_transcribe(app: tauri::AppHandle, mut project: Project, model: Option<String>, cloud: Option<bool>) -> R<AiResult<pipeline::TranscribeReport>> {
+async fn ai_transcribe(app: tauri::AppHandle, mut project: Project, model: Option<String>, cloud: Option<bool>,
+) -> R<AiResult<pipeline::TranscribeReport>> {
     blocking(move || {
         let report = match cloud_key_for(Task::Stt)?.filter(|_| cloud.unwrap_or(false)) {
             Some((cfg, p, key)) => {
-                progress(&app, "transcribe", 0.1, &format!("Sending the audio to {}...", p.info().name));
+                progress(&app, "transcribe", 0.1, &format!("Sending the audio to {}...", p.info().name),
+                );
                 pipeline::transcribe_project_cloud(&mut project, &cfg, p, &key, None).map_err(e)?
             }
             None => {
-                progress(&app, "transcribe", 0.1, "Listening (runs on this computer)...");
+                progress(&app, "transcribe", 0.1, "Listening (runs on this computer)...",
+                );
                 pipeline::transcribe_project(&mut project, model.as_deref(), None).map_err(e)?
             }
         };
@@ -1244,7 +1305,8 @@ async fn ai_transcribe(app: tauri::AppHandle, mut project: Project, model: Optio
 }
 
 #[tauri::command]
-async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_silence_ms: f64, apply: Option<bool>) -> R<AiResult<pipeline::CutReport>> {
+async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_silence_ms: f64, apply: Option<bool>,
+) -> R<AiResult<pipeline::CutReport>> {
     blocking(move || {
         let o = AutoCutOptions { cut_fillers: fillers, cut_silences: silences, min_silence_ms, ..Default::default() };
         // Without `apply` this only proposes: the editor shows the cuts for review first.
@@ -1255,16 +1317,20 @@ async fn ai_autocut(mut project: Project, fillers: bool, silences: bool, min_sil
 }
 
 #[tauri::command]
-async fn ai_redact(app: tauri::AppHandle, mut project: Project) -> R<AiResult<pipeline::RedactReport>> {
+async fn ai_redact(app: tauri::AppHandle, mut project: Project,
+) -> R<AiResult<pipeline::RedactReport>> {
     blocking(move || {
-        let report = pipeline::redact_project(&mut project, 500.0, false, |p| progress(&app, "redact", p, "Scanning frames for sensitive text...")).map_err(e)?;
+        let report = pipeline::redact_project(&mut project, 500.0, false, |p| {
+            progress(&app, "redact", p, "Scanning frames for sensitive text...")
+        }).map_err(e)?;
         Ok(AiResult { project, report })
     })
     .await
 }
 
 #[tauri::command]
-async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: Option<bool>, confirm_remote: Option<bool>) -> R<serde_json::Value> {
+async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: Option<bool>, confirm_remote: Option<bool>,
+) -> R<serde_json::Value> {
     blocking(move || {
         progress(&app, "docs", 0.1, "Looking for a local LLM...");
         let cloud_llm = match cloud_key_for(Task::Llm)?.filter(|_| use_llm && cloud.unwrap_or(false)) {
@@ -1296,7 +1362,8 @@ async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: 
 /// Runs fully on this computer; secrets already blurred in the project are
 /// blurred in every screenshot.
 #[tauri::command]
-async fn export_interactive(app: tauri::AppHandle, project: Project, out: String, title: Option<String>, cta_text: Option<String>, cta_url: Option<String>, badge: Option<bool>) -> R<String> {
+async fn export_interactive(app: tauri::AppHandle, project: Project, out: String, title: Option<String>, cta_text: Option<String>, cta_url: Option<String>, badge: Option<bool>,
+) -> R<String> {
     let outp = check_write(&app, &out, &["html"])?;
     blocking(move || {
         let log = project.events.as_ref().and_then(|p| EventLog::load(p).ok());
@@ -1308,7 +1375,8 @@ async fn export_interactive(app: tauri::AppHandle, project: Project, out: String
             ..Default::default()
         };
         let (html, n) = booya_ai::interactive::generate(&project, log.as_ref(), None, &o, |i, total| {
-            progress(&app, "interactive", if total == 0 { 0.0 } else { i as f64 / total as f64 }, &format!("Capturing step {} of {}", (i + 1).min(total), total));
+            progress(&app, "interactive", if total == 0 { 0.0 } else { i as f64 / total as f64 }, &format!("Capturing step {} of {}", (i + 1).min(total), total),
+                );
         })
         .map_err(e)?;
         std::fs::write(&outp, &html).map_err(e)?;
@@ -1338,7 +1406,8 @@ fn load_recents(app: &tauri::AppHandle) -> Vec<String> {
 /// folder as a JPEG or PNG at most 3840 px wide, so the project keeps working
 /// if the original moves or is deleted. Returns the copy's path.
 #[tauri::command]
-async fn background_import(app: tauri::AppHandle, path: String, project_source: String) -> R<String> {
+async fn background_import(app: tauri::AppHandle, path: String, project_source: String,
+) -> R<String> {
     blocking(move || {
         let src = PathBuf::from(&path);
         let ext = src.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -1390,7 +1459,8 @@ fn background_recents(app: tauri::AppHandle) -> Vec<String> {
 #[tauri::command]
 async fn background_thumb(path: String) -> R<String> {
     blocking(move || {
-        let f = booya_core::ffmpeg::load_image_fit(&PathBuf::from(path), 160, 90, booya_core::project::BgFit::Fill).map_err(e)?;
+        let f = booya_core::ffmpeg::load_image_fit(&PathBuf::from(path), 160, 90, booya_core::project::BgFit::Fill,
+        ).map_err(e)?;
         let png = f.encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
     })
@@ -1413,13 +1483,31 @@ async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
 }
 
 #[tauri::command]
-async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool, cut_pauses: Option<bool>) -> R<AiResult<pipeline::ReadyReport>> {
+async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool, cut_pauses: Option<bool>,
+) -> R<AiResult<pipeline::ReadyReport>> {
+    app.state::<AppState>()
+        .cancel_auto_edit
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     blocking(move || {
         let o = pipeline::ReadyOptions { zoom, captions, cut, cut_silences: cut_pauses.unwrap_or(false), blur, denoise, ..Default::default() };
-        let report = pipeline::demo_ready(&mut project, &o, |p, m| progress(&app, "ready", p, m));
+        let report = pipeline::demo_ready_cancellable(&mut project, &o, |p, m| progress(&app, "ready", p, m),
+            || {
+                app.state::<AppState>()
+                    .cancel_auto_edit
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            },
+        )
+        .map_err(e)?;
         Ok(AiResult { project, report })
     })
     .await
+}
+
+#[tauri::command]
+fn cancel_auto_edit(app: tauri::AppHandle) {
+    app.state::<AppState>()
+        .cancel_auto_edit
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Show a file in the system file manager.
@@ -1463,14 +1551,18 @@ fn ffmpeg_status() -> serde_json::Value {
             .arg("-version")
             .output()
             .ok()
-            .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.to_string()))
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.to_string())
+            })
             .unwrap_or_default()
     } else {
         String::new()
     };
     let bundled = std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| std::path::Path::new(&bin).starts_with(d)))
+        .and_then(|e| {
+            e.parent().map(|d| std::path::Path::new(&bin).starts_with(d))
+        })
         .unwrap_or(false);
     serde_json::json!({
         "found": found, "path": bin, "version": version, "bundled": bundled,
@@ -1494,7 +1586,8 @@ fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<booya_core::proxy::Proxy
     let a2 = app.clone();
     let k2 = key.clone();
     let r = booya_core::proxy::build(&cache_dir(app), src, move |p| {
-        let _ = a2.emit("proxy-progress", serde_json::json!({ "source": k2, "progress": p, "done": false }));
+        let _ = a2.emit("proxy-progress", serde_json::json!({ "source": k2, "progress": p, "done": false }),
+        );
     });
     app.state::<AppState>().proxying.lock().unwrap().remove(&key);
     match &r {
@@ -1605,7 +1698,8 @@ fn audio_diag_log(app: tauri::AppHandle, text: String) -> R<String> {
 /// into it. Returns what the page needs, or `available: false` with the
 /// reason, in which case the page keeps using its audio element.
 #[tauri::command]
-async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<serde_json::Value>, total_s: f64) -> R<serde_json::Value> {
+async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<serde_json::Value>, total_s: f64,
+) -> R<serde_json::Value> {
     let src = PathBuf::from(source);
     blocking(move || {
         #[cfg(any(windows, target_os = "macos"))]
@@ -1659,7 +1753,8 @@ async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<
 
 /// Reload only the music track (its file or settings changed).
 #[tauri::command]
-async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Value>, total_s: f64) -> R<()> {
+async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Value>, total_s: f64,
+) -> R<()> {
     blocking(move || {
         #[cfg(any(windows, target_os = "macos"))]
         {
@@ -1671,7 +1766,8 @@ async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Val
                 }
                 _ => None,
             };
-            audio_log(&app, &format!("music {}", if pcm.is_some() { "loaded" } else { "removed" }));
+            audio_log(&app, &format!("music {}", if pcm.is_some() { "loaded" } else { "removed" }),
+            );
             with_mixer(|m| m.set_music(pcm))
         }
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -1930,7 +2026,8 @@ async fn models_download_recommended(app: tauri::AppHandle) -> R<usize> {
             let title = m.title;
             models::download(id, |d, _t| {
                 let all = (base + d) as f64 / total as f64;
-                progress(&app, "download:all", all.min(1.0), &format!("{title} ({} of {})", models::human(base + d), models::human(total)));
+                progress(&app, "download:all", all.min(1.0), &format!("{title} ({} of {})", models::human(base + d), models::human(total)),
+                );
             })
             .map_err(|err| format!("{title}: {err:#}"))?;
             done_before += m.size;
@@ -1976,7 +2073,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .item(&item("save-as", "Save As...", Some("Shift+Cmd+S"))?)
         .item(&item("duplicate", "Duplicate Project...", None)?)
         .separator()
-        .item(&item("import-clip", "Import Video Clip at Playhead...", None)?)
+        .item(&item("import-clip", "Import Video Clip at Playhead...", None,
+        )?)
         .separator()
         .item(&item("export", "Export...", Some("Cmd+E"))?)
         .separator()
@@ -1999,7 +2097,10 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let ov = load_settings().shortcuts;
     let rec_items = shortcuts::ACTIONS
         .iter()
-        .map(|a| item(&format!("sc:{}", a.id), &menu_text(a.label, &shortcuts::effective(&ov, a.id), true), None))
+        .map(|a| {
+            item(&format!("sc:{}", a.id), &menu_text(a.label, &shortcuts::effective(&ov, a.id), true), None,
+            )
+        })
         .collect::<tauri::Result<Vec<_>>>()?;
     let mut rec = SubmenuBuilder::new(app, "Record");
     for it in &rec_items {
@@ -2046,7 +2147,8 @@ fn apply_shortcuts(app: &tauri::AppHandle) {
             continue;
         }
         let Some(sc) = keys::to_shortcut(&combo) else {
-            failures.insert(id.to_string(), "That key combination is not supported.".to_string());
+            failures.insert(id.to_string(), "That key combination is not supported.".to_string(),
+            );
             continue;
         };
         match gs.register(sc) {
@@ -2107,7 +2209,8 @@ fn run_action(app: &tauri::AppHandle, id: &str) {
 fn drop_marker(app: tauri::AppHandle) -> R<bool> {
     let state = app.state::<AppState>();
     let slot = state.recording.lock().unwrap();
-    let Some(RecSlot::Running(s)) = &*slot else { return Err("Not recording".into()) };
+    let Some(RecSlot::Running(s)) = &*slot else { return Err("Not recording".into());
+    };
     let ok = s.mark();
     if ok {
         let _ = app.emit("rec-marker", ());
@@ -2211,9 +2314,12 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
     let ov = load_settings().shortcuts;
     let mac = cfg!(target_os = "macos");
     let mut m = MenuBuilder::new(app);
-    for id in ["record_toggle", "pause", "record_area", "record_window", "record_screen", "marker"] {
+    for id in ["record_toggle", "pause", "record_area", "record_window", "record_screen", "marker",
+    ] {
         if let Some(a) = shortcuts::info(id) {
-            m = m.item(&MenuItemBuilder::with_id(format!("sc:{id}"), menu_text(a.label, &shortcuts::effective(&ov, id), mac)).build(app)?);
+            m = m.item(&MenuItemBuilder::with_id(format!("sc:{id}"), menu_text(a.label, &shortcuts::effective(&ov, id), mac),
+                ).build(app)?,
+            );
         }
     }
     m.separator()
@@ -2232,7 +2338,8 @@ const TRAY_REC: &[u8] = include_bytes!("../../brand/tray-recording@2x.rgba");
 fn tray_recording(app: &tauri::AppHandle, on: bool) {
     #[cfg(target_os = "macos")]
     if let Some(t) = app.tray_by_id("main") {
-        let img = tauri::image::Image::new_owned((if on { TRAY_REC } else { TRAY_IDLE }).to_vec(), 88, 88);
+        let img = tauri::image::Image::new_owned((if on { TRAY_REC } else { TRAY_IDLE }).to_vec(), 88, 88,
+        );
         let _ = t.set_icon(Some(img));
         let _ = t.set_icon_as_template(true);
     }
@@ -2286,8 +2393,10 @@ async fn check_update(app: tauri::AppHandle) -> R<UpdateInfo> {
     let current = app.package_info().version.to_string();
     let found = app.updater().map_err(e)?.check().await.map_err(e)?;
     Ok(match found {
-        Some(u) => UpdateInfo { available: true, current, version: u.version.clone(), notes: u.body.clone().unwrap_or_default(), date: u.date.map(|d| d.to_string()).unwrap_or_default(), can_install: can_self_update() },
-        None => UpdateInfo { available: false, version: current.clone(), current, notes: String::new(), date: String::new(), can_install: can_self_update() },
+        Some(u) => UpdateInfo { available: true, current, version: u.version.clone(), notes: u.body.clone().unwrap_or_default(), date: u.date.map(|d| d.to_string()).unwrap_or_default(), can_install: can_self_update(),
+        },
+        None => UpdateInfo { available: false, version: current.clone(), current, notes: String::new(), date: String::new(), can_install: can_self_update(),
+        },
     })
 }
 
@@ -2299,14 +2408,16 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     if !can_self_update() {
         return Err("This copy was installed from a .deb or .rpm package. Update it with your package manager or download the new release.".into());
     }
-    let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into()) };
+    let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into());
+    };
     let mut got: u64 = 0;
     let handle = app.clone();
     update
         .download_and_install(
             move |chunk, total| {
                 got += chunk as u64;
-                let _ = handle.emit("update-progress", serde_json::json!({ "got": got, "total": total }));
+                let _ = handle.emit("update-progress", serde_json::json!({ "got": got, "total": total }),
+                );
             },
             || {},
         )
@@ -2326,7 +2437,8 @@ fn window_size_file(app: &tauri::AppHandle) -> PathBuf {
 /// MacBook Air ran off the right and bottom edge.
 fn fit_main_window(app: &tauri::AppHandle) {
     use booya_core::windowfit::{fit_window, min_size, Rect};
-    let Some(w) = app.get_webview_window("main") else { return };
+    let Some(w) = app.get_webview_window("main") else { return;
+    };
     let monitor = w.current_monitor().ok().flatten().or_else(|| w.primary_monitor().ok().flatten());
     let Some(m) = monitor else { return };
     let sf = m.scale_factor();
@@ -2350,7 +2462,8 @@ fn fit_main_window(app: &tauri::AppHandle) {
     let (mw, mh) = min_size(work.w, work.h);
     let _ = w.set_min_size(Some(tauri::LogicalSize::new(mw, mh)));
     let _ = w.set_size(tauri::LogicalSize::new(r.w, r.h));
-    let _ = w.set_position(tauri::PhysicalPosition::new((r.x * sf).round() as i32, (r.y * sf).round() as i32));
+    let _ = w.set_position(tauri::PhysicalPosition::new((r.x * sf).round() as i32, (r.y * sf).round() as i32,
+    ));
 }
 
 /// Remember the window size for the next start (not when maximised).
@@ -2358,13 +2471,15 @@ fn remember_main_window(window: &tauri::Window) {
     if window.label() != "main" || window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
         return;
     }
-    let (Ok(size), Ok(sf)) = (window.inner_size(), window.scale_factor()) else { return };
+    let (Ok(size), Ok(sf)) = (window.inner_size(), window.scale_factor()) else { return;
+    };
     let app = window.app_handle();
     let path = window_size_file(app);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, serde_json::to_vec(&(size.width as f64 / sf, size.height as f64 / sf)).unwrap_or_default());
+    let _ = std::fs::write(path, serde_json::to_vec(&(size.width as f64 / sf, size.height as f64 / sf)).unwrap_or_default(),
+    );
 }
 
 fn main() {
@@ -2488,6 +2603,7 @@ fn main() {
             write_text,
             make_sample,
             ai_demo_ready,
+            cancel_auto_edit,
             reveal,
             ffmpeg_status,
             pick_save,
