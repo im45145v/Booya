@@ -4,7 +4,7 @@
 
 <p align="center"><b>Record it. Booya.</b></p>
 
-> Booya was formerly called DemoLens. Nothing else changed: same app, same recordings folder, same updates. The GitHub repository and the command line tool keep the old name for now.
+> Booya was formerly called DemoLens. Nothing else changed: same app, same recordings folder, same updates. The command line tool is still called `demolens`.
 
 Booya is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
 
@@ -22,7 +22,7 @@ Screenshots of the app in this README come from the real interface running in a 
 
 ## Quick start
 
-1. Download the installer for your OS from [Releases](https://github.com/im45145v/DemoLens/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
+1. Download the installer for your OS from [Releases](https://github.com/im45145v/Booya/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
 2. Open Booya and click **Try the sample**, or **Record screen**.
 3. Open the **Auto edit** tab and click **Run auto edit**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and removes noise. Each step reports what it did, and Ctrl+Z undoes all of it.
 4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).

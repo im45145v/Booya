@@ -3,7 +3,7 @@
 Last updated: 28 October 2026. Applies to Booya 0.2.0 and later.
 
 ## Who we are
-Booya is open source software maintained by Ashish Malla, India. Contact: open a private report at https://github.com/im45145v/DemoLens/security/advisories/new, or email im45145v@users.noreply.github.com via GitHub.
+Booya is open source software maintained by Ashish Malla, India. Contact: open a private report at https://github.com/im45145v/Booya/security/advisories/new, or email im45145v@users.noreply.github.com via GitHub.
 
 ## What we collect
 Nothing. The maintainer does not receive any data from the app. There is no account, telemetry, analytics, crash reporting or update check.

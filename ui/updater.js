@@ -37,7 +37,7 @@ function showUpdateBanner(u) {
 const updateCaveat = () => IS_MAC ? '<p class="hint">After an update macOS may ask for Screen Recording, Microphone and Input Monitoring again, because Booya is signed ad hoc and each new build looks like a new app to the system. Allow them again, then reopen Booya.</p>' : '';
 
 async function installUpdate(u) {
-  if (!u.can_install) return modal('Update Booya', '<p>This copy was installed from a .deb or .rpm package, so it cannot replace itself. Update it with your package manager, or get the new version from <a href="https://github.com/im45145v/DemoLens/releases/latest" target="_blank">github.com/im45145v/DemoLens/releases/latest</a>. The AppImage updates itself.</p>');
+  if (!u.can_install) return modal('Update Booya', '<p>This copy was installed from a .deb or .rpm package, so it cannot replace itself. Update it with your package manager, or get the new version from <a href="https://github.com/im45145v/Booya/releases/latest" target="_blank">github.com/im45145v/Booya/releases/latest</a>. The AppImage updates itself.</p>');
   if (typeof recording !== 'undefined' && recording) return status('Finish the recording before updating.', 'error');
   if (saved !== null && history[hIdx] !== saved) {
     const ok = await confirmBox('Update with unsaved changes?', '<p>You have unsaved changes. Save first, or they will be lost when Booya restarts.</p>');
@@ -56,7 +56,7 @@ async function installUpdate(u) {
 async function renderAboutTab() {
   const host = $('about-body'); if (!host) return;
   let st = {}; try { st = await invoke('ffmpeg_status'); } catch { }
-  host.innerHTML = `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/DemoLens" target="_blank">github.com/im45145v/DemoLens</a></p>
+  host.innerHTML = `<p><b>Booya ${esc(st.app_version || '')}</b>. Free and open source under the MIT license. <a href="https://github.com/im45145v/Booya" target="_blank">github.com/im45145v/Booya</a></p>
     <h3 class="section">Updates</h3>
     <div class="row"><button class="btn primary" id="upd-check">Check for updates</button><span id="upd-result" class="muted small"></span></div>
     <label class="switch"><input type="checkbox" id="upd-auto" ${autoUpdateOn() ? 'checked' : ''} /> Check for updates when Booya starts</label>

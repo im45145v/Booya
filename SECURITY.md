@@ -9,7 +9,7 @@
 
 ## Reporting a vulnerability
 
-Please report privately through [GitHub security advisories](https://github.com/im45145v/DemoLens/security/advisories/new). Do not open a public issue. You can expect a reply within 7 days. Please include the version, OS and steps to reproduce.
+Please report privately through [GitHub security advisories](https://github.com/im45145v/Booya/security/advisories/new). Do not open a public issue. You can expect a reply within 7 days. Please include the version, OS and steps to reproduce.
 
 ## What Booya does to stay safe
 
