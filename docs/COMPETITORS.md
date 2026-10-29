@@ -39,15 +39,15 @@ Where the others are clearly ahead today: hosted sharing with viewer analytics a
 3. **Automatic secret blurring.** None of the others find emails, API keys, card numbers and Indian IDs (Aadhaar, PAN, UPI) for you; they give you a blur brush.
 4. **Cross-platform.** One tool on macOS, Windows and Linux. Screen Studio is Mac only; Cap has no Linux app.
 5. **Your storage.** Share through your own S3 or Cloudflare R2 bucket with a signed, expiring link. There is no vendor server in the middle.
-6. **Scriptable.** Everything the editor does is in the `demolens` command line tool (`record`, `ready`, `export`, `verify`, `bench`), so demos can be rebuilt in CI when the product changes. No other tool here does that.
-7. **Honest diagnostics.** `demolens doctor` and `demolens verify` tell you what is wrong with permissions, audio level and sync instead of leaving you guessing.
+6. **Scriptable.** Everything the editor does is in the `booya` command line tool (`record`, `ready`, `export`, `verify`, `bench`), so demos can be rebuilt in CI when the product changes. No other tool here does that.
+7. **Honest diagnostics.** `booya doctor` and `booya verify` tell you what is wrong with permissions, audio level and sync instead of leaving you guessing.
 8. **Audio that is audible.** Two-pass loudness to -16 LUFS on export and in the editor, a mic level meter before you record, and a quiet-mic warning.
 
 ## Where 0.4.0 stands against that list
 
 | Idea | Status |
 |---|---|
-| Interactive HTML demo from the event log | Done: `demolens interactive` and the Auto edit tab, Export tab share |
+| Interactive HTML demo from the event log | Done: `booya interactive` and the Auto edit tab, Export tab share |
 | Auto chapters and titles, local | Done earlier through the docs pipeline (rule based, optional local LLM); no separate chapter UI yet |
 | Webcam layouts | Done in 0.6.0: screen only, bubble, side by side and camera full screen, switched per stretch on the timeline with a blend. Windows webcam recording (DirectShow) was added in the same release |
 | Instant share | Signed link to your own S3 or R2 for videos and interactive demos; no hosted viewer |

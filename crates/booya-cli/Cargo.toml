@@ -1,0 +1,21 @@
+[package]
+name = "booya-cli"
+description = "Command line front end for Booya"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "booya"
+path = "src/main.rs"
+
+[features]
+default = ["input-hooks"]
+input-hooks = ["booya-core/input-hooks"]
+
+[dependencies]
+booya-core = { path = "../booya-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+booya-ai = { path = "../booya-ai" }

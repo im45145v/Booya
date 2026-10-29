@@ -9,7 +9,7 @@
 // Both splitters work with mouse, pen and finger (pointer events), with the
 // arrow keys, and reset on double click (or double tap), Home or Enter.
 (() => {
-  const KEY = 'demolens.layout.v1';
+  const KEY = 'booya.layout.v1';
   const PANEL = { min: 260, max: 520, def: 300 };
   const TL = { min: 96, max: 252, def: 252 };
   // The preview never gets smaller than this because of a splitter.

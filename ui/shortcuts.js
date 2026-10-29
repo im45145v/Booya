@@ -1,5 +1,5 @@
 // Pure helpers for the shortcut recorder (Settings > Shortcuts). The Rust side
-// (demolens_core::shortcuts) is the authority on what a binding may be; this
+// (booya_core::shortcuts) is the authority on what a binding may be; this
 // only turns a key press into the combo text it understands, so it can be
 // tested without a browser.
 const Shortcuts = (() => {

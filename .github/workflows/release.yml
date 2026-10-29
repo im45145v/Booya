@@ -74,22 +74,22 @@ jobs:
           case "$RUNNER_OS" in
             macOS)
               app=$(find $b/macos -maxdepth 1 -name '*.app' | head -1)
-              "$app/Contents/MacOS/demolens-ffmpeg" -hide_banner -version | head -1
-              "$app/Contents/MacOS/demolens-ffprobe" -hide_banner -version | head -1 ;;
+              "$app/Contents/MacOS/booya-ffmpeg" -hide_banner -version | head -1
+              "$app/Contents/MacOS/booya-ffprobe" -hide_banner -version | head -1 ;;
             Windows)
               # the installer puts the sidecars next to the app exe; run the staged copies
-              ./target/release/demolens-ffmpeg.exe -hide_banner -version | head -1
-              ./target/release/demolens-ffprobe.exe -hide_banner -version | head -1
+              ./target/release/booya-ffmpeg.exe -hide_banner -version | head -1
+              ./target/release/booya-ffprobe.exe -hide_banner -version | head -1
               # screen (gdigrab) and microphone (dshow) capture must be in this build
-              ./target/release/demolens-ffmpeg.exe -hide_banner -devices 2>&1 | tee /tmp/dev.txt
+              ./target/release/booya-ffmpeg.exe -hide_banner -devices 2>&1 | tee /tmp/dev.txt
               grep -q gdigrab /tmp/dev.txt && grep -q dshow /tmp/dev.txt
-              7z l $b/msi/*.msi | grep -i demolens-ff || true ;;
+              7z l $b/msi/*.msi | grep -i booya-ff || true ;;
             Linux)
               deb=$(ls $b/deb/*.deb | head -1)
               mkdir -p /tmp/deb && dpkg-deb -x "$deb" /tmp/deb
               ls -la /tmp/deb/usr/bin
-              /tmp/deb/usr/bin/demolens-ffmpeg -hide_banner -version | head -1
-              /tmp/deb/usr/bin/demolens-ffprobe -hide_banner -version | head -1 ;;
+              /tmp/deb/usr/bin/booya-ffmpeg -hide_banner -version | head -1
+              /tmp/deb/usr/bin/booya-ffprobe -hide_banner -version | head -1 ;;
           esac
       - name: Check macOS signature
         if: runner.os == 'macOS'
@@ -104,8 +104,8 @@ jobs:
           mnt=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | awk -F'\t' '{print $NF}')
           echo "Mounted $dmg at $mnt"
           codesign --verify --deep --strict --verbose=2 "$mnt"/*.app
-          codesign -dv "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg 2>&1 | grep -E 'Signature|Identifier'
-          "$mnt"/*.app/Contents/MacOS/demolens-ffmpeg -hide_banner -version | head -1
+          codesign -dv "$mnt"/*.app/Contents/MacOS/booya-ffmpeg 2>&1 | grep -E 'Signature|Identifier'
+          "$mnt"/*.app/Contents/MacOS/booya-ffmpeg -hide_banner -version | head -1
           hdiutil detach "$mnt"
       - name: Check every macOS helper is signed the same way
         if: runner.os == 'macOS'
@@ -124,7 +124,7 @@ jobs:
           done
           exit $bad
       - name: Build CLI
-        run: cargo build --release -p demolens-cli
+        run: cargo build --release -p booya-cli
       - name: macOS recording must not hang
         if: runner.os == 'macOS'
         shell: bash
@@ -132,18 +132,18 @@ jobs:
           app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
           plutil -p "$app/Contents/Info.plist" | grep -E 'UsageDescription'
           codesign -d --entitlements - "$app" 2>/dev/null | grep -E 'audio-input|camera' || codesign -d --entitlements :- "$app"
-          export DEMOLENS_FFMPEG="$app/Contents/MacOS/demolens-ffmpeg" DEMOLENS_FFPROBE="$app/Contents/MacOS/demolens-ffprobe"
-          "$DEMOLENS_FFMPEG" -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | head -20 || true
+          export BOOYA_FFMPEG="$app/Contents/MacOS/booya-ffmpeg" BOOYA_FFPROBE="$app/Contents/MacOS/booya-ffprobe"
+          "$BOOYA_FFMPEG" -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | head -20 || true
           # doctor must answer with JSON and exit, whatever the permission state.
           set +e
-          perl -e 'alarm 60; exec @ARGV' ./target/release/demolens doctor --seconds 2
+          perl -e 'alarm 60; exec @ARGV' ./target/release/booya doctor --seconds 2
           echo "doctor exit code $?"
           set -e
           # The runner has no Screen Recording permission. The recorder must
           # either record or fail with a clear message, never hang.
           set +e
           start=$(date +%s)
-          perl -e 'alarm 90; exec @ARGV' ./target/release/demolens record --mic --seconds 3 --out "$RUNNER_TEMP/rec"
+          perl -e 'alarm 90; exec @ARGV' ./target/release/booya record --mic --seconds 3 --out "$RUNNER_TEMP/rec"
           code=$?
           echo "exit code $code after $(( $(date +%s) - start )) s"
           ls -la "$RUNNER_TEMP/rec" || true
@@ -152,8 +152,8 @@ jobs:
       - name: Sign the macOS CLI
         if: runner.os == 'macOS'
         run: |
-          codesign --force --sign - --options runtime target/release/demolens
-          codesign --verify --strict --verbose=2 target/release/demolens
+          codesign --force --sign - --options runtime target/release/booya
+          codesign --verify --strict --verbose=2 target/release/booya
       - name: Collect files
         shell: bash
         run: |
@@ -167,14 +167,14 @@ jobs:
             tar -czf "dist/Booya_${{ matrix.name }}.app.tar.gz" -C "$b/macos" "$(basename "$app")"
           fi
           if [ "$RUNNER_OS" = "Windows" ]; then
-            7z a "dist/demolens-cli-${{ matrix.name }}.zip" ./target/release/demolens.exe
+            7z a "dist/booya-cli-${{ matrix.name }}.zip" ./target/release/booya.exe
           else
-            tar -czf "dist/demolens-cli-${{ matrix.name }}.tar.gz" -C target/release demolens
+            tar -czf "dist/booya-cli-${{ matrix.name }}.tar.gz" -C target/release booya
           fi
           ls -la dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: demolens-${{ matrix.name }}
+          name: booya-${{ matrix.name }}
           path: dist/*
 
   publish:

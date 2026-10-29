@@ -8,7 +8,7 @@ Needs espeak-ng (narration), ffmpeg and the whisper-tiny.en model. It checks:
   * a recording with no speech gets no captions and does not fail
   * captions are saved in the project file
 
-Usage: scripts/subtitles_e2e.py <path to demolens binary> [work dir]
+Usage: scripts/subtitles_e2e.py <path to booya binary> [work dir]
 """
 import json, os, re, subprocess, sys, tempfile
 from pathlib import Path
@@ -18,16 +18,16 @@ WORK = Path(sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="dl-su
 WORK.mkdir(parents=True, exist_ok=True)
 MODEL = "whisper-tiny.en"
 
-os.environ["DEMOLENS_DEBUG_TRANSCRIBE"] = "1"
-os.environ["DEMOLENS_NO_TRANSCRIPT_CACHE"] = "1"
+os.environ["BOOYA_DEBUG_TRANSCRIBE"] = "1"
+os.environ["BOOYA_NO_TRANSCRIPT_CACHE"] = "1"
 
 
 def run(*args):
     r = subprocess.run([BIN, *map(str, args)], capture_output=True, text=True)
-    print("$ demolens", *args, "->", r.returncode)
+    print("$ booya", *args, "->", r.returncode)
     print(r.stdout[-3000:], r.stderr[-12000:])
     if r.returncode != 0:
-        sys.exit(f"demolens {args[0]} failed")
+        sys.exit(f"booya {args[0]} failed")
     return r.stdout
 
 

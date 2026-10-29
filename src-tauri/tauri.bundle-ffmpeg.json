@@ -1,5 +1,5 @@
 {
   "bundle": {
-    "externalBin": ["binaries/demolens-ffmpeg", "binaries/demolens-ffprobe"]
+    "externalBin": ["binaries/booya-ffmpeg", "binaries/booya-ffprobe"]
   }
 }

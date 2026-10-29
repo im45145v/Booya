@@ -1,6 +1,6 @@
 # Sound against picture: what was measured, on which OS
 
-You reported audio lagging the picture on a Mac. The question was whether that is a Mac problem or a general one. A test signal answers it: a clip with a flash every second and a beep at the same instants. `demolens syncprobe` finds the flashes and beeps in a file and prints how far the sound is from the picture, how that changes over the clip (drift) and how much it wobbles (jitter). It runs on CI on every push.
+You reported audio lagging the picture on a Mac. The question was whether that is a Mac problem or a general one. A test signal answers it: a clip with a flash every second and a beep at the same instants. `booya syncprobe` finds the flashes and beeps in a file and prints how far the sound is from the picture, how that changes over the clip (drift) and how much it wobbles (jitter). It runs on CI on every push.
 
 ## Results (CI run of commit 5f48afb, 28 October 2026)
 
@@ -38,7 +38,7 @@ It is not Mac only.
 
 ## What is not tested
 
-- macOS capture sync. CI runners cannot capture a screen or microphone. Mac numbers need a recording on a real Mac. Run `demolens verify recording.mp4` and send the output.
+- macOS capture sync. CI runners cannot capture a screen or microphone. Mac numbers need a recording on a real Mac. Run `booya verify recording.mp4` and send the output.
 - Windows microphone capture.
 - Linux with both microphone and system audio. That path still mixes them in one process.
 - The preview fix needs a window. It was tested as logic (`tests/js/avsync.test.js`), not by eye.

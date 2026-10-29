@@ -33,7 +33,7 @@ No finding sends data to the maintainer. There has never been telemetry.
 `rdev` key events were written to `recording.events.jsonl` with the key label, so everything typed during a recording, including passwords, ended up in a plain text file next to the video. **Fix:** key capture is now off by default and no hook is installed when it is off. When turned on, keys are classified before they leave the hook process: shortcuts with Ctrl, Alt (Option), Cmd or Win held (stored with their key, for example Cmd+W, Shift alone does not count) and named keys (Enter, Tab, arrows) keep their name, every printable key becomes the class `printable`. The log format is v2 and the overlay shows "Typing..." for printable keys. Old v1 logs still load, and their characters are masked on load.
 
 ### 2. Keyboard hook outlived the recording (High)
-`rdev::listen` cannot be stopped, so the global hook stayed active in the app until it quit. **Fix:** the hook runs in a short lived child process (`demolens-app --demolens-keyhook`) that is killed on stop and on pause. On macOS there is no hook: when key logging is on, a listen-only event tap (or, as fallback, a poller) reads keys through CoreGraphics (Input Monitoring permission) and applies the same rule: a letter is stored only when it is part of a modifier shortcut.
+`rdev::listen` cannot be stopped, so the global hook stayed active in the app until it quit. **Fix:** the hook runs in a short lived child process (`booya-app --booya-keyhook`) that is killed on stop and on pause. On macOS there is no hook: when key logging is on, a listen-only event tap (or, as fallback, a poller) reads keys through CoreGraphics (Input Monitoring permission) and applies the same rule: a letter is stored only when it is part of a modifier shortcut.
 
 ### 3. Arbitrary file write from the webview (High)
 `save_project`, `export_video`, `export_captions` and `write_text` accepted any path from JavaScript. Any script running in the webview could write or overwrite files anywhere the user can. **Fix:** file dialogs run in Rust; only paths the user picked (or the app's own recordings folder) are writable, and each command only accepts its expected extensions. `reveal` is limited the same way.
@@ -42,10 +42,10 @@ No finding sends data to the maintainer. There has never been telemetry.
 `"csp": null`. **Fix:** a strict CSP (`script-src 'self'`, `connect-src` IPC only, `object-src`, `frame-src`, `base-uri` and `form-action` set to `'none'`) and `freezePrototype`.
 
 ### 5 and 6. Remote LLM check (Medium)
-`is_local` used `starts_with`, so `http://localhost.evil.com` passed, and `0.0.0.0` counted as local. **Fix:** the host is parsed and must be exactly `127.0.0.1`, `localhost` or `[::1]`. A remote `DEMOLENS_LLM_URL` needs `DEMOLENS_ALLOW_REMOTE_LLM=1`, must use https, and the app asks before sending.
+`is_local` used `starts_with`, so `http://localhost.evil.com` passed, and `0.0.0.0` counted as local. **Fix:** the host is parsed and must be exactly `127.0.0.1`, `localhost` or `[::1]`. A remote `BOOYA_LLM_URL` needs `BOOYA_ALLOW_REMOTE_LLM=1`, must use https, and the app asks before sending.
 
 ### 7. Unverified downloads (Medium)
-Models and the llama.cpp server binary were used as downloaded. **Fix:** SHA-256 pinned in the catalog, checked after download (the file is deleted on mismatch), `demolens models verify` re-checks installed files.
+Models and the llama.cpp server binary were used as downloaded. **Fix:** SHA-256 pinned in the catalog, checked after download (the file is deleted on mismatch), `booya models verify` re-checks installed files.
 
 ### 8. Detector gaps (Medium)
 **Fix:** new detectors for Aadhaar (Verhoeff checksum), PAN, UPI IDs, IBAN (mod 97), IPv4 addresses, bearer tokens and `password=` strings, and fields next to a "password" label. A review warning is shown before export: "Auto blur may miss text. Watch the export before sharing." OCR is still best effort.

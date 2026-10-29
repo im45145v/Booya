@@ -6,8 +6,8 @@ secret. Run it where the updater private key lives:
 
   GITHUB_TOKEN=... python3 scripts/sign-release.py v0.5.0
 
-The key is read from DEMOLENS_UPDATER_KEY (default /workspace/secrets/demolens-updater.key)
-and its password from DEMOLENS_UPDATER_KEY_PASSWORD_FILE (default: the same path
+The key is read from BOOYA_UPDATER_KEY (default /workspace/secrets/booya-updater.key)
+and its password from BOOYA_UPDATER_KEY_PASSWORD_FILE (default: the same path
 ending in .password). Neither is printed. Needs node (npx) for the Tauri signer.
 """
 import json
@@ -18,15 +18,15 @@ import sys
 import tempfile
 import urllib.request
 
-REPO = os.environ.get("DEMOLENS_REPO", "im45145v/Booya")
-KEY = os.environ.get("DEMOLENS_UPDATER_KEY", "/workspace/secrets/demolens-updater.key")
-PW = os.environ.get("DEMOLENS_UPDATER_KEY_PASSWORD_FILE", KEY.replace(".key", ".password"))
-TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN_DEMOLENS")
+REPO = os.environ.get("BOOYA_REPO", "im45145v/Booya")
+KEY = os.environ.get("BOOYA_UPDATER_KEY", "/workspace/secrets/booya-updater.key")
+PW = os.environ.get("BOOYA_UPDATER_KEY_PASSWORD_FILE", KEY.replace(".key", ".password"))
+TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN_BOOYA")
 WANT = [r"\.app\.tar\.gz$", r"\.AppImage$", r"-setup\.exe$"]
 
 
 def call(method, url, data=None, headers=None, raw=False):
-    h = {"Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json", "User-Agent": "demolens-sign"}
+    h = {"Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json", "User-Agent": "booya-sign"}
     h.update(headers or {})
     req = urllib.request.Request(url, method=method, data=data, headers=h)
     with urllib.request.urlopen(req) as r:

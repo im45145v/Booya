@@ -1,19 +1,19 @@
 //! Booya desktop app. The web UI is only a control surface: every preview
-//! frame is rendered by `demolens_core::render::Renderer`, the same code the
+//! frame is rendered by `booya_core::render::Renderer`, the same code the
 //! exporter runs, and shipped to the UI as a PNG.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
-use demolens_ai::{docs, llm::Llm, models, pipeline};
-use demolens_core::captions::{self, AutoCutOptions};
-use demolens_core::render::Renderer;
-use demolens_core::capture::{self, CaptureTarget, RecordOptions, RecordingSession};
-use demolens_core::preset::{self, Preset};
-use demolens_core::project::Project;
-use demolens_core::shortcuts;
-use demolens_core::{export, new_project, zoom, EventLog, ZoomSegment};
-use demolens_ai::providers::{self, CloudConfig, Provider, Task};
+use booya_ai::{docs, llm::Llm, models, pipeline};
+use booya_core::captions::{self, AutoCutOptions};
+use booya_core::render::Renderer;
+use booya_core::capture::{self, CaptureTarget, RecordOptions, RecordingSession};
+use booya_core::preset::{self, Preset};
+use booya_core::project::Project;
+use booya_core::shortcuts;
+use booya_core::{export, new_project, zoom, EventLog, ZoomSegment};
+use booya_ai::providers::{self, CloudConfig, Provider, Task};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -34,13 +34,13 @@ struct AppState {
     /// loads the event log and background image, so scrubbing reuses it.
     renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
     /// One ffmpeg decoder kept open while the preview plays.
-    decoder: Mutex<Option<demolens_core::ffmpeg::PreviewDecoder>>,
+    decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
     /// Files the user picked in a native dialog this session. Commands that
     /// write files only write to these paths, so a compromised web view
     /// cannot write anywhere it likes.
     granted: Mutex<HashSet<PathBuf>>,
     /// Microphone level meter (before and during a recording).
-    meter: Mutex<Option<demolens_core::capture::mics::MicMeter>>,
+    meter: Mutex<Option<booya_core::capture::mics::MicMeter>>,
     /// Sources a proxy is being built for right now.
     proxying: Mutex<HashSet<String>>,
     /// Set to abort the 3-2-1 countdown.
@@ -48,7 +48,7 @@ struct AppState {
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
-    app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir().join("demolens-cache"))
+    app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir().join("booya-cache"))
 }
 
 fn grant(app: &tauri::AppHandle, p: &Path) {
@@ -121,8 +121,8 @@ fn e<E: std::fmt::Display>(err: E) -> String {
 fn open_recording(video: String, events: Option<String>) -> R<Project> {
     // A recording folder with an autosaved edit opens that edit.
     let v = PathBuf::from(&video);
-    if let Some(dir) = v.parent().filter(|d| demolens_core::bundle::is_bundle(d)) {
-        if let Ok(o) = demolens_core::bundle::open(dir) {
+    if let Some(dir) = v.parent().filter(|d| booya_core::bundle::is_bundle(d)) {
+        if let Ok(o) = booya_core::bundle::open(dir) {
             if o.project.source == v && o.missing.is_empty() {
                 return Ok(o.project);
             }
@@ -153,7 +153,7 @@ struct OpenedProject {
     project: Project,
     /// The path to save back to: the project folder, or the loose .json file.
     path: String,
-    missing: Vec<demolens_core::bundle::Missing>,
+    missing: Vec<booya_core::bundle::Missing>,
     /// Edits autosaved after the last Save, when the app closed before saving.
     recovered: Option<Project>,
 }
@@ -214,16 +214,16 @@ fn forget_recent(app: tauri::AppHandle, path: String) {
 async fn open_project(app: tauri::AppHandle, path: String) -> R<OpenedProject> {
     blocking(move || {
         let p = PathBuf::from(&path);
-        let o = demolens_core::bundle::open(&p).map_err(e)?;
-        let target = demolens_core::bundle::bundle_dir_of(&p).unwrap_or(p);
+        let o = booya_core::bundle::open(&p).map_err(e)?;
+        let target = booya_core::bundle::bundle_dir_of(&p).unwrap_or(p);
         grant(&app, &target);
         let path = target.to_string_lossy().to_string();
         touch_recent(&app, &path);
         // Unsaved edits left by a crash or a quit are offered back, only if newer than the save.
-        let recovered = demolens_core::bundle::bundle_dir_of(&target).and_then(|d| {
-            let (a, m) = (d.join(AUTOSAVE), d.join(demolens_core::bundle::MANIFEST));
+        let recovered = booya_core::bundle::bundle_dir_of(&target).and_then(|d| {
+            let (a, m) = (d.join(AUTOSAVE), d.join(booya_core::bundle::MANIFEST));
             let newer = std::fs::metadata(&a).and_then(|x| x.modified()).ok()? > std::fs::metadata(&m).and_then(|x| x.modified()).ok()?;
-            let r = demolens_core::bundle::open(&a).ok().filter(|r| newer && r.project != o.project)?;
+            let r = booya_core::bundle::open(&a).ok().filter(|r| newer && r.project != o.project)?;
             Some(r.project)
         });
         Ok(OpenedProject { project: o.project, path, missing: o.missing, recovered })
@@ -248,10 +248,10 @@ async fn pick_folder(app: tauri::AppHandle) -> R<Option<String>> {
 /// its paths now inside the folder.
 #[tauri::command]
 async fn save_project_bundle(app: tauri::AppHandle, path: String, project: Project) -> R<Project> {
-    let p = check_write(&app, &path, &["demolens"])?;
+    let p = check_write(&app, &path, &["booya"])?;
     let a2 = app.clone();
     blocking(move || {
-        let saved = demolens_core::bundle::save_bundle(&project, &p).map_err(e)?;
+        let saved = booya_core::bundle::save_bundle(&project, &p).map_err(e)?;
         let _ = std::fs::remove_file(p.join(AUTOSAVE));
         grant(&a2, &p);
         touch_recent(&a2, &p.to_string_lossy());
@@ -263,10 +263,10 @@ async fn save_project_bundle(app: tauri::AppHandle, path: String, project: Proje
 /// Write a second copy of the project as a new folder and keep editing the first.
 #[tauri::command]
 async fn duplicate_project(app: tauri::AppHandle, path: String, project: Project) -> R<String> {
-    let p = check_write(&app, &path, &["demolens"])?;
+    let p = check_write(&app, &path, &["booya"])?;
     let a2 = app.clone();
     blocking(move || {
-        demolens_core::bundle::save_bundle(&project, &p).map_err(e)?;
+        booya_core::bundle::save_bundle(&project, &p).map_err(e)?;
         touch_recent(&a2, &p.to_string_lossy());
         Ok(p.to_string_lossy().to_string())
     })
@@ -286,7 +286,7 @@ async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: 
             }
             // The user's own project is never overwritten in the background:
             // the edits go beside it, and are offered back if the app dies.
-            if !demolens_core::bundle::is_bundle(&p) {
+            if !booya_core::bundle::is_bundle(&p) {
                 return Ok(None);
             }
             project.save(&p.join(AUTOSAVE)).map_err(e)?;
@@ -297,7 +297,7 @@ async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: 
         if dir.parent() != Some(root.as_path()) || !dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("recording-")) {
             return Ok(None);
         }
-        demolens_core::bundle::save_bundle(&project, &dir).map_err(e)?;
+        booya_core::bundle::save_bundle(&project, &dir).map_err(e)?;
         Ok(Some(dir.to_string_lossy().to_string()))
     })
     .await
@@ -317,9 +317,9 @@ fn discard_autosave(app: tauri::AppHandle, path: String) {
 #[tauri::command]
 fn relocate_media(mut project: Project, field: String, path: String) -> R<serde_json::Value> {
     let to = PathBuf::from(path);
-    demolens_core::bundle::relocate(&mut project, &field, &to).map_err(e)?;
-    demolens_core::bundle::relocate_siblings(&mut project, &to);
-    let missing = demolens_core::bundle::missing(&project);
+    booya_core::bundle::relocate(&mut project, &field, &to).map_err(e)?;
+    booya_core::bundle::relocate_siblings(&mut project, &to);
+    let missing = booya_core::bundle::missing(&project);
     Ok(serde_json::json!({ "project": project, "missing": missing }))
 }
 
@@ -332,10 +332,10 @@ fn regenerate_zoom(project: Project) -> R<Vec<ZoomSegment>> {
 
 /// What the keystroke overlay shows and when, for the timeline's key lane.
 #[tauri::command]
-fn key_track(project: Project) -> R<Vec<demolens_core::render::KeyLabel>> {
+fn key_track(project: Project) -> R<Vec<booya_core::render::KeyLabel>> {
     let Some(ev) = &project.events else { return Ok(vec![]) };
     let log = EventLog::load(ev).map_err(e)?;
-    Ok(demolens_core::render::build_key_labels(&log, &project.keys))
+    Ok(booya_core::render::build_key_labels(&log, &project.keys))
 }
 
 /// Render one preview frame at output time `out_ms`. Returns a data URL.
@@ -358,13 +358,13 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
         let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms).min((project.duration_ms - 40.0).max(0.0));
         let (dw, dh) = r.decode_size();
         // The editor decodes the 720p proxy when it is ready and big enough.
-        let decode_path = demolens_core::proxy::existing(&cache_dir(&app), &project.source)
-            .filter(|_| demolens_core::proxy::fits(demolens_core::proxy::proxy_size(project.source_width, project.source_height), (dw, dh)))
+        let decode_path = booya_core::proxy::existing(&cache_dir(&app), &project.source)
+            .filter(|_| booya_core::proxy::fits(booya_core::proxy::proxy_size(project.source_width, project.source_height), (dw, dh)))
             .unwrap_or_else(|| project.source.clone());
         let src = {
             let mut dec = state.decoder.lock().unwrap();
             if !dec.as_ref().is_some_and(|d| d.matches(&decode_path, dw, dh)) {
-                *dec = Some(demolens_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh));
+                *dec = Some(booya_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh));
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
@@ -392,7 +392,7 @@ async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R
     .map_err(e)?
 }
 
-/// Project or video passed on the command line, e.g. `demolens-app demo.demolens.json`.
+/// Project or video passed on the command line, e.g. `booya-app demo.booya.json`.
 #[tauri::command]
 fn initial_project(app: tauri::AppHandle) -> R<Option<serde_json::Value>> {
     let Some(arg) = std::env::args().nth(1) else { return Ok(None) };
@@ -433,7 +433,7 @@ async fn start_recording(
     target: CaptureTarget,
     mic: bool,
     system_audio: bool,
-    keys: Option<demolens_core::input::KeyLogging>,
+    keys: Option<booya_core::input::KeyLogging>,
     webcam: Option<bool>,
     mic_device: Option<String>,
     max_height: Option<u32>,
@@ -465,7 +465,7 @@ async fn start_recording(
             return Err("Recording cancelled".into());
         }
     }
-    // Recordings go to Videos/DemoLens/<timestamp>. The folder is only
+    // Recordings go to Videos/Booya/<timestamp>. The folder is only
     // created once capture really starts (see capture::start).
     let base = recordings_dir(&app)?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -512,14 +512,14 @@ fn watch_mic(app: tauri::AppHandle) {
             let Some(st) = st else { return };
             let msg = st.message();
             let _ = app.emit("rec-mic", serde_json::json!({ "state": st, "message": msg }));
-            if matches!(st, demolens_core::capture::mic::MicState::Ok { .. } | demolens_core::capture::mic::MicState::Off) {
+            if matches!(st, booya_core::capture::mic::MicState::Ok { .. } | booya_core::capture::mic::MicState::Off) {
                 return;
             }
         }
     });
 }
 
-fn mic_state_now(app: &tauri::AppHandle) -> Option<demolens_core::capture::mic::MicState> {
+fn mic_state_now(app: &tauri::AppHandle) -> Option<booya_core::capture::mic::MicState> {
     let state = app.state::<AppState>();
     let mut slot = state.recording.lock().ok()?;
     match slot.as_mut() {
@@ -671,7 +671,7 @@ async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Pr
                 new_project(&rec.video, Some(&rec.events)).map_err(e)
             }
             Some(ins) => {
-                let r = demolens_core::splice::splice_take(&ins.project, &rec.video, Some(&rec.events), ins.at_ms, ins.until_ms).map_err(e)?;
+                let r = booya_core::splice::splice_take(&ins.project, &rec.video, Some(&rec.events), ins.at_ms, ins.until_ms).map_err(e)?;
                 proxy_of(r.video.clone());
                 Ok(r.project)
             }
@@ -684,7 +684,7 @@ async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Pr
 #[tauri::command]
 async fn import_clip(app: tauri::AppHandle, project: Project, path: String, at_ms: f64, until_ms: Option<f64>) -> R<Project> {
     blocking(move || {
-        let r = demolens_core::splice::splice_take(&project, &PathBuf::from(path), None, at_ms, until_ms).map_err(e)?;
+        let r = booya_core::splice::splice_take(&project, &PathBuf::from(path), None, at_ms, until_ms).map_err(e)?;
         let src = r.video.clone();
         std::thread::spawn(move || {
             let _ = build_proxy(&app, &src);
@@ -702,7 +702,7 @@ async fn raw_frame(project: Project, src_ms: f64) -> R<serde_json::Value> {
         let (sw, sh) = (project.source_width, project.source_height);
         let scale = (1280.0 / sw.max(1) as f64).min(1.0);
         let (w, h) = (((sw as f64 * scale) as u32).max(2) & !1, ((sh as f64 * scale) as u32).max(2) & !1);
-        let f = demolens_core::ffmpeg::frame_at(&project.source, src_ms, w, h).map_err(e)?;
+        let f = booya_core::ffmpeg::frame_at(&project.source, src_ms, w, h).map_err(e)?;
         let png = f.encode_png().map_err(e)?;
         Ok(serde_json::json!({ "url": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)), "w": sw, "h": sh }))
     })
@@ -796,7 +796,7 @@ fn hide_indicator(app: &tauri::AppHandle) {
 }
 
 fn recordings_dir(app: &tauri::AppHandle) -> R<PathBuf> {
-    Ok(app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("DemoLens"))
+    Ok(app.path().video_dir().or_else(|_| app.path().home_dir()).map_err(e)?.join("Booya"))
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -809,7 +809,7 @@ struct Settings {
     /// Show Booya in the menu bar (macOS) or the system tray (Windows).
     menu_bar: bool,
     /// Shortcut overrides by action id. Missing means the default.
-    shortcuts: demolens_core::shortcuts::Bindings,
+    shortcuts: booya_core::shortcuts::Bindings,
 }
 
 impl Default for Settings {
@@ -819,13 +819,13 @@ impl Default for Settings {
 }
 
 fn settings_path() -> PathBuf {
-    demolens_core::preset::presets_dir().parent().map(|p| p.join("settings.json")).unwrap_or_else(|| "settings.json".into())
+    booya_core::preset::presets_dir().parent().map(|p| p.join("settings.json")).unwrap_or_else(|| "settings.json".into())
 }
 
 fn load_settings() -> Settings {
     let mut st: Settings = std::fs::read_to_string(settings_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     // A hand edited file must not break startup or register bad keys.
-    st.shortcuts = demolens_core::shortcuts::sanitize(&st.shortcuts);
+    st.shortcuts = booya_core::shortcuts::sanitize(&st.shortcuts);
     st
 }
 
@@ -887,7 +887,7 @@ fn glass_native(app: tauri::AppHandle, on: bool) -> bool {
 fn os_reduce_transparency() -> bool {
     #[cfg(target_os = "macos")]
     {
-        return demolens_core::proc::command("defaults")
+        return booya_core::proc::command("defaults")
             .args(["read", "com.apple.universalaccess", "reduceTransparency"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
@@ -981,7 +981,7 @@ fn delete_all_data(app: tauri::AppHandle, include_keys: bool) -> R<usize> {
             n += 1;
         }
     }
-    demolens_ai::transcribe::clear_cache().map_err(e)?;
+    booya_ai::transcribe::clear_cache().map_err(e)?;
     let _ = std::fs::remove_dir_all(app.path().app_data_dir().map_err(e)?.join("sample"));
     if include_keys {
         for p in providers::ALL {
@@ -1001,7 +1001,7 @@ fn delete_all_data(app: tauri::AppHandle, include_keys: bool) -> R<usize> {
 // ---------- Cloud providers (opt in) ----------
 
 fn keyring_entry(id: &str) -> R<keyring::Entry> {
-    keyring::Entry::new("dev.demolens.app", id).map_err(e)
+    keyring::Entry::new("dev.booya.app", id).map_err(e)
 }
 
 fn get_key(id: &str) -> Option<String> {
@@ -1146,17 +1146,17 @@ async fn cloud_tts(app: tauri::AppHandle, text: String, path: String) -> R<Strin
 }
 
 fn s3_path() -> PathBuf {
-    demolens_core::preset::presets_dir().parent().map(|p| p.join("storage.json")).unwrap_or_else(|| "storage.json".into())
+    booya_core::preset::presets_dir().parent().map(|p| p.join("storage.json")).unwrap_or_else(|| "storage.json".into())
 }
 
 #[tauri::command]
 fn s3_get() -> serde_json::Value {
-    let cfg: demolens_ai::s3::S3Config = std::fs::read_to_string(s3_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let cfg: booya_ai::s3::S3Config = std::fs::read_to_string(s3_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     serde_json::json!({ "config": cfg, "secret_set": get_key("s3-secret").is_some() })
 }
 
 #[tauri::command]
-fn s3_set(config: demolens_ai::s3::S3Config, secret: Option<String>) -> R<()> {
+fn s3_set(config: booya_ai::s3::S3Config, secret: Option<String>) -> R<()> {
     config.validate().map_err(e)?;
     std::fs::write(s3_path(), serde_json::to_string_pretty(&config).map_err(e)?).map_err(e)?;
     if let Some(sct) = secret.filter(|s| !s.trim().is_empty()) {
@@ -1168,13 +1168,13 @@ fn s3_set(config: demolens_ai::s3::S3Config, secret: Option<String>) -> R<()> {
 /// Upload an exported file (never the event log) and return a link that
 /// expires.
 #[tauri::command]
-async fn s3_upload(app: tauri::AppHandle, path: String) -> R<demolens_ai::s3::Uploaded> {
+async fn s3_upload(app: tauri::AppHandle, path: String) -> R<booya_ai::s3::Uploaded> {
     let p = check_write(&app, &path, &["mp4", "webm", "gif", "html"])?;
     blocking(move || {
         let raw = std::fs::read_to_string(s3_path()).map_err(|_| "Set up storage in Settings first".to_string())?;
-        let cfg: demolens_ai::s3::S3Config = serde_json::from_str(&raw).map_err(e)?;
+        let cfg: booya_ai::s3::S3Config = serde_json::from_str(&raw).map_err(e)?;
         let secret = get_key("s3-secret").ok_or("No storage secret saved")?;
-        demolens_ai::s3::upload(&cfg, &secret, &p).map_err(e)
+        booya_ai::s3::upload(&cfg, &secret, &p).map_err(e)
     })
     .await
 }
@@ -1276,7 +1276,7 @@ async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: 
             None if use_llm => Llm::detect().map_err(e)?,
             None => None,
         };
-        // A DEMOLENS_LLM_URL that points off this machine needs a yes each time.
+        // A BOOYA_LLM_URL that points off this machine needs a yes each time.
         if let Some(l) = &llm {
             if l.is_remote() && cloud != Some(true) && confirm_remote != Some(true) {
                 return Err(format!("REMOTE_LLM:{}", l.host()));
@@ -1300,14 +1300,14 @@ async fn export_interactive(app: tauri::AppHandle, project: Project, out: String
     let outp = check_write(&app, &out, &["html"])?;
     blocking(move || {
         let log = project.events.as_ref().and_then(|p| EventLog::load(p).ok());
-        let o = demolens_ai::interactive::Options {
+        let o = booya_ai::interactive::Options {
             title: title.filter(|t| !t.trim().is_empty()),
             cta_text: cta_text.filter(|t| !t.trim().is_empty()),
             cta_url: cta_url.filter(|t| !t.trim().is_empty()),
             badge: badge.unwrap_or(true),
             ..Default::default()
         };
-        let (html, n) = demolens_ai::interactive::generate(&project, log.as_ref(), None, &o, |i, total| {
+        let (html, n) = booya_ai::interactive::generate(&project, log.as_ref(), None, &o, |i, total| {
             progress(&app, "interactive", if total == 0 { 0.0 } else { i as f64 / total as f64 }, &format!("Capturing step {} of {}", (i + 1).min(total), total));
         })
         .map_err(e)?;
@@ -1353,9 +1353,9 @@ async fn background_import(app: tauri::AppHandle, path: String, project_source: 
         let stem: String = src.file_stem().and_then(|x| x.to_str()).unwrap_or("photo").chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(40).collect();
         let out_ext = if ext == "png" { "png" } else { "jpg" };
         let dest = dir.join(format!("background-{stem}.{out_ext}"));
-        let run = |bin: &str, args: Vec<std::ffi::OsString>| demolens_core::proc::command(bin).args(args).output().map(|o| o.status.success() && dest.is_file()).unwrap_or(false);
+        let run = |bin: &str, args: Vec<std::ffi::OsString>| booya_core::proc::command(bin).args(args).output().map(|o| o.status.success() && dest.is_file()).unwrap_or(false);
         let mut ok = run(
-            &demolens_core::ffmpeg::ffmpeg_bin(),
+            &booya_core::ffmpeg::ffmpeg_bin(),
             vec!["-v".into(), "error".into(), "-y".into(), "-i".into(), src.clone().into_os_string(), "-vf".into(), "scale='min(3840,iw)':-2".into(), "-frames:v".into(), "1".into(), "-q:v".into(), "2".into(), dest.clone().into_os_string()],
         );
         // Not every ffmpeg build reads HEIC. macOS can convert it itself.
@@ -1390,7 +1390,7 @@ fn background_recents(app: tauri::AppHandle) -> Vec<String> {
 #[tauri::command]
 async fn background_thumb(path: String) -> R<String> {
     blocking(move || {
-        let f = demolens_core::ffmpeg::load_image_fit(&PathBuf::from(path), 160, 90, demolens_core::project::BgFit::Fill).map_err(e)?;
+        let f = booya_core::ffmpeg::load_image_fit(&PathBuf::from(path), 160, 90, booya_core::project::BgFit::Fill).map_err(e)?;
         let png = f.encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
     })
@@ -1403,8 +1403,8 @@ async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
     let dir = app.path().app_data_dir().map_err(e)?.join("sample");
     let app2 = app.clone();
     blocking(move || {
-        let speech = demolens_core::sample::can_speak();
-        let proj = demolens_core::sample::make(&dir, speech, true).or_else(|_| demolens_core::sample::make(&dir, false, false)).map_err(e)?;
+        let speech = booya_core::sample::can_speak();
+        let proj = booya_core::sample::make(&dir, speech, true).or_else(|_| booya_core::sample::make(&dir, false, false)).map_err(e)?;
         let project = Project::load(&proj).map_err(e)?;
         grant(&app2, &proj);
         Ok(serde_json::json!({ "project": project, "path": proj }))
@@ -1431,11 +1431,11 @@ fn reveal(app: tauri::AppHandle, path: String) -> R<()> {
         return Err("Only files you saved or recorded can be shown".into());
     }
     #[cfg(target_os = "macos")]
-    let r = demolens_core::proc::command("open").arg("-R").arg(&p).spawn();
+    let r = booya_core::proc::command("open").arg("-R").arg(&p).spawn();
     #[cfg(target_os = "windows")]
-    let r = demolens_core::proc::command("explorer").arg(format!("/select,{}", p.display())).spawn();
+    let r = booya_core::proc::command("explorer").arg(format!("/select,{}", p.display())).spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let r = demolens_core::proc::command("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
+    let r = booya_core::proc::command("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
     r.map(|_| ()).map_err(e)
 }
 
@@ -1456,10 +1456,10 @@ fn write_text(app: tauri::AppHandle, path: String, text: String) -> R<()> {
 /// and the one line install command for this OS when it is missing.
 #[tauri::command]
 fn ffmpeg_status() -> serde_json::Value {
-    let bin = demolens_core::ffmpeg::ffmpeg_bin();
-    let found = demolens_core::ffmpeg::ffmpeg_found();
+    let bin = booya_core::ffmpeg::ffmpeg_bin();
+    let found = booya_core::ffmpeg::ffmpeg_found();
     let version = if found {
-        demolens_core::proc::command(&bin)
+        booya_core::proc::command(&bin)
             .arg("-version")
             .output()
             .ok()
@@ -1474,7 +1474,7 @@ fn ffmpeg_status() -> serde_json::Value {
         .unwrap_or(false);
     serde_json::json!({
         "found": found, "path": bin, "version": version, "bundled": bundled,
-        "hint": demolens_core::ffmpeg::install_hint(),
+        "hint": booya_core::ffmpeg::install_hint(),
         "app_version": env!("CARGO_PKG_VERSION"),
     })
 }
@@ -1483,7 +1483,7 @@ fn ffmpeg_status() -> serde_json::Value {
 // ---------- Editing proxy ----------
 
 /// Build (or find) the 720p proxy for `src`, telling the UI how far along it is.
-fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<demolens_core::proxy::ProxyStats> {
+fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<booya_core::proxy::ProxyStats> {
     let key = src.to_string_lossy().to_string();
     {
         let st = app.state::<AppState>();
@@ -1493,7 +1493,7 @@ fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<demolens_core::proxy::Pr
     }
     let a2 = app.clone();
     let k2 = key.clone();
-    let r = demolens_core::proxy::build(&cache_dir(app), src, move |p| {
+    let r = booya_core::proxy::build(&cache_dir(app), src, move |p| {
         let _ = a2.emit("proxy-progress", serde_json::json!({ "source": k2, "progress": p, "done": false }));
     });
     app.state::<AppState>().proxying.lock().unwrap().remove(&key);
@@ -1522,7 +1522,7 @@ async fn proxy_ensure(app: tauri::AppHandle, source: String) -> R<serde_json::Va
 /// Path of the finished proxy, if there is one. The editor plays its audio.
 #[tauri::command]
 fn proxy_path(app: tauri::AppHandle, source: String) -> Option<String> {
-    demolens_core::proxy::existing(&cache_dir(&app), &PathBuf::from(source)).map(|p| p.to_string_lossy().to_string())
+    booya_core::proxy::existing(&cache_dir(&app), &PathBuf::from(source)).map(|p| p.to_string_lossy().to_string())
 }
 
 /// The editor's preview sound: a small AAC file with the loudness evened out,
@@ -1531,7 +1531,7 @@ fn proxy_path(app: tauri::AppHandle, source: String) -> Option<String> {
 async fn audio_preview(app: tauri::AppHandle, source: String) -> R<serde_json::Value> {
     let src = PathBuf::from(source);
     blocking(move || {
-        let r = demolens_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
+        let r = booya_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
         serde_json::to_value(&r).map_err(e)
     })
     .await
@@ -1543,7 +1543,7 @@ async fn audio_preview(app: tauri::AppHandle, source: String) -> R<serde_json::V
 async fn audio_preview_wav(app: tauri::AppHandle, source: String) -> R<String> {
     let src = PathBuf::from(source);
     blocking(move || {
-        let p = demolens_core::proxy::build_audio_wav(&cache_dir(&app), &src).map_err(e)?;
+        let p = booya_core::proxy::build_audio_wav(&cache_dir(&app), &src).map_err(e)?;
         Ok(p.to_string_lossy().to_string())
     })
     .await
@@ -1574,7 +1574,7 @@ async fn audio_bytes(app: tauri::AppHandle, path: String) -> R<tauri::ipc::Respo
 // the playhead; `playback::Mixer` plays the recording's voice and the music.
 
 #[cfg(any(windows, target_os = "macos"))]
-static NATIVE_AUDIO: Mutex<Option<demolens_core::playback::Player>> = Mutex::new(None);
+static NATIVE_AUDIO: Mutex<Option<booya_core::playback::Player>> = Mutex::new(None);
 
 /// Append a line to the audio diagnostics log (kept small).
 fn audio_log(app: &tauri::AppHandle, line: &str) {
@@ -1610,10 +1610,10 @@ async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<
     blocking(move || {
         #[cfg(any(windows, target_os = "macos"))]
         {
-            use demolens_core::playback::{decode, MusicCfg};
+            use booya_core::playback::{decode, MusicCfg};
             let mut guard = NATIVE_AUDIO.lock().unwrap_or_else(|p| p.into_inner());
             if guard.is_none() {
-                match demolens_core::playback::Player::open() {
+                match booya_core::playback::Player::open() {
                     Ok(pl) => *guard = Some(pl),
                     Err(err) => {
                         audio_log(&app, &format!("native output unavailable: {err:#}"));
@@ -1622,12 +1622,12 @@ async fn audio_native_load(app: tauri::AppHandle, source: String, music: Option<
                 }
             }
             let pl = guard.as_ref().unwrap();
-            let r = demolens_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
+            let r = booya_core::proxy::build_audio(&cache_dir(&app), &src).map_err(e)?;
             let voice = match r.path.as_ref().filter(|_| r.has_audio) {
                 Some(p) => Some(decode(p, 1, 48_000, 3.0 * 3600.0).map_err(e)?),
                 None => None,
             };
-            let music_pcm = match music.and_then(|v| serde_json::from_value::<demolens_core::project::Music>(v).ok()) {
+            let music_pcm = match music.and_then(|v| serde_json::from_value::<booya_core::project::Music>(v).ok()) {
                 Some(m) if m.path.exists() && !m.path.as_os_str().is_empty() => match decode(&m.path, 2, 48_000, 1200.0) {
                     Ok(p) => Some((p, MusicCfg::from_project(&m, total_s))),
                     Err(err) => {
@@ -1663,8 +1663,8 @@ async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Val
     blocking(move || {
         #[cfg(any(windows, target_os = "macos"))]
         {
-            use demolens_core::playback::{decode, MusicCfg};
-            let pcm = match music.and_then(|v| serde_json::from_value::<demolens_core::project::Music>(v).ok()) {
+            use booya_core::playback::{decode, MusicCfg};
+            let pcm = match music.and_then(|v| serde_json::from_value::<booya_core::project::Music>(v).ok()) {
                 Some(m) if m.path.exists() && !m.path.as_os_str().is_empty() => {
                     let p = decode(&m.path, 2, 48_000, 1200.0).map_err(e)?;
                     Some((p, MusicCfg::from_project(&m, total_s)))
@@ -1685,7 +1685,7 @@ async fn audio_native_music(app: tauri::AppHandle, music: Option<serde_json::Val
 
 /// Runs `f` on the mixer if the native player is open.
 #[cfg(any(windows, target_os = "macos"))]
-fn with_mixer<T>(f: impl FnOnce(&mut demolens_core::playback::Mixer) -> T) -> R<T> {
+fn with_mixer<T>(f: impl FnOnce(&mut booya_core::playback::Mixer) -> T) -> R<T> {
     let guard = NATIVE_AUDIO.lock().unwrap_or_else(|p| p.into_inner());
     let pl = guard.as_ref().ok_or("native playback is not open")?;
     let mut m = pl.mixer.lock().unwrap_or_else(|p| p.into_inner());
@@ -1693,7 +1693,7 @@ fn with_mixer<T>(f: impl FnOnce(&mut demolens_core::playback::Mixer) -> T) -> R<
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-fn state_json(s: demolens_core::playback::State) -> serde_json::Value {
+fn state_json(s: booya_core::playback::State) -> serde_json::Value {
     serde_json::json!({ "playing": s.playing, "voice_s": s.voice_s, "music_s": s.music_s, "rate": s.rate, "volume": s.volume, "muted": s.muted, "peak": s.peak, "has_voice": s.has_voice, "has_music": s.has_music })
 }
 
@@ -1792,16 +1792,16 @@ fn audio_state() -> R<serde_json::Value> {
 
 #[tauri::command]
 async fn mic_list() -> R<Vec<String>> {
-    blocking(|| Ok(demolens_core::capture::mics::list_mics())).await
+    blocking(|| Ok(booya_core::capture::mics::list_mics())).await
 }
 
 /// The permissions screen: what Booya needs on this system and where each stands.
 #[tauri::command]
 fn permissions_list() -> serde_json::Value {
-    let items = demolens_core::permissions::list();
+    let items = booya_core::permissions::list();
     serde_json::json!({
         "platform": if cfg!(target_os = "macos") { "macos" } else if cfg!(windows) { "windows" } else { "linux" },
-        "needs_attention": demolens_core::permissions::needs_attention(&items),
+        "needs_attention": booya_core::permissions::needs_attention(&items),
         "items": items,
     })
 }
@@ -1809,7 +1809,7 @@ fn permissions_list() -> serde_json::Value {
 /// Ask for one permission (the system prompt), or open its exact settings page.
 #[tauri::command]
 async fn permissions_request(id: String) -> R<()> {
-    blocking(move || demolens_core::permissions::request(&id).map(|_| ()).map_err(e)).await
+    blocking(move || booya_core::permissions::request(&id).map(|_| ()).map_err(e)).await
 }
 
 /// Whether macOS lets Booya read the keyboard state (Input Monitoring).
@@ -1817,7 +1817,7 @@ async fn permissions_request(id: String) -> R<()> {
 /// other systems.
 #[tauri::command]
 fn input_monitoring_status(prompt: Option<bool>) -> bool {
-    !demolens_core::input::key_permission_missing(prompt.unwrap_or(false))
+    !booya_core::input::key_permission_missing(prompt.unwrap_or(false))
 }
 
 /// Opens the macOS settings page where Input Monitoring is granted.
@@ -1825,7 +1825,7 @@ fn input_monitoring_status(prompt: Option<bool>) -> bool {
 fn open_input_monitoring_settings() {
     #[cfg(target_os = "macos")]
     {
-        let _ = demolens_core::proc::command("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").spawn();
+        let _ = booya_core::proc::command("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").spawn();
     }
 }
 
@@ -1841,7 +1841,7 @@ async fn mic_meter_start(app: tauri::AppHandle, device: Option<String>) -> R<()>
         }
         let a3 = a2.clone();
         let device = device.filter(|d| !d.is_empty());
-        let m = demolens_core::capture::mics::MicMeter::start(device.as_deref(), move |rms, peak| {
+        let m = booya_core::capture::mics::MicMeter::start(device.as_deref(), move |rms, peak| {
             let _ = a3.emit("mic-level", serde_json::json!({ "rms": rms, "peak": peak }));
         })
         .map_err(e)?;
@@ -1861,10 +1861,10 @@ fn mic_meter_stop(app: tauri::AppHandle) {
 // ---------- Storage ----------
 
 #[tauri::command]
-async fn storage_report(app: tauri::AppHandle) -> R<demolens_core::storage::StorageReport> {
+async fn storage_report(app: tauri::AppHandle) -> R<booya_core::storage::StorageReport> {
     let root = recordings_dir(&app)?;
     let cache = cache_dir(&app);
-    blocking(move || Ok(demolens_core::storage::scan(&root, Some(&cache)))).await
+    blocking(move || Ok(booya_core::storage::scan(&root, Some(&cache)))).await
 }
 
 /// Delete the given recording folders (the UI asked the user first). Each one
@@ -1876,7 +1876,7 @@ async fn storage_delete(app: tauri::AppHandle, paths: Vec<String>) -> R<serde_js
     blocking(move || {
         let (mut n, mut bytes, mut failed) = (0u32, 0u64, Vec::new());
         for p in paths {
-            match demolens_core::storage::delete_recording(&root, &PathBuf::from(&p)) {
+            match booya_core::storage::delete_recording(&root, &PathBuf::from(&p)) {
                 Ok(b) => {
                     n += 1;
                     bytes += b;
@@ -1892,7 +1892,7 @@ async fn storage_delete(app: tauri::AppHandle, paths: Vec<String>) -> R<serde_js
 /// Remove cached editing proxies (they are rebuilt when needed).
 #[tauri::command]
 fn storage_clear_proxies(app: tauri::AppHandle) -> u64 {
-    demolens_core::proxy::prune(&cache_dir(&app), 0)
+    booya_core::proxy::prune(&cache_dir(&app), 0)
 }
 
 // ---------- AI status ----------
@@ -1904,15 +1904,15 @@ fn cloud_provider_name(t: Task) -> Option<String> {
 #[tauri::command]
 fn ai_status() -> serde_json::Value {
     serde_json::json!({
-        "features": demolens_ai::status::features(&cloud_provider_name),
-        "recommended_missing": demolens_ai::status::missing_recommended(),
+        "features": booya_ai::status::features(&cloud_provider_name),
+        "recommended_missing": booya_ai::status::missing_recommended(),
         "models_dir": models::models_dir(),
     })
 }
 
 #[tauri::command]
-async fn ai_self_test(id: String) -> R<demolens_ai::status::TestResult> {
-    blocking(move || Ok(demolens_ai::status::self_test(&id))).await
+async fn ai_self_test(id: String) -> R<booya_ai::status::TestResult> {
+    blocking(move || Ok(booya_ai::status::self_test(&id))).await
 }
 
 /// Download every recommended model that is missing, one after the other.
@@ -1920,7 +1920,7 @@ async fn ai_self_test(id: String) -> R<demolens_ai::status::TestResult> {
 #[tauri::command]
 async fn models_download_recommended(app: tauri::AppHandle) -> R<usize> {
     blocking(move || {
-        let todo = demolens_ai::status::missing_recommended();
+        let todo = booya_ai::status::missing_recommended();
         let total: u64 = todo.iter().map(|m| m.size).sum::<u64>().max(1);
         let mut done_before = 0u64;
         let mut n = 0;
@@ -2325,7 +2325,7 @@ fn window_size_file(app: &tauri::AppHandle) -> PathBuf {
 /// screen is clamped the same way. Without this the window of an M-series
 /// MacBook Air ran off the right and bottom edge.
 fn fit_main_window(app: &tauri::AppHandle) {
-    use demolens_core::windowfit::{fit_window, min_size, Rect};
+    use booya_core::windowfit::{fit_window, min_size, Rect};
     let Some(w) = app.get_webview_window("main") else { return };
     let monitor = w.current_monitor().ok().flatten().or_else(|| w.primary_monitor().ok().flatten());
     let Some(m) = monitor else { return };
@@ -2368,7 +2368,7 @@ fn remember_main_window(window: &tauri::Window) {
 }
 
 fn main() {
-    demolens_core::input::run_keyhook_if_requested();
+    booya_core::input::run_keyhook_if_requested();
     use tauri_plugin_global_shortcut::ShortcutState;
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

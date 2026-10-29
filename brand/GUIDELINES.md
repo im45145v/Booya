@@ -6,7 +6,6 @@ The files in this folder are the master artwork. `src-tauri/icons/` is generated
 ## Name and tagline
 - The app is **Booya** in sentences. The wordmark is always lowercase: `booya`.
 - Tagline: **Record it. Booya.**
-- Booya was formerly called DemoLens. The CLI command and the crate names are still `demolens`.
 
 ## Palette
 
