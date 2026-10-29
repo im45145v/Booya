@@ -325,6 +325,18 @@ fn sample_with_blurs(src: &Frame, patches: &[BlurPatch], x: f64, y: f64) -> [f32
 /// Label shown while the presenter types (characters are never logged).
 pub const TYPING: &str = "Typing...";
 
+/// True when the keystroke pill should sit at the top of the frame.
+///
+/// During typing the pill takes the edge opposite the field, so "Typing..."
+/// does not cover a URL in the address bar or a line in a field at the bottom.
+/// Otherwise it stays at the bottom unless that would cover the pointer.
+pub fn key_pill_on_top(typing_focus_y: Option<f64>, source_h: f64, covers_bottom: bool, covers_top: bool) -> bool {
+    match typing_focus_y {
+        Some(y) => y >= source_h * 0.45,
+        None => covers_bottom && !covers_top,
+    }
+}
+
 /// One label shown by the keystroke overlay.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct KeyLabel {
@@ -751,6 +763,12 @@ impl Renderer {
         out
     }
 
+    /// The typing zoom covering this source time, if the camera is locked on a field.
+    fn typing_zoom_at(&self, src_t: f64) -> Option<&ZoomSegment> {
+        let t = self.project.src_to_out(src_t);
+        self.zoom_on_output.iter().find(|s| s.reason == "typing" && t >= s.start_ms && t <= s.end_ms)
+    }
+
     /// The visible rectangle of the source in a layout, in source pixels.
     fn view_rect(&self, sc: &Scene, zcam: &Camera, src_t: f64) -> (f64, f64, f64, f64) {
         let (sw, sh) = (self.project.source_width as f64, self.project.source_height as f64,
@@ -772,10 +790,22 @@ impl Renderer {
             (sc.follow[i].0 + (sc.follow[j].0 - sc.follow[i].0) * u, sc.follow[i].1 + (sc.follow[j].1 - sc.follow[i].1) * u,
             )
         };
-        // While a zoom is in, the zoom decides where to look.
-        let k = ((zcam.scale - 1.0) / 0.25).clamp(0.0, 1.0);
-        let k = k * k * (3.0 - 2.0 * k);
-        let (cx, cy) = (fx + (zcam.cx - fx) * k, fy + (zcam.cy - fy) * k);
+        // While a zoom is in, the zoom decides where to look. A typing zoom
+        // locks that window on the field: the pointer staying down in the page
+        // must not keep a tall frame off the address bar.
+        let (cx, cy) = if let Some(z) = self.typing_zoom_at(src_t) {
+            let ein = self.project.zoom_config.ease_in_ms.max(1.0);
+            let eout = self.project.zoom_config.ease_out_ms.max(1.0);
+            let t = self.project.src_to_out(src_t);
+            let arrive = crate::zoom::spring(((t - z.start_ms) / ein).clamp(0.0, 1.0));
+            let leave = crate::zoom::spring(((z.end_ms - t) / eout).clamp(0.0, 1.0));
+            let progress = arrive.min(leave);
+            (fx + (zcam.cx - fx) * progress, fy + (zcam.cy - fy) * progress)
+        } else {
+            let k = ((zcam.scale - 1.0) / 0.25).clamp(0.0, 1.0);
+            let k = k * k * (3.0 - 2.0 * k);
+            (fx + (zcam.cx - fx) * k, fy + (zcam.cy - fy) * k)
+        };
         let (cx, cy) = (cx.clamp(vw / 2.0, (sw - vw / 2.0).max(vw / 2.0)), cy.clamp(vh / 2.0, (sh - vh / 2.0).max(vh / 2.0)),
         );
         (cx - vw / 2.0, cy - vh / 2.0, vw, vh)
@@ -1295,7 +1325,8 @@ impl Renderer {
                     });
                     cursor || click
                 };
-                let by = if hits(bottom) && !hits(top) { top } else { bottom };
+                let typing_y = self.typing_zoom_at(src_t).map(|z| z.focus.1);
+                let by = if key_pill_on_top(typing_y, p.source_height as f64, hits(bottom), hits(top)) { top } else { bottom };
                 let mut x = bx;
                 for (i, (part, w)) in parts.iter().zip(&widths).enumerate() {
                     // The key itself is a little lighter than the modifiers around it.
@@ -2240,6 +2271,41 @@ mod layout_scene_tests {
             assert!((x - last).abs() < 25.0, "moved {} in one step at {t}", (x - last).abs());
             last = x;
         }
+    }
+
+    #[test]
+    fn a_tall_window_stays_on_the_field_while_typing() {
+        use crate::events::{Event, EventKind};
+        use crate::zoom::ZoomSegment;
+        let mut log = crate::events::EventLog::new(1920, 1080);
+        for t in [0.0, 1000.0, 4000.0, 8000.0] {
+            log.events.push(Event { t, kind: EventKind::Move { x: 1700.0, y: 900.0 } });
+        }
+        let mut p = with_camera();
+        p.webcam = None;
+        p.layouts.base = Some(SceneKind::Screen);
+        p.duration_ms = 12_000.0;
+        p.zoom = vec![ZoomSegment { start_ms: 2000.0, end_ms: 9000.0, scale: 1.4, follow_cursor: false, focus: (960.0, 80.0), reason: "typing".into() }];
+        let r = Renderer::new(p, Some(&log), 720, 1280, None);
+        let sc = &r.scenes[0];
+        assert!(sc.crop);
+        let center = |t: f64| {
+            let (x, _, w, _) = r.view_rect(sc, &r.camera(t), t);
+            x + w / 2.0
+        };
+        // Before the typing zoom the window is on the pointer, over on the right.
+        assert!(center(800.0) > 1400.0, "cursor window {}", center(800.0));
+        // Once the zoom has arrived, the window is on the address bar, not the pointer.
+        let mid = center(5500.0);
+        assert!((mid - 960.0).abs() < 80.0, "field window {mid}");
+    }
+
+    #[test]
+    fn the_typing_pill_sits_opposite_the_field() {
+        assert!(!key_pill_on_top(Some(80.0), 1080.0, true, false), "a URL at the top keeps the pill at the bottom");
+        assert!(key_pill_on_top(Some(900.0), 1080.0, false, true), "a field at the bottom sends the pill to the top");
+        assert!(key_pill_on_top(None, 1080.0, true, false));
+        assert!(!key_pill_on_top(None, 1080.0, true, true));
     }
 
     #[test]
