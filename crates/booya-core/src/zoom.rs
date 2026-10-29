@@ -225,9 +225,9 @@ fn is_window_switch(key: &str, mods: &[String]) -> bool {
     is_navigation_shortcut(key, mods) && !is_address_bar_shortcut(key, mods)
 }
 
-/// A key that changes text in a field. Shortcuts, arrows and Enter do not:
-/// Enter ends the field (a URL is submitted, a form is sent) and the camera
-/// should ease back out so the result can be seen.
+/// A key that changes text in a field. Shortcuts, arrows and Enter do not.
+/// Enter after a URL eases the camera back out; Enter in any other field
+/// leaves the normal hold alone.
 fn is_field_key(key: &str, mods: &[String]) -> bool {
     if mods.iter().any(|m| !m.eq_ignore_ascii_case("shift")) {
         return false;
@@ -249,9 +249,47 @@ fn is_field_key(key: &str, mods: &[String]) -> bool {
 /// How far an address-bar zoom goes. Deep enough to read a URL, shallow
 /// enough that the bar and the page under it both stay in frame.
 const ADDRESS_BAR_SCALE: f64 = 1.35;
-/// After Enter the typed text stays up about this long, then the camera
+/// The address bar lives in this top slice of the screen. A click or tap
+/// here, and a typing anchor that lands here, is a URL.
+const ADDRESS_BAR_BAND: f64 = 0.22;
+/// After Enter on a URL the text stays up about this long, then the camera
 /// eases out. Long enough to read `github.com`, short enough to show the page.
 const SUBMIT_HOLD_MS: f64 = 1400.0;
+/// A paste or Enter still belongs to the address bar when the bar was focused
+/// this recently. A couple of seconds.
+const ADDRESS_ENTRY_WINDOW_MS: f64 = 2000.0;
+
+/// Puts clipboard text in the field. Cmd/Ctrl+V, including Shift (paste
+/// without formatting, and the Linux terminal paste), and Shift+Insert,
+/// the Windows and Linux paste chord.
+fn is_paste_shortcut(key: &str, mods: &[String]) -> bool {
+    let (ctrl, meta, alt) = modifier_kind(mods);
+    let k = key.to_ascii_lowercase();
+    if (ctrl || meta) && !alt && k == "v" {
+        return true;
+    }
+    let shift = mods.iter().any(|m| m.eq_ignore_ascii_case("shift"));
+    shift && !ctrl && !meta && !alt && k == "insert"
+}
+
+/// Enter or Return, with Shift allowed. Ctrl/Alt/Cmd+Enter is a different
+/// shortcut and does not submit the field.
+fn is_submit_key(key: &str, mods: &[String]) -> bool {
+    mods.iter().all(|m| m.eq_ignore_ascii_case("shift")) && matches!(key.to_ascii_lowercase().as_str(), "enter" | "return")
+}
+
+/// A focus shortcut (Cmd/Ctrl+L, Cmd/Ctrl+K, Cmd/Ctrl+T, Alt+D) in the
+/// moment before `start`, and not undone by a window switch.
+fn address_shortcut_before(log: &EventLog, start: f64) -> bool {
+    let switched = log.keys().filter(|(t, k, m)| *t <= start && is_window_switch(k, m)).map(|(t, _, _)| t).fold(f64::MIN, f64::max);
+    log.keys().any(|(t, k, m)| t <= start && start - t <= 2500.0 && t > switched && is_address_bar_shortcut(k, m))
+}
+
+/// The anchor is a URL: a focus shortcut just happened, or the point sits
+/// in the top band where the address bar is.
+fn url_field(log: &EventLog, anchor: (f64, f64), start: f64, fh: f64) -> bool {
+    address_shortcut_before(log, start) || anchor.1 < fh * ADDRESS_BAR_BAND
+}
 
 /// Cursor position over time where a long silence means "it stayed put" (the
 /// log only holds moves, so a gap is a still cursor), not a slow glide.
@@ -388,8 +426,9 @@ struct Moment {
     pts: Vec<(f64, f64)>,
     reason: &'static str,
     weight: usize,
-    /// Replaces the config hold. Set when typing ends in Enter, so the camera
-    /// eases out and the page that loads can be seen.
+    /// Replaces the config hold. Set when a URL is submitted, so the camera
+    /// eases out and the page that loads can be seen. Other fields keep the
+    /// config hold: Enter there is often just a new line.
     hold_ms: Option<f64>,
     /// Cursor jumps and trackpad brushes before this time must not take the
     /// camera off a field that is still being typed in.
@@ -479,8 +518,7 @@ fn field_presses(log: &EventLog, duration_ms: f64) -> Vec<Click> {
 /// the text.
 fn typing_anchor(log: &EventLog, presses: &[Click], held: &Held, start: f64, fw: f64, fh: f64) -> (f64, f64) {
     let switched = log.keys().filter(|(t, k, m)| *t <= start && is_window_switch(k, m)).map(|(t, _, _)| t).fold(f64::MIN, f64::max);
-    let address = log.keys().any(|(t, k, m)| t <= start && start - t <= 2500.0 && t > switched && is_address_bar_shortcut(k, m));
-    if address {
+    if address_shortcut_before(log, start) {
         return (fw * 0.5, fh * 0.11);
     }
     // The latest click or tap in the last 10 s, including one on the address
@@ -499,16 +537,78 @@ fn typing_anchor(log: &EventLog, presses: &[Click], held: &Held, start: f64, fw:
 }
 
 fn submit_time(log: &EventLog, last_key: f64) -> Option<f64> {
-    log.keys()
-        .find(|(t, k, mods)| {
-            *t >= last_key && *t - last_key <= 900.0 && mods.iter().all(|m| m.eq_ignore_ascii_case("shift")) && matches!(k.to_ascii_lowercase().as_str(), "enter" | "return")
-        })
-        .map(|(t, _, _)| t)
+    log.keys().find(|(t, k, mods)| *t >= last_key && *t - last_key <= 900.0 && is_submit_key(k, mods)).map(|(t, _, _)| t)
+}
+
+/// The address bar is where a paste or Enter would land. The latest focus in
+/// the last couple of seconds is a click or tap in the top band, or a focus
+/// shortcut, and a later click has not moved to some other field.
+fn address_bar_focused(log: &EventLog, presses: &[Click], t: f64, fh: f64) -> bool {
+    let switched = log.keys().filter(|(ts, k, m)| *ts <= t && is_window_switch(k, m)).map(|(ts, _, _)| ts).fold(f64::MIN, f64::max);
+    let shortcut = log
+        .keys()
+        .filter(|(ts, k, m)| *ts <= t && t - *ts <= ADDRESS_ENTRY_WINDOW_MS && *ts > switched && is_address_bar_shortcut(k, m))
+        .map(|(ts, _, _)| ts)
+        .max_by(|a, b| a.total_cmp(b));
+    let press = presses.iter().filter(|c| c.t <= t && t - c.t <= ADDRESS_ENTRY_WINDOW_MS && c.t > switched).max_by(|a, b| a.t.total_cmp(&b.t));
+    match (shortcut, press) {
+        (Some(s), Some(p)) if p.t > s => p.y < fh * ADDRESS_BAR_BAND,
+        (Some(_), _) => true,
+        (None, Some(p)) => p.y < fh * ADDRESS_BAR_BAND,
+        (None, None) => false,
+    }
+}
+
+fn moment_covers(moments: &[Moment], t: f64) -> bool {
+    moments.iter().any(|m| t >= m.first && t <= m.last)
+}
+
+/// A URL pasted or submitted in the address bar. One shortcut is not typing,
+/// and a single click does not open a zoom, so this is its own moment: the
+/// same locked address-bar zoom as typing `github.com`. A paste or Enter with
+/// no bar click and no focus shortcut is ignored.
+fn address_bar_entries(log: &EventLog, held: &Held, presses: &[Click], cfg: &ZoomConfig, already: &[Moment]) -> Vec<Moment> {
+    let (fw, fh) = (log.header.width as f64, log.header.height as f64);
+    let mut actions = Vec::new();
+    for (t, k, m) in log.keys() {
+        if is_paste_shortcut(k, m) {
+            actions.push((t, true));
+        } else if is_submit_key(k, m) {
+            actions.push((t, false));
+        }
+    }
+    actions.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = Vec::new();
+    for (t, paste) in actions {
+        if moment_covers(already, t) || moment_covers(&out, t) {
+            continue;
+        }
+        if !address_bar_focused(log, presses, t, fh) {
+            continue;
+        }
+        let submitted = if paste { submit_time(log, t) } else { Some(t) };
+        let last = submitted.unwrap_or(t);
+        if last != t && (moment_covers(already, last) || moment_covers(&out, last)) {
+            continue;
+        }
+        let at = typing_anchor(log, presses, held, t, fw, fh);
+        out.push(Moment {
+            first: t,
+            last,
+            pts: vec![at],
+            reason: "typing",
+            weight: cfg.typing_min_keys.max(8),
+            hold_ms: submitted.filter(|_| url_field(log, at, t, fh)).map(|_| SUBMIT_HOLD_MS.min(cfg.hold_ms)),
+            protected_until: last,
+        });
+    }
+    out
 }
 
 /// Typing into a field. A fast URL (`github.com` is ten keys, often under a
-/// second) counts, and so does a shorter word that takes a moment. The zoom
-/// locks on the field. It does not follow the mouse.
+/// second) counts, and so does a shorter word that takes a moment. Pasting
+/// into the address bar counts too. The zoom locks on the field. It does not
+/// follow the mouse. Enter shortens the hold only for a URL.
 fn typing_moments(log: &EventLog, held: &Held, presses: &[Click], cfg: &ZoomConfig) -> Vec<Moment> {
     let (fw, fh) = (log.header.width as f64, log.header.height as f64);
     let keys: Vec<f64> = log.keys().filter(|(_, k, m)| is_field_key(k, m)).map(|(t, _, _)| t).collect();
@@ -528,18 +628,20 @@ fn typing_moments(log: &EventLog, held: &Held, presses: &[Click], cfg: &ZoomConf
             let at = typing_anchor(log, presses, held, start, fw, fh);
             let submitted = submit_time(log, keys[j]);
             let last = submitted.unwrap_or(keys[j]);
+            let on_bar = url_field(log, at, start, fh);
             out.push(Moment {
                 first: start,
                 last,
                 pts: vec![at],
                 reason: "typing",
                 weight: count,
-                hold_ms: submitted.map(|_| SUBMIT_HOLD_MS.min(cfg.hold_ms)),
+                hold_ms: if submitted.is_some() && on_bar { Some(SUBMIT_HOLD_MS.min(cfg.hold_ms)) } else { None },
                 protected_until: last,
             });
         }
         i = j + 1;
     }
+    out.extend(address_bar_entries(log, held, presses, cfg, &out));
     out
 }
 
@@ -569,6 +671,7 @@ struct Draft {
 ///
 ///  * `min_clicks` mouse clicks or taps in one small area within a few seconds,
 ///  * typing into a field (a URL counts even when it is typed quickly),
+///  * a URL pasted or submitted in the address bar,
 ///  * a marker the presenter dropped on purpose.
 ///
 /// Where it looks:
@@ -577,13 +680,16 @@ struct Draft {
 ///    once it leaves a dead zone.
 ///  * Typing: the field. That is the click or tap that focused it, or the
 ///    address bar when a focus shortcut (Cmd+L, Cmd+T, Alt+D) came just
-///    before. The mouse sitting somewhere else is ignored, and the view does
-///    not leave the text while the keys are still going.
-///  * Enter after typing: hold long enough to read what was typed, then ease
-///    out so the page or the result is on screen.
+///    before. A paste into that bar is the same zoom. The mouse sitting
+///    somewhere else is ignored, and the view does not leave the text while
+///    the keys are still going.
+///  * Enter after an address-bar URL: hold long enough to read it, then ease
+///    out so the loaded page is on screen. Enter in any other field keeps
+///    the normal hold.
 ///
 /// What stays wide: the pointer merely moving, a single click or tap, a drag,
-/// shortcuts that are not followed by typing. A zoom eases back out when
+/// shortcuts that are not followed by typing or a paste into the address bar.
+/// A zoom eases back out when
 /// scrolling keeps going after the typing, the cursor jumps across the screen
 /// during a click zoom, or a window switch (Cmd+Tab, Cmd+W) leaves the thing
 /// that was framed. A zoom never starts in the first second.
@@ -623,7 +729,7 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         let focus = (m.pts.iter().map(|p| p.0).sum::<f64>() / n, m.pts.iter().map(|p| p.1).sum::<f64>() / n);
         let mut base = if m.reason == "typing" { cfg.typing_scale } else { cfg.click_scale }.min(cfg.max_scale);
         // The address bar: show the URL and the page under it, not a tight crop.
-        if m.reason == "typing" && focus.1 < fh * 0.22 {
+        if m.reason == "typing" && focus.1 < fh * ADDRESS_BAR_BAND {
             base = base.min(ADDRESS_BAR_SCALE);
         }
         let scale = bleed_scale(&m.pts, fw, fh, cfg.bleed, base);
@@ -1199,6 +1305,153 @@ mod tests {
         let t = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
         assert!(!t.follow_cursor);
         assert!(t.focus.1 < 200.0, "not the mouse at y=700: {t:?}");
+    }
+
+    fn assert_address_bar_zoom(events: Vec<Event>, enter_at: f64, sample_at: f64, bar_y: f64, focus: (f64, f64)) {
+        let cfg = ZoomConfig::default();
+        let mut ev = events;
+        ev.sort_by(|a, b| a.t.total_cmp(&b.t));
+        let log = log_with(ev);
+        let segs = generate_zoom_segments(&log, 60_000.0, &cfg);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        let s = &segs[0];
+        assert_eq!(s.reason, "typing", "{s:?}");
+        assert!(!s.follow_cursor, "{s:?}");
+        assert!((s.focus.0 - focus.0).abs() < 30.0 && (s.focus.1 - focus.1).abs() < 30.0 && s.focus.1 < 200.0, "focus on the bar: {s:?}");
+        assert!(s.scale <= ADDRESS_BAR_SCALE + 0.01 && s.scale >= 1.12, "{s:?}");
+        assert!((s.end_ms - (enter_at + SUBMIT_HOLD_MS + cfg.ease_out_ms)).abs() < 1.0, "{s:?}");
+        let track = CursorTrack::new(&log);
+        let timing = CameraTiming { ease_in_ms: cfg.ease_in_ms, ease_out_ms: cfg.ease_out_ms, follow_smoothing_ms: 200.0, deadzone: 0.15 };
+        let cam = camera_at(sample_at, &segs, Some(&track), 1920.0, 1080.0, timing);
+        let (_x, y, _w, h) = cam.view_rect(1920.0, 1080.0);
+        assert!(cam.scale > 1.05 && cam.scale <= ADDRESS_BAR_SCALE + 0.01, "{cam:?}");
+        assert!(y <= bar_y && y + h >= bar_y, "the address bar is in frame: view y={y} h={h} cam={cam:?}");
+        assert!(cam.cy < 560.0, "the camera did not follow the mouse: {cam:?}");
+    }
+
+    #[test]
+    fn pasting_a_url_zooms_to_the_address_bar_while_the_mouse_is_elsewhere() {
+        let bar = (700.0, 64.0);
+        // Click the bar, paste, Enter. The pointer is down in the page the whole time.
+        let chords: &[(&[&str], &str)] = &[(&["Meta"], "V"), (&["Ctrl"], "V"), (&["Ctrl", "Shift"], "V"), (&["Shift"], "Insert")];
+        for (mods, name) in chords {
+            let ev = vec![
+                mv(2000.0, 1600.0, 900.0),
+                click(5000.0, bar.0, bar.1),
+                mv(5300.0, 1580.0, 910.0),
+                key(5400.0, name, mods),
+                key(5800.0, "Enter", &[]),
+                mv(6200.0, 180.0, 980.0),
+            ];
+            assert_address_bar_zoom(ev, 5800.0, 6400.0, bar.1, bar);
+        }
+        // A tap on the bar is the same focus as a click.
+        let tap = vec![
+            mv(2000.0, 1600.0, 900.0),
+            Event { t: 5000.0, kind: EventKind::Click { x: bar.0, y: bar.1, button: MouseButton::Touch } },
+            key(5400.0, "V", &["Meta"]),
+            key(5800.0, "Enter", &[]),
+            mv(6200.0, 180.0, 980.0),
+        ];
+        assert_address_bar_zoom(tap, 5800.0, 6400.0, bar.1, bar);
+        // Focus shortcut, then paste. The mouse never visits the bar.
+        let shortcut = vec![
+            mv(2000.0, 1500.0, 860.0),
+            key(5000.0, "L", &["Ctrl"]),
+            mv(5300.0, 1520.0, 880.0),
+            key(5600.0, "V", &["Ctrl"]),
+            key(6000.0, "Enter", &[]),
+            mv(6400.0, 200.0, 980.0),
+        ];
+        assert_address_bar_zoom(shortcut, 6000.0, 6600.0, 70.0, (960.0, 1080.0 * 0.11));
+        // Paste with no Enter still locks on the bar, and keeps the normal hold.
+        let cfg = ZoomConfig::default();
+        let pasted = gen(vec![mv(2000.0, 1400.0, 800.0), click(5000.0, bar.0, bar.1), key(5400.0, "V", &["Meta"]), mv(6000.0, 200.0, 900.0)]);
+        assert_eq!(pasted.len(), 1, "{pasted:?}");
+        assert_eq!(pasted[0].reason, "typing");
+        assert!(!pasted[0].follow_cursor);
+        assert!((pasted[0].focus.0 - bar.0).abs() < 5.0 && pasted[0].focus.1 < 200.0, "{pasted:?}");
+        assert!(pasted[0].scale <= ADDRESS_BAR_SCALE + 0.01, "{pasted:?}");
+        assert!((pasted[0].end_ms - (5400.0 + cfg.hold_ms + cfg.ease_out_ms)).abs() < 1.0, "{pasted:?}");
+    }
+
+    #[test]
+    fn pressing_enter_in_the_address_bar_zooms_there() {
+        let bar = (700.0, 64.0);
+        let click_enter = vec![mv(2000.0, 1600.0, 900.0), click(5000.0, bar.0, bar.1), key(6200.0, "Enter", &[]), mv(6800.0, 200.0, 980.0)];
+        assert_address_bar_zoom(click_enter, 6200.0, 7000.0, bar.1, bar);
+        let shortcut_enter = vec![mv(2000.0, 1500.0, 860.0), key(5000.0, "D", &["Alt"]), key(6200.0, "Enter", &[]), mv(6800.0, 200.0, 980.0)];
+        assert_address_bar_zoom(shortcut_enter, 6200.0, 7000.0, 70.0, (960.0, 1080.0 * 0.11));
+    }
+
+    #[test]
+    fn a_paste_with_no_address_bar_does_not_zoom() {
+        assert!(gen(vec![key(4000.0, "V", &["Meta"])]).is_empty(), "Cmd+V alone");
+        assert!(gen(vec![key(4000.0, "V", &["Ctrl"]), key(4400.0, "Enter", &[])]).is_empty(), "Ctrl+V then Enter");
+        assert!(gen(vec![key(4000.0, "Insert", &["Shift"])]).is_empty(), "Shift+Insert alone");
+        assert!(gen(vec![key(4000.0, "L", &["Meta"])]).is_empty(), "a focus shortcut alone");
+        // An ordinary field, then a paste.
+        let mid = vec![click(4000.0, 800.0, 540.0), mv(4200.0, 800.0, 540.0), key(4500.0, "V", &["Ctrl"]), key(4800.0, "Enter", &[])];
+        assert!(gen(mid).is_empty(), "a paste into a field in the middle of the screen");
+        // The bar was focused, then something else took the click, then a paste.
+        let stolen = vec![click(4000.0, 700.0, 64.0), click(4500.0, 800.0, 540.0), key(4800.0, "V", &["Meta"])];
+        assert!(gen(stolen).is_empty(), "a later click left the address bar");
+        // Too late: a couple of seconds, not the long typing lookback.
+        let late = vec![click(4000.0, 700.0, 64.0), key(8000.0, "V", &["Ctrl"]), key(8400.0, "Enter", &[])];
+        assert!(gen(late).is_empty(), "paste well after the click");
+        let late_key = vec![key(4000.0, "L", &["Ctrl"]), key(8000.0, "V", &["Ctrl"])];
+        assert!(gen(late_key).is_empty(), "paste well after the focus shortcut");
+        assert!(gen(vec![click(4000.0, 800.0, 540.0), key(4600.0, "Enter", &[])]).is_empty(), "Enter in the middle is not a zoom");
+    }
+
+    #[test]
+    fn enter_after_typing_in_a_field_keeps_the_normal_hold() {
+        let cfg = ZoomConfig::default();
+        let mut ev = vec![mv(2800.0, 900.0, 540.0), click(3000.0, 900.0, 540.0)];
+        for i in 0..8 {
+            ev.push(key(3600.0 + i as f64 * 100.0, "printable", &[]));
+        }
+        // Last key at 4300. Enter is a new line, not a submitted URL.
+        ev.push(key(4700.0, "Enter", &[]));
+        ev.push(mv(5200.0, 200.0, 200.0));
+        let segs = gen(ev);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        let s = &segs[0];
+        assert_eq!(s.reason, "typing");
+        assert!(!s.follow_cursor, "{s:?}");
+        assert!((s.focus.0 - 900.0).abs() < 5.0 && (s.focus.1 - 540.0).abs() < 5.0, "{s:?}");
+        let long = 4700.0 + cfg.hold_ms + cfg.ease_out_ms;
+        let short = 4700.0 + SUBMIT_HOLD_MS + cfg.ease_out_ms;
+        assert!((s.end_ms - long).abs() < 1.0, "the normal hold: {s:?}");
+        assert!(s.end_ms > short + 500.0, "not the submit hold: {s:?}");
+    }
+
+    #[test]
+    fn enter_after_an_address_bar_url_keeps_the_short_hold() {
+        let cfg = ZoomConfig::default();
+        let mut ev = vec![mv(2000.0, 1500.0, 800.0), key(4000.0, "L", &["Meta"])];
+        for i in 0..10 {
+            ev.push(key(4300.0 + i as f64 * 80.0, "printable", &[]));
+        }
+        // Last key at 5020, Enter at 5500.
+        ev.push(key(5500.0, "Enter", &[]));
+        let segs = gen(ev);
+        let s = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        assert!(!s.follow_cursor, "{s:?}");
+        assert!(s.focus.1 < 200.0, "{s:?}");
+        assert!((s.end_ms - (5500.0 + SUBMIT_HOLD_MS + cfg.ease_out_ms)).abs() < 1.0, "{s:?}");
+
+        // The same short hold when the anchor itself sits in the top band.
+        let mut ev = vec![click(4000.0, 700.0, 64.0)];
+        for i in 0..8 {
+            ev.push(key(4400.0 + i as f64 * 90.0, "printable", &[]));
+        }
+        ev.push(key(5400.0, "Enter", &[]));
+        let segs = gen(ev);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        let s = &segs[0];
+        assert!(s.focus.1 < 200.0, "{s:?}");
+        assert!((s.end_ms - (5400.0 + SUBMIT_HOLD_MS + cfg.ease_out_ms)).abs() < 1.0, "{s:?}");
     }
 
     #[test]
