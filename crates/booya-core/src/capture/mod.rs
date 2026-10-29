@@ -539,7 +539,7 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
     cmd.args(["-copyts", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
     cmd.args(&input);
-    cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
+    cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
         Ok(mut c) => {

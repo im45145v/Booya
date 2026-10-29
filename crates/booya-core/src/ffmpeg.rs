@@ -493,6 +493,18 @@ impl Encoder {
         };
         v.into_iter().map(String::from).collect()
     }
+
+    /// Webcam footage is 720p and normally displayed in a small pane. The
+    /// screen recorder's 40 Mbit/s capture target made camera sidecars several
+    /// times larger than the screen recording without a visible benefit.
+    pub fn webcam_capture_args(self) -> Vec<String> {
+        let v: Vec<&str> = match self {
+            Encoder::VideoToolbox => vec!["-c:v", "h264_videotoolbox", "-realtime", "1", "-allow_sw", "1", "-b:v", "10M"],
+            Encoder::Nvenc => vec!["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "vbr", "-cq", "21", "-b:v", "10M", "-maxrate", "12M"],
+            Encoder::X264 => vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"],
+        };
+        v.into_iter().map(String::from).collect()
+    }
 }
 
 /// Parse BOOYA_ENCODER: "software"/"x264", "videotoolbox", "nvenc" or auto.
@@ -549,6 +561,14 @@ mod encoder_tests {
         let i = v.iter().position(|s| s == "-b:v").unwrap();
         let bits: u64 = v[i + 1].parse().unwrap();
         assert!((10_000_000..14_000_000).contains(&bits));
+    }
+
+    #[test]
+    fn webcam_capture_uses_a_smaller_target_than_screen_capture() {
+        let screen = Encoder::VideoToolbox.capture_args().join(" ");
+        let webcam = Encoder::VideoToolbox.webcam_capture_args().join(" ");
+        assert!(screen.contains("40M"), "{screen}");
+        assert!(webcam.contains("10M") && !webcam.contains("40M"), "{webcam}");
     }
     #[test]
     fn missing_encoder_is_rejected() {

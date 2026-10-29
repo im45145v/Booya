@@ -39,6 +39,14 @@ pub fn webcam_filter(w: u32, h: u32) -> String {
     format!("scale={w}:{h}")
 }
 
+/// Camera files start at their own zero. `offset_ms` says where that zero
+/// lands on the screen recording's timeline, so no camera frame exists before
+/// the offset and later frames are measured from the decoder's actual seek.
+fn webcam_frame_index(src_t: f64, decoder_start: f64, offset_ms: f64, fps: f64) -> Option<u64> {
+    let cam_t = src_t - offset_ms;
+    (cam_t >= decoder_start).then(|| ((cam_t - decoder_start) / 1000.0 * fps).floor() as u64)
+}
+
 /// The camera frame for the editor preview at source time `src_t`, or None
 /// when the layout there does not show the camera.
 pub fn preview_cam(renderer: &Renderer, project: &Project, src_t: f64) -> Option<Frame> {
@@ -368,8 +376,8 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         Some(w) => match ffmpeg::probe(&w.path) {
             Ok(i) => {
                 let (cw, ch) = renderer.cam_decode_size((i.width, i.height));
-                let start = first_src - w.offset_ms;
-                FrameReader::open_filtered(&w.path, start, fps, &webcam_filter(cw, ch), cw, ch).ok().map(|r| (r, w.offset_ms, None::<Frame>))
+                let start = (first_src - w.offset_ms).max(0.0);
+                FrameReader::open_filtered(&w.path, start, fps, &webcam_filter(cw, ch), cw, ch).ok().map(|r| (r, start, w.offset_ms, None::<Frame>))
             }
             Err(_) => None,
         },
@@ -486,17 +494,17 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
             }
         }
         let src = current.as_ref().context("source has no frames")?;
-        if let Some((r, offset, cur)) = cam.as_mut() {
-            let cam_t = src_t - *offset;
-            let want = ((cam_t - (first_src - *offset)) / 1000.0 * r.fps).floor().max(0.0) as u64;
-            while r.index <= want {
-                match r.next() {
-                    Ok(Some(f)) => *cur = Some(f),
-                    _ => break,
+        if let Some((r, decoder_start, offset, cur)) = cam.as_mut() {
+            if let Some(want) = webcam_frame_index(src_t, *decoder_start, *offset, r.fps) {
+                while r.index <= want {
+                    match r.next() {
+                        Ok(Some(f)) => *cur = Some(f),
+                        _ => break,
+                    }
                 }
             }
         }
-        let cam_frame = cam.as_ref().and_then(|(_, _, cur)| cur.as_ref());
+        let cam_frame = cam.as_ref().and_then(|(_, _, _, cur)| cur.as_ref());
         let mut frame = renderer.render(src, src_t, cam_frame);
         if fade_ms > 0.0 && boundaries.len() > 1 {
             // Entering a new clip: remember the previous clip's last frame.
@@ -540,6 +548,23 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webcam_offset_delays_camera_frames_instead_of_cancelling_out() {
+        let fps = 30.0;
+        let offset = 5607.0;
+        // The camera had not produced a frame yet at the start of the screen
+        // recording. Its first frame appears at the measured offset.
+        assert_eq!(webcam_frame_index(0.0, 0.0, offset, fps), None);
+        assert_eq!(webcam_frame_index(5606.0, 0.0, offset, fps), None);
+        assert_eq!(webcam_frame_index(5607.0, 0.0, offset, fps), Some(0));
+        assert_eq!(webcam_frame_index(6607.0, 0.0, offset, fps), Some(30));
+
+        // A trimmed project seeks into the camera file and indexes relative
+        // to that seek, while retaining the same timeline mapping.
+        assert_eq!(webcam_frame_index(10_000.0, 4393.0, offset, fps), Some(0));
+        assert_eq!(webcam_frame_index(11_000.0, 4393.0, offset, fps), Some(30));
+    }
     #[test]
     fn atempo_chains_stay_in_range() {
         assert_eq!(atempo_chain(1.0), "atempo=1.00000");

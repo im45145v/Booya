@@ -3,9 +3,9 @@
 //! exporter both call it, so what you see is exactly what you export.
 
 use crate::events::{CursorTrack, EventLog};
-use crate::project::{Background, BlurBox, Project, SceneKind};
+use crate::project::{Background, BlurBox, Project, SceneKind, SceneRun};
 use crate::text;
-use crate::zoom::{camera_at_mapped, Camera, CameraTiming};
+use crate::zoom::{camera_at_mapped, Camera, CameraTiming, ZoomSegment};
 use rayon::prelude::*;
 
 /// RGBA8 frame.
@@ -209,6 +209,119 @@ pub fn blur_region(f: &mut Frame, b: &BlurBox) {
     }
 }
 
+/// A blurred rectangle copied out of a source frame. Keeping only these
+/// pixels avoids cloning a multi-megabyte source frame whenever one small
+/// redaction is active.
+struct BlurPatch {
+    x: usize,
+    y: usize,
+    frame: Frame,
+}
+
+impl BlurPatch {
+    fn from_boxes(src: &Frame, boxes: &[BlurBox]) -> Option<Self> {
+        let x0 = boxes.iter().map(|b| b.x).fold(f64::INFINITY, f64::min).max(0.0) as usize;
+        let y0 = boxes.iter().map(|b| b.y).fold(f64::INFINITY, f64::min).max(0.0) as usize;
+        let x1 = boxes.iter().map(|b| b.x + b.w).fold(0.0, f64::max).max(0.0) as usize;
+        let y1 = boxes.iter().map(|b| b.y + b.h).fold(0.0, f64::max).max(0.0) as usize;
+        let x1 = x1.min(src.w as usize);
+        let y1 = y1.min(src.h as usize);
+        if x1 <= x0 + 1 || y1 <= y0 + 1 {
+            return None;
+        }
+        let mut frame = Frame::new((x1 - x0) as u32, (y1 - y0) as u32);
+        let src_stride = src.w as usize * 4;
+        let dst_stride = frame.w as usize * 4;
+        for row in 0..frame.h as usize {
+            let from = (y0 + row) * src_stride + x0 * 4;
+            let to = row * dst_stride;
+            frame.data[to..to + dst_stride].copy_from_slice(&src.data[from..from + dst_stride]);
+        }
+        // Apply boxes in project order, exactly as the whole-frame path did.
+        // Intersecting boxes share a patch so a later blur sees the earlier
+        // one's pixels in their overlap.
+        for b in boxes {
+            let local = BlurBox { x: b.x - x0 as f64, y: b.y - y0 as f64, w: b.w, h: b.h, start_ms: 0.0, end_ms: 0.0, radius: b.radius };
+            blur_region(&mut frame, &local);
+        }
+        Some(Self { x: x0, y: y0, frame })
+    }
+
+    #[inline]
+    fn pixel(&self, x: i64, y: i64) -> Option<[f32; 4]> {
+        let (x, y) = (x - self.x as i64, y - self.y as i64);
+        (x >= 0 && y >= 0 && x < self.frame.w as i64 && y < self.frame.h as i64).then(|| self.frame.px(x, y))
+    }
+}
+
+fn blur_patches(src: &Frame, mut boxes: Vec<BlurBox>) -> Vec<BlurPatch> {
+    let overlap = |a: &BlurBox, b: &BlurBox| a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    let mut boxes: Vec<(usize, BlurBox)> = boxes.drain(..).enumerate().collect();
+    let mut groups: Vec<Vec<(usize, BlurBox)>> = Vec::new();
+    while let Some(seed) = boxes.first().cloned() {
+        boxes.remove(0);
+        let mut group = vec![seed];
+        loop {
+            let before = boxes.len();
+            let mut i = 0;
+            while i < boxes.len() {
+                if group.iter().any(|g| overlap(&g.1, &boxes[i].1)) {
+                    group.push(boxes.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+            if boxes.len() == before {
+                break;
+            }
+        }
+        // Restore project order for overlapping blur semantics.
+        group.sort_by_key(|g| g.0);
+        groups.push(group);
+    }
+    groups.into_iter().filter_map(|g| {
+        let boxes: Vec<BlurBox> = g.into_iter().map(|(_, b)| b).collect();
+        BlurPatch::from_boxes(src, &boxes)
+    }).collect()
+}
+
+/// Bilinear source sampling with sparse blurred rectangles overlaid. Pixel
+/// lookup, rather than choosing a patch after interpolation, preserves the old
+/// edge behaviour where blurred and sharp pixels meet.
+#[inline]
+fn sample_with_blurs(src: &Frame, patches: &[BlurPatch], x: f64, y: f64) -> [f32; 3] {
+    if patches.is_empty() {
+        return src.sample(x, y);
+    }
+    let x = x - 0.5;
+    let y = y - 0.5;
+    let x0 = x.floor();
+    let y0 = y.floor();
+    // Almost every output pixel is outside a small redaction. Take the normal
+    // sampling fast path after one bounds check per patch, rather than doing
+    // four patch lookups for every pixel in the frame.
+    if !patches.iter().any(|p| {
+        x0 as i64 + 1 >= p.x as i64
+            && y0 as i64 + 1 >= p.y as i64
+            && (x0 as i64) < (p.x + p.frame.w as usize) as i64
+            && (y0 as i64) < (p.y + p.frame.h as usize) as i64
+    }) {
+        return src.sample(x + 0.5, y + 0.5);
+    }
+    let fx = (x - x0) as f32;
+    let fy = (y - y0) as f32;
+    let (x0, y0) = (x0 as i64, y0 as i64);
+    let pixel = |x: i64, y: i64| patches.iter().rev().find_map(|p| p.pixel(x, y)).unwrap_or_else(|| src.px(x, y));
+    let (a, b, c, d) = (pixel(x0, y0), pixel(x0 + 1, y0), pixel(x0, y0 + 1), pixel(x0 + 1, y0 + 1));
+    let mut out = [0f32; 3];
+    for k in 0..3 {
+        let top = a[k] + (b[k] - a[k]) * fx;
+        let bot = c[k] + (d[k] - c[k]) * fx;
+        out[k] = top + (bot - top) * fy;
+    }
+    out
+}
+
 /// Label shown while the presenter types (characters are never logged).
 pub const TYPING: &str = "Typing...";
 
@@ -392,6 +505,10 @@ pub struct Renderer {
     /// Where a finger or pen touched down (also in `clicks`, for the zoom).
     touches: Vec<(f64, f64, f64)>,
     labels: Vec<KeyLabel>,
+    /// Layout and zoom timelines are immutable during one renderer's life.
+    /// Building and sorting them once avoids allocations on every frame.
+    scene_runs: Vec<SceneRun>,
+    zoom_on_output: Vec<ZoomSegment>,
     /// The plain backdrop, used behind title cards.
     card_bg: Frame,
     /// One entry for each layout the project uses.
@@ -456,7 +573,9 @@ impl Renderer {
         kinds.insert(0, main);
         let scenes: Vec<Scene> = kinds.into_iter().map(|k| Self::build_scene(&project, k, out_w, out_h, &card_bg, track.as_ref())).collect();
         let (layout, panel) = (scenes[0].layout, scenes[0].panel);
-        Self { project, out_w, out_h, track, clicks, touches, labels, card_bg, scenes, layout, panel, glass,
+        let scene_runs = project.scene_runs();
+        let zoom_on_output = project.zoom_on_output();
+        Self { project, out_w, out_h, track, clicks, touches, labels, scene_runs, zoom_on_output, card_bg, scenes, layout, panel, glass,
         }
     }
 
@@ -679,7 +798,30 @@ impl Renderer {
 
     /// The layout and cross-fade at source time `src_t`.
     pub fn scene_at(&self, src_t: f64) -> crate::project::SceneMix {
-        self.project.scene_at(src_t)
+        let runs = &self.scene_runs;
+        let i = runs.iter().position(|r| src_t < r.end_ms).unwrap_or(runs.len() - 1);
+        let here = runs[i];
+        let tr = self.project.layouts.transition_ms.clamp(0.0, 3000.0);
+        if tr < 1.0 {
+            return crate::project::SceneMix { kind: here.kind, other: None };
+        }
+        let smooth = |x: f64| { let x = x.clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) };
+        if let Some(next) = runs.get(i + 1) {
+            let half = (tr / 2.0).min((here.end_ms - here.start_ms) / 2.0).min((next.end_ms - next.start_ms) / 2.0);
+            if half >= 1.0 && src_t >= here.end_ms - half {
+                let k = smooth((src_t - (here.end_ms - half)) / (2.0 * half));
+                return crate::project::SceneMix { kind: here.kind, other: Some((next.kind, k)) };
+            }
+        }
+        if i > 0 {
+            let prev = runs[i - 1];
+            let half = (tr / 2.0).min((here.end_ms - here.start_ms) / 2.0).min((prev.end_ms - prev.start_ms) / 2.0);
+            if half >= 1.0 && src_t < here.start_ms + half {
+                let k = smooth((src_t - (here.start_ms - half)) / (2.0 * half));
+                return crate::project::SceneMix { kind: prev.kind, other: Some((here.kind, k)) };
+            }
+        }
+        crate::project::SceneMix { kind: here.kind, other: None }
     }
 
     /// Size to decode the camera video at, given its own size: big enough for
@@ -892,8 +1034,7 @@ impl Renderer {
         let mut t = CameraTiming::new(p.zoom_config.ease_in_ms, p.zoom_config.ease_out_ms, p.cursor.smoothing_ms.max(600.0),
         );
         t.deadzone = p.zoom_config.steadiness.clamp(0.0, 1.0) * 0.6;
-        let segs = p.zoom_on_output();
-        camera_at_mapped(p.src_to_out(src_t), &segs, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o),
+        camera_at_mapped(p.src_to_out(src_t), &self.zoom_on_output, self.track.as_ref(), p.source_width as f64, p.source_height as f64, t, &|o| p.out_to_src(o),
         )
     }
 
@@ -963,30 +1104,21 @@ impl Renderer {
     ) -> Frame {
         let p = &self.project;
         // 1. Blur boxes are applied in source space, so they move with zoom.
-        let blurs: Vec<&BlurBox> = p.blur.iter().filter(|b| src_t >= b.start_ms && src_t <= b.end_ms).collect();
-        let owned;
-        let src = if blurs.is_empty() {
-            src
-        } else {
-            let mut c = src.clone();
-            // Blur boxes are in source pixels; the decoded frame may be smaller.
-            let k = src.w as f64 / p.source_width as f64;
-            for b in blurs {
-                if (k - 1.0).abs() < 1e-9 {
-                    blur_region(&mut c, b);
-                } else {
-                    let mut sb = b.clone();
-                    sb.x *= k;
-                    sb.y *= k;
-                    sb.w *= k;
-                    sb.h *= k;
-                    sb.radius = ((b.radius as f64 * k).round() as u32).max(1);
-                    blur_region(&mut c, &sb);
-                }
+        // Blur only the active rectangles. Older code cloned the complete
+        // decoded frame here even when a redaction covered a few dozen pixels.
+        let k = src.w as f64 / p.source_width as f64;
+        let active: Vec<BlurBox> = p.blur.iter().filter(|b| src_t >= b.start_ms && src_t <= b.end_ms).map(|b| {
+            let mut sb = b.clone();
+            if (k - 1.0).abs() >= 1e-9 {
+                sb.x *= k;
+                sb.y *= k;
+                sb.w *= k;
+                sb.h *= k;
+                sb.radius = ((b.radius as f64 * k).round() as u32).max(1);
             }
-            owned = c;
-            &owned
-        };
+            sb
+        }).collect();
+        let patches = blur_patches(src, active);
 
         let zcam = self.camera(src_t);
         let (vx, vy, vw, vh) = self.view_rect(sc, &zcam, src_t);
@@ -1015,7 +1147,7 @@ impl Renderer {
                     let px = &mut row[x * 4..x * 4 + 4];
                     let u = (fx - l.x) / l.w;
                     let v = (fy - l.y) / l.h;
-                    let s = src.sample((vx + u * vw) * sx_scale, (vy + v * vh) * sy_scale);
+                    let s = sample_with_blurs(src, &patches, (vx + u * vw) * sx_scale, (vy + v * vh) * sy_scale);
                     for k in 0..3 {
                         px[k] = (px[k] as f32 + (s[k] - px[k] as f32) * cov).round() as u8;
                     }
@@ -1362,6 +1494,34 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::events::{Event, EventKind};
+
+    #[test]
+    fn sparse_blur_patches_match_whole_frame_blurring() {
+        let mut src = Frame::new(40, 28);
+        for y in 0..src.h as usize {
+            for x in 0..src.w as usize {
+                let i = (y * src.w as usize + x) * 4;
+                src.data[i..i + 4].copy_from_slice(&[(x * 7) as u8, (y * 9) as u8, ((x + y) * 4) as u8, 255]);
+            }
+        }
+        // The boxes overlap, exercising the sequential-blur semantics.
+        let boxes = vec![
+            BlurBox { x: 5.0, y: 4.0, w: 18.0, h: 13.0, start_ms: 0.0, end_ms: 1.0, radius: 7 },
+            BlurBox { x: 16.0, y: 10.0, w: 17.0, h: 12.0, start_ms: 0.0, end_ms: 1.0, radius: 5 },
+        ];
+        let mut old = src.clone();
+        for b in &boxes {
+            blur_region(&mut old, b);
+        }
+        let patches = blur_patches(&src, boxes);
+        for y in 0..src.h {
+            for x in 0..src.w {
+                let got = sample_with_blurs(&src, &patches, x as f64 + 0.5, y as f64 + 0.5);
+                let want = old.sample(x as f64 + 0.5, y as f64 + 0.5);
+                assert_eq!(got, want, "pixel {x},{y}");
+            }
+        }
+    }
 
     #[test]
     fn key_labels_group_typing_and_split_shortcuts() {
