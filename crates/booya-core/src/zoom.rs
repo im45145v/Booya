@@ -387,7 +387,9 @@ fn typing_moments(log: &EventLog, held: &Held, clicks: &[Click], cfg: &ZoomConfi
         }
         if j - i + 1 >= cfg.typing_min_keys && keys[j] - keys[i] >= cfg.typing_min_ms {
             let start = keys[i];
-            let at = clicks.iter().rev().find(|c| c.t <= start && start - c.t <= 4000.0).map(|c| (c.x, c.y)).or_else(|| held.at(start)).unwrap_or((fw / 2.0, fh / 2.0));
+            // The field is where the last click landed, as long as the user has not switched windows since.
+            let nav_since = log.keys().filter(|(t, k, m)| *t <= start && is_navigation_shortcut(k, m)).map(|(t, _, _)| t).fold(f64::MIN, f64::max);
+            let at = clicks.iter().rev().find(|c| c.t <= start && start - c.t <= 30_000.0 && c.t > nav_since).map(|c| (c.x, c.y)).or_else(|| held.at(start)).unwrap_or((fw / 2.0, fh / 2.0));
             out.push(Moment { first: start, last: keys[j], pts: vec![at], reason: "typing", weight: j - i + 1 });
         }
         i = j + 1;
@@ -443,7 +445,9 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         if scale < 1.12 {
             continue;
         }
-        segs.push((ZoomSegment { start_ms: start, end_ms: end, scale, follow_cursor: true, focus, reason: m.reason.into() }, m.weight, m.pts));
+        // Typing stays on the field; the resting mouse is not where the eyes are.
+        let follow_cursor = m.reason != "typing";
+        segs.push((ZoomSegment { start_ms: start, end_ms: end, scale, follow_cursor, focus, reason: m.reason.into() }, m.weight, m.pts));
     }
 
     // Scrolling and a cursor that jumps across the screen end a zoom early.

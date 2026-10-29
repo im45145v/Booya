@@ -45,6 +45,8 @@ struct AppState {
     proxying: Mutex<HashSet<String>>,
     /// Set to abort the 3-2-1 countdown.
     cancel_countdown: std::sync::atomic::AtomicBool,
+    /// Set by the countdown page when it has shown its last number.
+    countdown_done: std::sync::atomic::AtomicBool,
     /// Auto edit observes cancellation between steps, transcription windows,
     /// and OCR frames.
     cancel_auto_edit: std::sync::atomic::AtomicBool,
@@ -474,6 +476,7 @@ async fn start_recording(
             None => *slot = Some(RecSlot::Starting),
         }
         state.cancel_countdown.store(false, std::sync::atomic::Ordering::SeqCst);
+        state.countdown_done.store(false, std::sync::atomic::Ordering::SeqCst);
     }
     let fail_reset = |app: &tauri::AppHandle| {
         *app.state::<AppState>().recording.lock().unwrap() = None;
@@ -568,6 +571,17 @@ fn rec_mic_status(app: tauri::AppHandle) -> serde_json::Value {
 /// Show the countdown window and wait. True when the user cancelled.
 fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
     use std::sync::atomic::Ordering;
+    // A window from an earlier countdown that is still closing would make the
+    // build fail and the recording start with no countdown at all.
+    if let Some(old) = app.get_webview_window("countdown") {
+        let _ = old.close();
+        for _ in 0..40 {
+            if app.get_webview_window("countdown").is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
     let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()),
     )
         .title("Booya countdown")
@@ -583,19 +597,29 @@ fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
         .build();
     let Ok(w) = w else { return false };
     let state = app.state::<AppState>();
-    let end = std::time::Instant::now() + std::time::Duration::from_millis(secs as u64 * 1000 + 150);
+    // The page reports when its last number has gone, so a slow page load
+    // cannot cut the count short. The deadline is only a safety net.
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(secs as u64 * 1000 + 5000);
     let mut cancelled = false;
     while std::time::Instant::now() < end {
         if state.cancel_countdown.load(Ordering::SeqCst) {
             cancelled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        if state.countdown_done.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
     let _ = w.close();
     // Let the window actually disappear before the first frame is captured.
-    std::thread::sleep(std::time::Duration::from_millis(250));
+    std::thread::sleep(std::time::Duration::from_millis(350));
     cancelled
+}
+
+#[tauri::command]
+fn countdown_done(app: tauri::AppHandle) {
+    app.state::<AppState>().countdown_done.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -624,6 +648,19 @@ fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
 fn request_stop(app: tauri::AppHandle) {
     restore_main(&app);
     let _ = app.emit("rec-stop-request", ());
+    // A window that was minimized may not have its page awake yet, so the
+    // first event can be missed. Ask again while the recording still runs.
+    std::thread::spawn(move || {
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            let running = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+            if !running {
+                return;
+            }
+            restore_main(&app);
+            let _ = app.emit("rec-stop-request", ());
+        }
+    });
 }
 
 fn restore_main(app: &tauri::AppHandle) {
@@ -809,6 +846,7 @@ fn show_indicator(app: &tauri::AppHandle) {
         .visible_on_all_workspaces(true)
         .skip_taskbar(true)
         .focused(false)
+        .accept_first_mouse(true)
         .content_protected(true)
         .build();
     if let Ok(w) = w {
@@ -2572,6 +2610,7 @@ fn main() {
             start_recording,
             stop_recording,
             cancel_countdown,
+            countdown_done,
             rec_status,
             request_stop,
             discard_recording,

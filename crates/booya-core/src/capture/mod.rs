@@ -150,6 +150,9 @@ pub struct RecordingSession {
     /// Frame source for backends that feed ffmpeg (stopped first on `stop`).
     feed: Option<Box<dyn Send>>,
     webcam: Option<Child>,
+    /// Unix time the screen and webcam recorders' clocks started at.
+    epoch: f64,
+    webcam_epoch: f64,
     /// Separate microphone recorder (see `CapturePlan::mic_sidecar`).
     mic: Option<mic::MicRec>,
     /// What the microphone did, once it has been stopped.
@@ -347,6 +350,9 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
     let mic_file = opts.out_dir.join("recording.mic.mkv");
+    // The camera warms up slowly, so it opens alongside the screen, not after
+    // it. Both are stamped on the wall clock and aligned from those stamps.
+    let cam_job = if opts.webcam { Some(CamJob::spawn(opts.out_dir.clone())) } else { None };
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
         let _ = std::fs::remove_file(&mic_file);
@@ -447,15 +453,17 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     }
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
-    let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
-    if let Some((_, first_output)) = &webcam {
-        let offset_ms = first_output.duration_since(started).as_secs_f64() * 1000.0;
-        let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{offset_ms:.0}"),
-        );
-    }
-    let webcam = webcam.map(|(child, _)| child);
+    let (webcam, cam_warnings) = match cam_job {
+        Some(j) => j.finish(),
+        None => (None, Vec::new()),
+    };
+    warnings.extend(cam_warnings);
+    let (webcam, webcam_epoch) = match webcam {
+        Some((c, e)) => (Some(c), e),
+        None => (None, 0.0),
+    };
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
+    Ok(RecordingSession { child, feed, webcam, epoch, webcam_epoch, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
     })
 }
 
@@ -490,21 +498,54 @@ fn webcam_input() -> Option<Vec<String>> {
     }
 }
 
-fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, Instant)> {
+/// The webcam opening on its own thread. Dropped unfinished (the screen
+/// failed to start), it stops the camera again.
+struct CamJob(Option<std::thread::JoinHandle<(Option<(Child, f64)>, Vec<String>)>>);
+
+impl CamJob {
+    fn spawn(dir: PathBuf) -> Self {
+        CamJob(Some(std::thread::spawn(move || {
+            let mut w = Vec::new();
+            let r = start_webcam(&dir, &mut w);
+            (r, w)
+        })))
+    }
+
+    fn finish(mut self) -> (Option<(Child, f64)>, Vec<String>) {
+        self.0.take().and_then(|h| h.join().ok()).unwrap_or((None, Vec::new()))
+    }
+}
+
+impl Drop for CamJob {
+    fn drop(&mut self) {
+        if let Some((Some((mut c, _)), _)) = self.0.take().and_then(|h| h.join().ok()) {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// Starts the camera recorder; returns it with the unix time its clock started at.
+fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> {
     let Some(input) = webcam_input() else {
         warnings.push("No webcam found (check that a camera is connected and that Booya may use it), so there is no camera overlay.".into());
         return None;
     };
     let out = dir.join("webcam.mkv");
     let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
-    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&input);
+    // Every frame is stamped with the wall clock since `epoch`, so its first
+    // frame lands where it really happened relative to the screen.
+    let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
+    cmd.args(["-copyts", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
+    cmd.args(&input);
     cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
         Ok(mut c) => {
             let err = Arc::new(Mutex::new(String::new()));
-            if let Ok(first_output) = wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT) {
-                Some((c, first_output))
+            if wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT).is_ok() {
+                Some((c, epoch))
             } else {
                 warnings.push("The webcam did not start (check the Camera permission), so there is no camera overlay.".into());
                 None
@@ -707,10 +748,16 @@ impl RecordingSession {
         log.events = logged.events;
         if shift_ms > 0.0 {
             shift_timeline(&mut log.events, &mut pauses, shift_ms);
-            // The webcam offset was measured on the same clock.
-            let wc = self.dir.join("webcam.offset");
-            if let Some(ms) = std::fs::read_to_string(&wc).ok().and_then(|t| t.trim().parse::<f64>().ok()) {
-                let _ = std::fs::write(&wc, format!("{:.0}", ms - shift_ms));
+        }
+        // The camera's first frame against the screen's first frame, from the
+        // wall clock stamps both were written with.
+        if self.webcam_epoch > 0.0 && video.extension().is_some_and(|x| x == "mp4") {
+            let cam = self.dir.join("webcam.mkv");
+            if let Some((cam_start, _)) = crate::finalize::stream_times(&cam, "v") {
+                let ms = ((cam_start + self.webcam_epoch) - (video_start_s + self.epoch)) * 1000.0;
+                if ms.abs() < 15_000.0 {
+                    let _ = std::fs::write(cam.with_extension("offset"), format!("{ms:.0}"));
+                }
             }
         }
         // A screen recorded below its own resolution (see `max_height`): the

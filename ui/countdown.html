@@ -14,7 +14,9 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;font-famil
 const T = window.__TAURI__;
 let n = parseInt(new URLSearchParams(location.search).get('n') || '3', 10);
 const el = document.getElementById('n');
-function tick() { if (n <= 0) return; el.textContent = n; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; n--; setTimeout(tick, 1000); }
+function tick() { if (n <= 0) { T.core.invoke('countdown_done'); return; } el.textContent = n; el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; n--; setTimeout(tick, 1000); }
 tick();
-document.getElementById('c').onclick = () => T.core.invoke('cancel_countdown');
+// Ignore the tail of the double click that pressed Record.
+const shownAt = performance.now();
+document.getElementById('c').onclick = () => { if (performance.now() - shownAt > 800) T.core.invoke('cancel_countdown'); };
 </script></body></html>
