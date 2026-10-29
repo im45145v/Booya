@@ -11,7 +11,8 @@ use std::path::Path;
 pub const FILLER_PROMPT: &str = "Umm, so, uh, let me show you. Hmm, okay, um, here it is.";
 
 /// Installed speech models, best caption quality first.
-pub const PREFERENCE: &[&str] = &["whisper-small.en", "whisper-large-v3-turbo-q5", "whisper-small", "whisper-base.en", "whisper-tiny.en"];
+pub const PREFERENCE: &[&str] = &["whisper-small.en", "whisper-large-v3-turbo-q5", "whisper-small", "whisper-base.en", "whisper-tiny.en",
+];
 
 pub fn default_model() -> Option<std::path::PathBuf> {
     use crate::models;
@@ -38,7 +39,9 @@ pub fn speech_spans(audio: &[f32], rate: usize) -> Vec<(usize, usize)> {
     let floor = sorted[sorted.len() / 10];
     let thresh = (floor * 3.0).max(0.006);
     let pad = 10; // 300 ms either side
-    let voiced: Vec<bool> = (0..rms.len()).map(|i| rms[i.saturating_sub(pad)..(i + pad + 1).min(rms.len())].iter().any(|&r| r > thresh)).collect();
+    let voiced: Vec<bool> = (0..rms.len()).map(|i| {
+            rms[i.saturating_sub(pad)..(i + pad + 1).min(rms.len())].iter().any(|&r| r > thresh)
+        }).collect();
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while i < voiced.len() {
@@ -60,7 +63,8 @@ pub fn speech_spans(audio: &[f32], rate: usize) -> Vec<(usize, usize)> {
 
 /// Join speech spans with 200 ms of silence between them. Returns the
 /// compacted audio and a map of (compact_start, original_start, len).
-pub fn compact(audio: &[f32], spans: &[(usize, usize)], rate: usize) -> (Vec<f32>, Vec<(usize, usize, usize)>) {
+pub fn compact(audio: &[f32], spans: &[(usize, usize)], rate: usize,
+) -> (Vec<f32>, Vec<(usize, usize, usize)>) {
     let gap = rate / 5;
     let mut out = Vec::with_capacity(audio.len());
     let mut map = Vec::new();
@@ -83,14 +87,17 @@ pub fn uncompact_ms(t_ms: f64, map: &[(usize, usize, usize)], rate: usize) -> f6
 }
 
 /// Cache key: audio content, model file and options.
-fn cache_path(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str) -> std::path::PathBuf {
+fn cache_path(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
+) -> std::path::PathBuf {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     for x in audio {
         h.update(x.to_le_bytes());
     }
-    h.update(model.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
-    h.update(std::fs::metadata(model).map(|m| m.len()).unwrap_or(0).to_le_bytes());
+    h.update(model.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    );
+    h.update(std::fs::metadata(model).map(|m| m.len()).unwrap_or(0).to_le_bytes(),
+    );
     h.update(language.unwrap_or("en"));
     h.update(prompt);
     h.update(b"v4");
@@ -130,13 +137,26 @@ pub fn clear_cache() -> Result<()> {
 
 pub fn transcribe(video: &Path, model: &Path, language: Option<&str>) -> Result<Vec<CaptionWord>> {
     let vocab = std::env::var("BOOYA_WHISPER_PROMPT").ok();
-    transcribe_with(video, model, language, vocab.as_deref())
+    transcribe_with_cancel(video, model, language, vocab.as_deref(), || false)
 }
 
 /// Transcribe with an optional extra prompt (product names, jargon). The
 /// result is cached by a hash of the audio, so re-running is instant.
-pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocabulary: Option<&str>) -> Result<Vec<CaptionWord>> {
+pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocabulary: Option<&str>,
+) -> Result<Vec<CaptionWord>> {
+    transcribe_with_cancel(video, model, language, vocabulary, || false)
+}
+
+/// Transcribe while checking cancellation between Whisper windows.
+pub fn transcribe_with_cancel(
+    video: &Path,
+    model: &Path,
+    language: Option<&str>,
+    vocabulary: Option<&str>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<CaptionWord>> {
     let audio = booya_core::audio::decode_mono(video, 16_000)?;
+    anyhow::ensure!(!cancelled(), "transcription cancelled");
     if audio.is_empty() {
         return Ok(Vec::new());
     }
@@ -166,7 +186,8 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     // 30 s windows are the usual place where fast, continuous speech loses
     // whole sentences; here every second is heard by at least one full chunk.
     let chunks = plan_chunks(compacted.len(), 16_000);
-    let parts = run_ranges(&compacted, model, language, &prompt, &chunks, false)?;
+    let parts = run_ranges(&compacted, model, language, &prompt, &chunks, false, &cancelled,
+    )?;
     let mut words = merge_chunks(&chunks, parts, 16_000);
     for w in &mut words {
         w.start_ms = uncompact_ms(w.start_ms, &map, 16_000);
@@ -183,14 +204,27 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
     retime_implausible(&mut words, &voiced);
     let holes: Vec<(f64, f64)> = uncovered(&words, &tight, 1_500.0).into_iter().flat_map(|h| split_hole(h, 7_000.0)).collect();
     if !holes.is_empty() {
-        let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()))).collect();
-        let mut found = run_ranges(&audio, model, language, &prompt, &ranges, false).unwrap_or_default();
+        let ranges: Vec<(usize, usize)> = holes.iter().map(|&(a, b)| {
+                (((a - 300.0).max(0.0) * 16.0) as usize, (((b + 300.0) * 16.0) as usize).min(audio.len()),
+                )
+            }).collect();
+        let mut found =
+            match run_ranges(&audio, model, language, &prompt, &ranges, false, &cancelled) {
+                Ok(found) => found,
+                Err(_) if cancelled() => anyhow::bail!("transcription cancelled"),
+                Err(_) => Vec::new(),
+            };
+        anyhow::ensure!(!cancelled(), "transcription cancelled");
         // A stretch that still gave fewer than two words is heard once more,
         // this time without whisper's "this is not speech" shortcut.
-        let again: Vec<usize> = (0..ranges.len()).filter(|&i| found.get(i).map(|w| w.iter().filter(|w| !booya_core::captions::is_nonspeech(&w.text)).count() < 2).unwrap_or(true)).collect();
+        let again: Vec<usize> = (0..ranges.len()).filter(|&i| {
+                found.get(i).map(|w| {
+                        w.iter().filter(|w| !booya_core::captions::is_nonspeech(&w.text)).count() < 2
+                    }).unwrap_or(true)
+            }).collect();
         if !again.is_empty() {
             let rs: Vec<(usize, usize)> = again.iter().map(|&i| ranges[i]).collect();
-            if let Ok(second) = run_ranges(&audio, model, language, &prompt, &rs, true) {
+            if let Ok(second) = run_ranges(&audio, model, language, &prompt, &rs, true, &cancelled) {
                 for (i, ws) in again.into_iter().zip(second) {
                     if found.len() <= i {
                         found.resize(i + 1, Vec::new());
@@ -198,6 +232,7 @@ pub fn transcribe_with(video: &Path, model: &Path, language: Option<&str>, vocab
                     found[i] = ws;
                 }
             }
+            anyhow::ensure!(!cancelled(), "transcription cancelled");
         }
         {
             for (((a, b), (from, to)), ws) in holes.iter().zip(&ranges).zip(found) {
@@ -283,8 +318,10 @@ fn proportional(words: &[CaptionWord], voiced: &[(f64, f64)]) -> Option<Vec<Capt
 /// has ended, a run of words with no duration, or words more than a few
 /// seconds from where their share of the voice puts them.
 pub fn times_are_unbelievable(words: &[CaptionWord], voiced: &[(f64, f64)]) -> bool {
-    let Some(end) = voiced.last().map(|v| v.1) else { return false };
-    let Some(reference) = proportional(words, voiced) else { return false };
+    let Some(end) = voiced.last().map(|v| v.1) else { return false;
+    };
+    let Some(reference) = proportional(words, voiced) else { return false;
+    };
     let late = words.iter().filter(|w| w.start_ms > end + 500.0).count();
     let mut squashed = 0;
     let mut run = 0;
@@ -362,7 +399,9 @@ pub fn anchor_to_voice(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
     if voiced.is_empty() || words.is_empty() {
         return;
     }
-    let near = |t: f64| voiced.iter().any(|&(a, b)| t >= a - 120.0 && t <= b + 150.0);
+    let near = |t: f64| {
+        voiced.iter().any(|&(a, b)| t >= a - 120.0 && t <= b + 150.0)
+    };
     let n = words.len();
     let mut i = 0;
     while i < n {
@@ -442,7 +481,8 @@ fn norm_word(t: &str) -> String {
 /// word one chunk skipped is still there when its neighbour caught it. A word
 /// two chunks both heard is kept once. A word the speaker repeats inside one
 /// chunk is never dropped.
-pub fn merge_chunks(chunks: &[(usize, usize)], parts: Vec<Vec<CaptionWord>>, rate: usize) -> Vec<CaptionWord> {
+pub fn merge_chunks(chunks: &[(usize, usize)], parts: Vec<Vec<CaptionWord>>, rate: usize,
+) -> Vec<CaptionWord> {
     const EDGE: f64 = 300.0;
     let to_ms = |s: usize| s as f64 * 1000.0 / rate as f64;
     let mut all: Vec<(usize, CaptionWord)> = Vec::new();
@@ -461,7 +501,9 @@ pub fn merge_chunks(chunks: &[(usize, usize)], parts: Vec<Vec<CaptionWord>>, rat
     all.sort_by(|a, b| a.1.start_ms.total_cmp(&b.1.start_ms));
     let mut out: Vec<(usize, CaptionWord)> = Vec::new();
     for (k, w) in all {
-        let dup = out.iter().rev().take(8).any(|(pk, p)| *pk != k && norm_word(&p.text) == norm_word(&w.text) && (p.start_ms - w.start_ms).abs() < 600.0);
+        let dup = out.iter().rev().take(8).any(|(pk, p)| {
+            *pk != k && norm_word(&p.text) == norm_word(&w.text) && (p.start_ms - w.start_ms).abs() < 600.0
+        });
         if !dup {
             out.push((k, w));
         }
@@ -475,7 +517,8 @@ pub fn merge_chunks(chunks: &[(usize, usize)], parts: Vec<Vec<CaptionWord>>, rat
 /// as at most a second after its start, because whisper sometimes stretches
 /// one word over everything it dropped.
 pub fn uncovered(words: &[CaptionWord], voiced: &[(f64, f64)], min_ms: f64) -> Vec<(f64, f64)> {
-    let Some(end) = voiced.last().map(|v| v.1) else { return Vec::new() };
+    let Some(end) = voiced.last().map(|v| v.1) else { return Vec::new();
+    };
     let mut gaps: Vec<(f64, f64)> = Vec::new();
     let mut at = 0.0f64;
     for w in words {
@@ -505,7 +548,9 @@ pub fn uncovered(words: &[CaptionWord], voiced: &[(f64, f64)], min_ms: f64) -> V
 /// the voice is really on (`voiced`, in ms), in proportion to their length.
 pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
     let n = words.len();
-    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+    let chars = |w: &CaptionWord| {
+        w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1)
+    };
     let collapsed = |w: &CaptionWord| w.end_ms - w.start_ms < 25.0;
     let bad = |w: &CaptionWord| collapsed(w) || w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
     let mut i = 0;
@@ -518,7 +563,9 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
         // or two between them that happens to have a believable length.
         let mut j = i + 1;
         let stretched = |w: &CaptionWord| w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
-        while j < n && (collapsed(&words[j]) || (!stretched(&words[j]) && (1..=2).any(|d| j + d < n && collapsed(&words[j + d]) && (1..d).all(|e| !stretched(&words[j + e]))))) {
+        while j < n && (collapsed(&words[j]) || (!stretched(&words[j]) && (1..=2).any(|d| {
+                        j + d < n && collapsed(&words[j + d]) && (1..d).all(|e| !stretched(&words[j + e]))
+                    }))) {
             j += 1;
         }
         if j - i < 2 {
@@ -546,7 +593,9 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
 /// order, `total` ms long in all), each taking a share in proportion to its
 /// length.
 fn spread(words: &mut [CaptionWord], pieces: &[(f64, f64)], total: f64) {
-    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+    let chars = |w: &CaptionWord| {
+        w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1)
+    };
     let lo = pieces.first().map(|p| p.0).unwrap_or(0.0);
     let at = |mut v: f64| {
         for (a, b) in pieces {
@@ -570,9 +619,14 @@ fn spread(words: &mut [CaptionWord], pieces: &[(f64, f64)], total: f64) {
 /// Words heard again in a stretch whose times are mostly unbelievable (held
 /// for seconds, or squashed into an instant) are laid over the voice in that
 /// stretch instead: the words are right, the times are not.
-pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)], from: f64, to: f64) -> bool {
-    let chars = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1);
-    let bad = |w: &CaptionWord| w.end_ms - w.start_ms < 25.0 || w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64;
+pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)], from: f64, to: f64,
+) -> bool {
+    let chars = |w: &CaptionWord| {
+        w.text.chars().filter(|c| c.is_alphanumeric()).count().max(1)
+    };
+    let bad = |w: &CaptionWord| {
+        w.end_ms - w.start_ms < 25.0 || w.end_ms - w.start_ms > 800.0 + 120.0 * chars(w) as f64
+    };
     if words.len() < 2 || (words.iter().filter(|w| bad(w)).count() as f64) < 0.3 * words.len() as f64 {
         return false;
     }
@@ -591,7 +645,8 @@ pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)],
 /// sentences. Words that fall outside the hole, or whose times are not
 /// believable, are laid over the voice in the hole instead. `window` is the
 /// stretch of audio that was heard (from, to), in ms.
-pub fn place_heard_again(mut ws: Vec<CaptionWord>, voiced: &[(f64, f64)], (a, b): (f64, f64), window: (f64, f64)) -> Vec<CaptionWord> {
+pub fn place_heard_again(mut ws: Vec<CaptionWord>, voiced: &[(f64, f64)], (a, b): (f64, f64), window: (f64, f64),
+) -> Vec<CaptionWord> {
     if ws.len() < 2 {
         return ws;
     }
@@ -641,7 +696,8 @@ pub fn only_hallucination(words: &[CaptionWord]) -> bool {
     }
     let text: String = words.iter().map(|w| w.text.trim().to_lowercase()).collect::<Vec<_>>().join(" ");
     let text = text.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
-    ["you", "thank you", "thanks", "thanks for watching", "thank you for watching", "bye", "bye bye", "so", "the", "uh", "um", "hmm", "mm"].contains(&text.as_str())
+    ["you", "thank you", "thanks", "thanks for watching", "thank you for watching", "bye", "bye bye", "so", "the", "uh", "um", "hmm", "mm",
+    ].contains(&text.as_str())
 }
 
 /// Scale quiet audio so its peak sits near 0.9, with at most 24 dB of gain.
@@ -660,9 +716,13 @@ pub fn normalise_for_speech(mut audio: Vec<f32>) -> Vec<f32> {
 /// Run whisper over each range (start, end in samples) of `audio`. The words of
 /// range k come back in ms from the start of that range.
 #[cfg(feature = "whisper")]
-fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str, ranges: &[(usize, usize)], lenient: bool) -> Result<Vec<Vec<CaptionWord>>> {
+fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str, ranges: &[(usize, usize)], lenient: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<CaptionWord>>> {
     use anyhow::Context;
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+    anyhow::ensure!(!cancelled(), "transcription cancelled");
 
     // Keep whisper.cpp's model loading chatter off the terminal unless asked.
     if std::env::var_os("BOOYA_DEBUG_WHISPER").is_none() {
@@ -673,6 +733,7 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8) as i32;
     let mut all = Vec::new();
     for &(from, to) in ranges {
+        anyhow::ensure!(!cancelled(), "transcription cancelled");
         let mut state = ctx.create_state().context("whisper state")?;
         // Greedy, with a fallback to warmer sampling when a window looks bad
         // (repeats, low confidence): that is what recovers skipped words.
@@ -708,7 +769,8 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
                 continue;
             }
             // Timestamps are in centiseconds.
-            words.push(CaptionWord { start_ms: seg.start_timestamp() as f64 * 10.0, end_ms: seg.end_timestamp() as f64 * 10.0, text });
+            words.push(CaptionWord { start_ms: seg.start_timestamp() as f64 * 10.0, end_ms: seg.end_timestamp() as f64 * 10.0, text,
+            });
         }
         all.push(merge_fragments(words));
     }
@@ -716,12 +778,17 @@ fn run_ranges(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
 }
 
 #[cfg(not(feature = "whisper"))]
-fn run_ranges(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: &str, _ranges: &[(usize, usize)], _lenient: bool) -> Result<Vec<Vec<CaptionWord>>> {
+fn run_ranges(_audio: &[f32], _model: &Path, _language: Option<&str>, _prompt: &str, _ranges: &[(usize, usize)], _lenient: bool,
+    _cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<CaptionWord>>> {
     anyhow::bail!("this build of Booya has no speech recognition (built without the 'whisper' feature)")
 }
 
-fn run_whisper(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str) -> Result<Vec<CaptionWord>> {
-    Ok(run_ranges(audio, model, language, prompt, &[(0, audio.len())], false)?.into_iter().next().unwrap_or_default())
+fn run_whisper(audio: &[f32], model: &Path, language: Option<&str>, prompt: &str,
+) -> Result<Vec<CaptionWord>> {
+    Ok(run_ranges(audio, model, language, prompt, &[(0, audio.len())], false,
+        &|| false,
+    )?.into_iter().next().unwrap_or_default())
 }
 
 /// Load the model and run it over one second of silence. Proves the file is a
@@ -778,7 +845,8 @@ mod tests {
 
     #[test]
     fn stock_hallucinations_on_their_own_are_dropped() {
-        let w = |t: &str| CaptionWord { start_ms: 0.0, end_ms: 100.0, text: t.into() };
+        let w = |t: &str| CaptionWord { start_ms: 0.0, end_ms: 100.0, text: t.into(),
+        };
         assert!(only_hallucination(&[w("Thank"), w("you.")]));
         assert!(only_hallucination(&[w("Thanks"), w("for"), w("watching!")]));
         assert!(!only_hallucination(&[w("Thank"), w("you"), w("for"), w("coming"), w("today")]));
@@ -788,10 +856,12 @@ mod tests {
 
     #[test]
     fn words_squashed_at_the_end_are_spread_over_the_voice() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         // What whisper tiny did on the CI recording: "Press" stretched over four
         // seconds, the rest of the sentence piled up at the end of the video.
-        let mut words = vec![w(300.0, 900.0, "Let's"), w(7050.0, 11000.0, "Press"), w(12010.0, 12010.0, "Ctrl+S"), w(12010.0, 12010.0, "to"), w(12010.0, 12010.0, "save"), w(12010.0, 12010.0, "it,")];
+        let mut words = vec![w(300.0, 900.0, "Let's"), w(7050.0, 11000.0, "Press"), w(12010.0, 12010.0, "Ctrl+S"), w(12010.0, 12010.0, "to"), w(12010.0, 12010.0, "save"), w(12010.0, 12010.0, "it,"),
+        ];
         retime_implausible(&mut words, &[(0.0, 1000.0), (6900.0, 11100.0)]);
         assert_eq!((words[0].start_ms, words[0].end_ms), (300.0, 900.0), "a sane word is left alone");
         for pair in words[1..].windows(2) {
@@ -805,9 +875,11 @@ mod tests {
 
     #[test]
     fn a_pile_up_at_the_end_is_not_mistaken_for_a_hole_once_it_is_spread() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         let voiced = [(0.0, 5400.0), (6750.0, 11370.0)];
-        let mut words = vec![w(300.0, 900.0, "Let's"), w(900.0, 1700.0, "open"), w(1700.0, 2500.0, "the"), w(2500.0, 3300.0, "invoices"), w(3300.0, 4300.0, "page"), w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S")];
+        let mut words = vec![w(300.0, 900.0, "Let's"), w(900.0, 1700.0, "open"), w(1700.0, 2500.0, "the"), w(2500.0, 3300.0, "invoices"), w(3300.0, 4300.0, "page"), w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S"),
+        ];
         for t in ["to", "save", "it,", "and", "now", "it", "is"] {
             words.push(w(11360.0, 11360.0, t));
         }
@@ -818,17 +890,20 @@ mod tests {
 
     #[test]
     fn words_with_unbelievable_times_are_laid_over_the_voice() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         // What whisper tiny gave for eight seconds of fast speech: a few held
         // words, then everything else squashed at the end.
-        let mut ws = vec![w(70.0, 2030.0, "So,"), w(2030.0, 4480.0, "let's"), w(4480.0, 5460.0, "go")];
+        let mut ws = vec![w(70.0, 2030.0, "So,"), w(2030.0, 4480.0, "let's"), w(4480.0, 5460.0, "go"),
+        ];
         for t in ["back", "to", "the", "dashboard", "and"] {
             ws.push(w(8850.0, 8850.0, t));
         }
         assert!(respread_if_implausible(&mut ws, &[(0.0, 8860.0)], 0.0, 8860.0));
         assert!(ws.windows(2).all(|p| p[0].end_ms <= p[1].start_ms + 1.0), "{ws:?}");
         assert!(ws[3].start_ms < 6000.0 && ws[7].end_ms <= 8860.0 && ws.iter().all(|w| w.end_ms - w.start_ms < 2500.0), "{ws:?}");
-        let mut fine = vec![w(0.0, 300.0, "one"), w(300.0, 700.0, "two"), w(700.0, 900.0, "three")];
+        let mut fine = vec![w(0.0, 300.0, "one"), w(300.0, 700.0, "two"), w(700.0, 900.0, "three"),
+        ];
         assert!(!respread_if_implausible(&mut fine, &[(0.0, 900.0)], 0.0, 900.0), "good times stay");
         assert_eq!(fine[1].start_ms, 300.0);
     }
@@ -843,7 +918,8 @@ mod tests {
 
     #[test]
     fn ci_recording_with_the_whole_tail_collapsed() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         let mut words = vec![w(4650.0, 5100.0, "march."), w(7050.0, 11040.0, "Press")];
         for t in ["Ctrl-Lester", "Save", "it,", "and", "now", "it", "is"] {
             words.push(w(12011.0, 12012.0, t));
@@ -856,10 +932,12 @@ mod tests {
 
     #[test]
     fn a_lone_held_word_and_a_second_stretch_before_the_collapse() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         // From the second CI run: "March." held to the next sentence, "Press"
         // held for four seconds, then one normal word, then the pile-up.
-        let mut words = vec![w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S")];
+        let mut words = vec![w(4320.0, 7050.0, "March."), w(7050.0, 10970.0, "Press"), w(10970.0, 11360.0, "Ctrl+S"),
+        ];
         for t in ["to", "save", "it,", "and", "now", "it", "is"] {
             words.push(w(11360.0, 11360.0, t));
         }
@@ -877,7 +955,8 @@ mod tests {
 
     #[test]
     fn two_stretched_words_in_a_row_are_not_one_run() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
         // Third CI run: "March." held, then "Press" held, then the pile-up.
         let mut words = vec![w(4320.0, 7050.0, "March."), w(7050.0, 11360.0, "Press")];
         for t in ["Ctrl+Lester", "save", "it,", "and", "now", "it", "is"] {
@@ -893,8 +972,10 @@ mod tests {
 
     #[test]
     fn normal_timings_are_not_touched() {
-        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into() };
-        let orig = vec![w(0.0, 400.0, "Open"), w(400.0, 700.0, "the"), w(700.0, 1500.0, "settings")];
+        let w = |a: f64, b: f64, t: &str| booya_core::project::CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        };
+        let orig = vec![w(0.0, 400.0, "Open"), w(400.0, 700.0, "the"), w(700.0, 1500.0, "settings"),
+        ];
         let mut words = orig.clone();
         retime_implausible(&mut words, &[(0.0, 1500.0)]);
         assert_eq!(words, orig);
@@ -903,7 +984,9 @@ mod tests {
     #[test]
     fn vad_compacts_long_silence_and_maps_back() {
         let rate = 16_000;
-        let tone = |n: usize| (0..n).map(|i| (i as f32 * 0.05).sin() * 0.3).collect::<Vec<f32>>();
+        let tone = |n: usize| {
+            (0..n).map(|i| (i as f32 * 0.05).sin() * 0.3).collect::<Vec<f32>>()
+        };
         let mut a = tone(rate);
         a.extend(vec![0.0; rate * 5]);
         a.extend(tone(rate));
@@ -919,21 +1002,26 @@ mod tests {
     }
     #[test]
     fn punctuation_is_glued() {
-        let w = |t: &str| CaptionWord { start_ms: 0.0, end_ms: 1.0, text: t.into() };
-        let out = merge_fragments(vec![w("Hello"), w(","), w("world"), w("."), w("It"), w("'s")]);
+        let w = |t: &str| CaptionWord { start_ms: 0.0, end_ms: 1.0, text: t.into(),
+        };
+        let out = merge_fragments(vec![w("Hello"), w(","), w("world"), w("."), w("It"), w("'s"),
+        ]);
         let t: Vec<_> = out.iter().map(|w| w.text.as_str()).collect();
         assert_eq!(t, vec!["Hello,", "world.", "It's"]);
     }
 
     // A stand-in for speech: a 180 Hz tone with a syllable rhythm.
     fn voice(ms: usize, amp: f32) -> Vec<f32> {
-        (0..ms * 16).map(|i| amp * (i as f32 * 2.0 * std::f32::consts::PI * 180.0 / 16_000.0).sin() * (0.6 + 0.4 * (i as f32 * 2.0 * std::f32::consts::PI * 4.0 / 16_000.0).sin().abs())).collect()
+        (0..ms * 16).map(|i| {
+                amp * (i as f32 * 2.0 * std::f32::consts::PI * 180.0 / 16_000.0).sin() * (0.6 + 0.4 * (i as f32 * 2.0 * std::f32::consts::PI * 4.0 / 16_000.0).sin().abs())
+            }).collect()
     }
     fn hum(ms: usize, amp: f32) -> Vec<f32> {
         (0..ms * 16).map(|i| amp * (i as f32 * 0.37).sin()).collect()
     }
     fn word(t: &str, a: f64, b: f64) -> CaptionWord {
-        CaptionWord { start_ms: a, end_ms: b, text: t.into() }
+        CaptionWord { start_ms: a, end_ms: b, text: t.into(),
+        }
     }
 
     #[test]
@@ -945,7 +1033,8 @@ mod tests {
             assert_eq!(onsets.len(), 1, "{onsets:?}");
             assert!((onsets[0].0 - 2_000.0).abs() < 100.0, "{onsets:?}");
             // Whisper puts the first words at 0, as it does for real recordings.
-            let mut words = vec![word("Hello", 0.0, 400.0), word("and", 400.0, 600.0), word("welcome", 600.0, 1_300.0), word("back", 2_400.0, 2_800.0)];
+            let mut words = vec![word("Hello", 0.0, 400.0), word("and", 400.0, 600.0), word("welcome", 600.0, 1_300.0), word("back", 2_400.0, 2_800.0),
+            ];
             anchor_to_voice(&mut words, &onsets);
             assert!(words[0].start_ms >= 1_900.0, "first word at {}", words[0].start_ms);
             assert!(words.windows(2).all(|w| w[0].start_ms <= w[1].start_ms));
@@ -1018,7 +1107,9 @@ mod tests {
                     // Each chunk times the shared words a little differently and
                     // drops a few (the ones whisper skipped).
                     let in_overlap = chunks.windows(2).any(|w| *at >= to_ms(w[1].0) && *at + 300.0 <= to_ms(w[0].1));
-                    if in_overlap && (n + k) % 3 == 0 && chunks.iter().all(|c| (*at - to_ms(c.0)).abs() > 1_000.0 && (*at - to_ms(c.1)).abs() > 1_000.0) {
+                    if in_overlap && (n + k) % 3 == 0 && chunks.iter().all(|c| {
+                            (*at - to_ms(c.0)).abs() > 1_000.0 && (*at - to_ms(c.1)).abs() > 1_000.0
+                        }) {
                         continue;
                     }
                     let jitter = if k % 2 == 0 { 40.0 } else { -60.0 };
@@ -1041,14 +1132,16 @@ mod tests {
     #[test]
     fn a_word_the_speaker_says_twice_is_kept_twice() {
         let chunks = vec![(0, 16_000 * 10)];
-        let parts = vec![vec![word("very", 0.0, 300.0), word("very", 350.0, 650.0), word("fast", 700.0, 1_000.0)]];
+        let parts = vec![vec![word("very", 0.0, 300.0), word("very", 350.0, 650.0), word("fast", 700.0, 1_000.0),
+        ]];
         assert_eq!(merge_chunks(&chunks, parts, 16_000).len(), 3);
     }
 
     #[test]
     fn voiced_stretches_with_no_words_are_found_so_they_can_be_heard_again() {
         let voiced = vec![(0.0, 10_000.0)];
-        let words = vec![word("a", 100.0, 400.0), word("b", 500.0, 900.0), word("c", 5_200.0, 5_500.0)];
+        let words = vec![word("a", 100.0, 400.0), word("b", 500.0, 900.0), word("c", 5_200.0, 5_500.0),
+        ];
         let holes = uncovered(&words, &voiced, 2_000.0);
         assert_eq!(holes, vec![(900.0, 5_200.0), (5_500.0, 10_000.0)]);
         assert!(uncovered(&words, &voiced, 5_000.0).is_empty());
@@ -1057,8 +1150,10 @@ mod tests {
     #[test]
     fn fast_speech_in_many_short_runs_still_counts_as_one_hole() {
         // Voice on for 5.6 s in runs with short pauses, words only at the start.
-        let voiced = vec![(0.0, 1_160.0), (1_320.0, 3_820.0), (4_100.0, 4_440.0), (4_720.0, 4_900.0), (5_080.0, 6_980.0), (7_160.0, 7_880.0)];
-        let words = vec![word("you", 1_320.0, 1_410.0), word("downloads", 2_460.0, 3_000.0)];
+        let voiced = vec![(0.0, 1_160.0), (1_320.0, 3_820.0), (4_100.0, 4_440.0), (4_720.0, 4_900.0), (5_080.0, 6_980.0), (7_160.0, 7_880.0),
+        ];
+        let words = vec![word("you", 1_320.0, 1_410.0), word("downloads", 2_460.0, 3_000.0),
+        ];
         let holes = uncovered(&words, &voiced, 2_000.0);
         assert_eq!(holes, vec![(3_000.0, 7_880.0)]);
         // A word stretched over the dropped part does not hide it.
@@ -1070,7 +1165,8 @@ mod tests {
     /// The voice of the 20 s clip a user sent: a pause at the start, three
     /// stretches of talking (about 6 s, 6 s and 3 s) and silence to the end.
     fn clip_voice() -> Vec<(f64, f64)> {
-        vec![(1420.0, 2080.0), (2680.0, 7360.0), (8360.0, 10740.0), (10960.0, 14520.0), (15380.0, 15900.0), (16480.0, 17000.0)]
+        vec![(1420.0, 2080.0), (2680.0, 7360.0), (8360.0, 10740.0), (10960.0, 14520.0), (15380.0, 15900.0), (16480.0, 17000.0),
+        ]
     }
 
     #[test]
@@ -1122,7 +1218,8 @@ mod tests {
     #[test]
     fn believable_times_are_left_alone() {
         let voiced = clip_voice();
-        let spec: &[(&str, f64, f64)] = &[("So", 1450.0, 1700.0), ("I'm", 1700.0, 2000.0), ("just", 2700.0, 3000.0), ("trying", 3000.0, 3400.0), ("to", 3400.0, 3500.0), ("check", 3500.0, 4000.0)];
+        let spec: &[(&str, f64, f64)] = &[("So", 1450.0, 1700.0), ("I'm", 1700.0, 2000.0), ("just", 2700.0, 3000.0), ("trying", 3000.0, 3400.0), ("to", 3400.0, 3500.0), ("check", 3500.0, 4000.0),
+        ];
         let mut words: Vec<CaptionWord> = spec.iter().map(|&(t, a, b)| word(t, a, b)).collect();
         let before = words.clone();
         fix_times(&mut words, &voiced, &voiced);

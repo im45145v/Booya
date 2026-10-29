@@ -25,24 +25,24 @@ use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub mod mics;
-pub mod mic;
 #[allow(dead_code)]
 mod audiosink;
-mod sysaudio;
-#[cfg(target_os = "windows")]
-mod wasapi;
-pub mod sources;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos_sck;
+pub mod mic;
+pub mod mics;
+pub mod sources;
+mod sysaudio;
 #[cfg(target_os = "windows")]
-mod windows;
+mod wasapi;
 #[cfg(target_os = "windows")]
 pub(crate) mod winapi;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -213,10 +213,13 @@ fn drain_stderr(child: &mut Child) -> Arc<Mutex<String>> {
     buf
 }
 
-/// Waits until ffmpeg is writing the file. Err(text) when it exits or
-/// produces nothing in time (the child is killed in that case).
-fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>, timeout: Duration) -> std::result::Result<(), String> {
+/// Waits for file data beyond the container header. Err(text) when ffmpeg
+/// exits or produces nothing in time (the child is killed in that case).
+fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>, timeout: Duration,
+) -> std::result::Result<Instant, String> {
     let t = Instant::now();
+    let mut first_output = None;
+    let mut last_size = 0;
     loop {
         if let Ok(Some(_)) = child.try_wait() {
             std::thread::sleep(Duration::from_millis(100));
@@ -224,8 +227,16 @@ fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>,
             return Err(if e.trim().is_empty() { "ffmpeg exited".into() } else { e });
         }
         let size = std::fs::metadata(video).map(|m| m.len()).unwrap_or(0);
-        if size > 0 && t.elapsed() > Duration::from_millis(600) {
-            return Ok(());
+        if size > last_size {
+            if last_size > 0 {
+                first_output.get_or_insert_with(Instant::now);
+            }
+            last_size = size;
+        }
+        if let Some(first_output) = first_output {
+            if first_output.elapsed() > Duration::from_millis(600) {
+                return Ok(first_output);
+            }
         }
         if t.elapsed() > timeout {
             let _ = child.kill();
@@ -262,7 +273,8 @@ pub fn screenshot() -> Result<(Vec<u8>, u32, u32)> {
 
 #[cfg(not(target_os = "macos"))]
 fn screenshot_ffmpeg() -> Result<(Vec<u8>, u32, u32)> {
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 1, mic: false, system_audio: false, out_dir: std::env::temp_dir(), keys: Default::default(), webcam: false, mic_device: None, max_height: None,
+    };
     let plan = plan(&opts)?;
     let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
         .args(["-hide_banner", "-v", "error", "-nostdin"])
@@ -295,7 +307,8 @@ impl FreshDir {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
         }
-        Ok(Self { path: path.to_path_buf(), created, keep: false })
+        Ok(Self { path: path.to_path_buf(), created, keep: false,
+        })
     }
 }
 
@@ -314,7 +327,8 @@ pub(crate) const CLOCK_START: &str = "@clock-start@";
 /// Moves everything logged on the recording clock earlier by `shift_ms`, for
 /// a video whose first frame was stamped that long after the clock started.
 /// Times never go below zero.
-pub(crate) fn shift_timeline(events: &mut [crate::events::Event], pauses: &mut [(f64, f64)], shift_ms: f64) {
+pub(crate) fn shift_timeline(events: &mut [crate::events::Event], pauses: &mut [(f64, f64)], shift_ms: f64,
+) {
     for e in events.iter_mut() {
         e.t = (e.t - shift_ms).max(0.0);
     }
@@ -398,7 +412,9 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let audio_log = opts.out_dir.join("audio.log");
     let mic = match plan.mic_sidecar.take() {
         Some(_) => {
-            let device = opts.mic_device.clone().or_else(|| std::env::var("BOOYA_MIC").ok().filter(|v| !v.trim().is_empty()));
+            let device = opts.mic_device.clone().or_else(|| {
+                std::env::var("BOOYA_MIC").ok().filter(|v| !v.trim().is_empty())
+            });
             match mic::MicRec::start(device.as_deref(), epoch, &mic_file, &audio_log) {
                 Ok(m) => Some(m),
                 Err(reason) => {
@@ -417,7 +433,8 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         match sysaudio::SysAudio::start(epoch, &sys_file, &audio_log) {
             Ok(s) => Some(s),
             Err(reason) => {
-                mic::log_line(&audio_log, &format!("system audio could not start: {reason}"));
+                mic::log_line(&audio_log, &format!("system audio could not start: {reason}"),
+                );
                 warnings.push(format!("System audio not recorded: {reason}"));
                 None
             }
@@ -431,12 +448,15 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
     let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
-    if webcam.is_some() {
-        // When the camera's first frame landed, relative to the screen's.
-        let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{:.0}", started.elapsed().as_secs_f64() * 1000.0));
+    if let Some((_, first_output)) = &webcam {
+        let offset_ms = first_output.duration_since(started).as_secs_f64() * 1000.0;
+        let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{offset_ms:.0}"),
+        );
     }
+    let webcam = webcam.map(|(child, _)| child);
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created })
+    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
+    })
 }
 
 /// Webcam input arguments for this OS, or None when no camera can be found.
@@ -444,21 +464,25 @@ fn webcam_input() -> Option<Vec<String>> {
     #[cfg(target_os = "linux")]
     {
         let dev = (0..4).map(|i| format!("/dev/video{i}")).find(|p| Path::new(p).exists())?;
-        Some(vec![s("-f"), s("v4l2"), s("-framerate"), s("30"), s("-video_size"), s("640x480"), s("-i"), dev])
+        Some(vec![s("-f"), s("v4l2"), s("-framerate"), s("30"), s("-video_size"), s("640x480"), s("-i"), dev,
+        ])
     }
     #[cfg(target_os = "macos")]
     {
         let idx = macos::camera_index()?;
-        Some(vec![s("-f"), s("avfoundation"), s("-framerate"), s("30"), s("-video_size"), s("1280x720"), s("-i"), format!("{idx}:none")])
+        Some(vec![s("-f"), s("avfoundation"), s("-framerate"), s("30"), s("-video_size"), s("1280x720"), s("-i"), format!("{idx}:none"),
+        ])
     }
     #[cfg(target_os = "windows")]
     {
         // DirectShow. No size or frame rate is asked for: many cameras refuse
         // a mode they do not list, and the default always opens.
-        let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]).output().ok()?;
+        let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy",
+            ]).output().ok()?;
         let names = mics::parse_dshow_video(&String::from_utf8_lossy(&out.stderr));
         let dev = mics::pick_camera(&names, std::env::var("BOOYA_CAMERA").ok().as_deref())?;
-        Some(vec![s("-f"), s("dshow"), s("-rtbufsize"), s("128M"), s("-i"), format!("video={dev}")])
+        Some(vec![s("-f"), s("dshow"), s("-rtbufsize"), s("128M"), s("-i"), format!("video={dev}"),
+        ])
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -466,7 +490,7 @@ fn webcam_input() -> Option<Vec<String>> {
     }
 }
 
-fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
+fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, Instant)> {
     let Some(input) = webcam_input() else {
         warnings.push("No webcam found (check that a camera is connected and that Booya may use it), so there is no camera overlay.".into());
         return None;
@@ -479,8 +503,8 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<Child> {
     match cmd.spawn() {
         Ok(mut c) => {
             let err = Arc::new(Mutex::new(String::new()));
-            if wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT).is_ok() {
-                Some(c)
+            if let Ok(first_output) = wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT) {
+                Some((c, first_output))
             } else {
                 warnings.push("The webcam did not start (check the Camera permission), so there is no camera overlay.".into());
                 None
@@ -599,7 +623,8 @@ impl RecordingSession {
         if self.created {
             std::fs::remove_dir_all(&self.dir)?;
         } else {
-            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv"), &self.video.with_extension("sys.mkv")] {
+            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv"), &self.video.with_extension("sys.mkv"),
+            ] {
                 let _ = std::fs::remove_file(f);
             }
         }
@@ -646,7 +671,8 @@ impl RecordingSession {
             Some(Ok(())) => match crate::finalize::merge_system_audio(&self.video) {
                 Ok(_) => {}
                 Err(e) => {
-                    mic::log_line(&audio_log, &format!("system audio could not be mixed in: {e:#}"));
+                    mic::log_line(&audio_log, &format!("system audio could not be mixed in: {e:#}"),
+                    );
                     warnings.push(format!("System audio not recorded in the video: {}", first_line(&format!("{e:#}"))));
                 }
             },
@@ -702,10 +728,12 @@ impl RecordingSession {
         log.save(&self.events)?;
         // Paused stretches are cut out when the project is created.
         if !pauses.is_empty() {
-            let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&pauses)?);
+            let _ = std::fs::write(self.video.with_extension("pauses.json"), serde_json::to_string(&pauses)?,
+            );
         }
 
-        Ok(Recording { video, events: self.events.clone(), duration, warnings })
+        Ok(Recording { video, events: self.events.clone(), duration, warnings,
+        })
     }
 }
 
@@ -730,10 +758,14 @@ pub fn parse_avfoundation_devices(text: &str) -> (Vec<AvDevice>, Vec<AvDevice>) 
             continue;
         }
         // "[AVFoundation indev @ 0x7f...] [3] Capture screen 0"
-        let Some(rest) = line.split_once("] [").map(|x| x.1) else { continue };
-        let Some((idx, name)) = rest.split_once("] ") else { continue };
-        let Ok(index) = idx.trim().parse() else { continue };
-        let d = AvDevice { index, name: name.trim().to_string() };
+        let Some(rest) = line.split_once("] [").map(|x| x.1) else { continue;
+        };
+        let Some((idx, name)) = rest.split_once("] ") else { continue;
+        };
+        let Ok(index) = idx.trim().parse() else { continue;
+        };
+        let d = AvDevice { index, name: name.trim().to_string(),
+        };
         if in_audio { audio.push(d) } else { video.push(d) }
     }
     (video, audio)
@@ -750,7 +782,12 @@ mod tests {
     #[test]
     fn events_follow_a_video_that_was_recorded_smaller() {
         use crate::events::{scale_coords, Event, EventKind};
-        let mut ev = vec![Event { t: 1.0, kind: EventKind::Move { x: 3000.0, y: 1500.0 } }, Event { t: 2.0, kind: EventKind::Key { key: "S".into(), modifiers: vec![] } }];
+        let mut ev = vec![Event { t: 1.0, kind: EventKind::Move { x: 3000.0, y: 1500.0,
+                },
+            }, Event { t: 2.0, kind: EventKind::Key { key: "S".into(), modifiers: vec![],
+                },
+            },
+        ];
         scale_coords(&mut ev, 0.5);
         assert_eq!(ev[0].kind, EventKind::Move { x: 1500.0, y: 750.0 });
     }
@@ -769,7 +806,8 @@ mod tests {
     #[test]
     fn the_timeline_shift_moves_events_and_pauses_and_stops_at_zero() {
         use crate::events::{Event, EventKind};
-        let mv = |t| Event { t, kind: EventKind::Move { x: 1.0, y: 2.0 } };
+        let mv = |t| Event { t, kind: EventKind::Move { x: 1.0, y: 2.0 },
+        };
         let mut ev = vec![mv(100.0), mv(1500.0)];
         let mut pauses = vec![(900.0, 2000.0)];
         shift_timeline(&mut ev, &mut pauses, 800.0);
@@ -824,6 +862,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn first_output_time_skips_the_container_header() {
+        let dir = std::env::temp_dir().join(format!("dl-first-output-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("v.mkv");
+        let _ = std::fs::remove_file(&video);
+        let mut child = crate::proc::command("sh")
+            .args(["-c", "printf h > \"$1\"; sleep 1; printf f >> \"$1\"; sleep 2", "sh"])
+            .arg(&video)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let err = drain_stderr(&mut child);
+        let t = Instant::now();
+        let first_output = wait_until_writing(&mut child, &video, &err, Duration::from_secs(5)).unwrap();
+        assert!(first_output.duration_since(t) >= Duration::from_millis(800));
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn early_exit_is_reported() {
         let video = std::env::temp_dir().join("dl-none.mkv");
         let mut child = crate::proc::command("sh").args(["-c", "echo 'Input/output error' >&2; exit 1"]).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
@@ -850,7 +910,8 @@ pub(crate) fn exists(p: &Path) -> bool {
 
 fn frame_count(path: &Path) -> Option<u64> {
     let out = crate::proc::command(crate::ffmpeg::ffprobe_bin())
-        .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+        .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0",
+        ])
         .arg(crate::ffmpeg::file_url(path))
         .output()
         .ok()?;
@@ -870,7 +931,9 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     let mut next: Vec<String> = Vec::new();
 
     let ffmpeg = crate::ffmpeg::ffmpeg_bin();
-    let version = crate::proc::command(&ffmpeg).arg("-version").output().ok().and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string));
+    let version = crate::proc::command(&ffmpeg).arg("-version").output().ok().and_then(|o| {
+            String::from_utf8_lossy(&o.stdout).lines().next().map(str::to_string)
+        });
     v["ffmpeg"] = json!({ "path": ffmpeg, "version": version, "encoder": crate::ffmpeg::best_encoder().name() });
     if version.is_none() {
         next.push(format!("ffmpeg was not found or does not run. {}", crate::ffmpeg::install_hint()));
@@ -905,7 +968,8 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
     }
 
     let dir = std::env::temp_dir().join(format!("booya-doctor-{}", std::process::id()));
-    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None, max_height: None };
+    let opts = RecordOptions { target: CaptureTarget::Screen { display: 0 }, fps: 30, mic: false, system_audio: false, out_dir: dir.clone(), keys: Default::default(), webcam: false, mic_device: None, max_height: None,
+    };
     let t0 = Instant::now();
     let mut test = serde_json::Map::new();
     match start(&opts) {
@@ -929,7 +993,8 @@ pub fn doctor(test_seconds: f64) -> serde_json::Value {
                     let frames = frame_count(&rec.video);
                     let ok = size > 0 && frames.unwrap_or(0) > 0;
                     test.insert("ok".into(), json!(ok));
-                    test.insert("seconds".into(), json!((rec.duration.as_secs_f64() * 10.0).round() / 10.0));
+                    test.insert("seconds".into(), json!((rec.duration.as_secs_f64() * 10.0).round() / 10.0),
+                    );
                     test.insert("file_bytes".into(), json!(size));
                     test.insert("frames".into(), json!(frames));
                     if let Some(i) = info {
