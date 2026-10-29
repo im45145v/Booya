@@ -486,17 +486,6 @@ async fn start_recording(
     let fail_reset = |app: &tauri::AppHandle| {
         *app.state::<AppState>().recording.lock().unwrap() = None;
     };
-    // A 3-2-1 countdown on screen, so there is time to switch to the thing
-    // being recorded. Clicking the number cancels it.
-    let secs = countdown.unwrap_or(0).min(10);
-    if secs > 0 {
-        let a2 = app.clone();
-        let cancelled = blocking(move || Ok(run_countdown(&a2, secs))).await.unwrap_or(true);
-        if cancelled {
-            fail_reset(&app);
-            return Err("Recording cancelled".into());
-        }
-    }
     // Recordings go to Videos/Booya/<timestamp>. The folder is only
     // created once capture really starts (see capture::start).
     let base = recordings_dir(&app)?;
@@ -508,32 +497,51 @@ async fn start_recording(
     if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
         m.stop();
     }
+    // Open the screen, microphone and camera first. That is the slow part
+    // (several seconds). The countdown and the minimize happen only once
+    // frames are actually being written, so the take does not start during
+    // the warm-up and the window does not sit there after the countdown.
+    let _ = app.emit("rec-phase", "preparing");
     let res = blocking(move || {
         capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height,
         }).map_err(e)
     }).await;
-    let state = app.state::<AppState>();
-    let mut slot = state.recording.lock().unwrap();
-    match res {
-        Ok(s) => {
-            let warnings = s.warnings.clone();
-            *slot = Some(RecSlot::Running(s));
-            drop(slot);
-            if mic {
-                watch_mic(app.clone());
-            }
-            show_indicator(&app);
-            // Get the editor out of the picture while recording.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.minimize();
-            }
-            Ok(warnings)
-        }
+    let mut session = match res {
+        Ok(s) => s,
         Err(err) => {
-            *slot = None;
-            Err(err)
+            fail_reset(&app);
+            return Err(err);
+        }
+    };
+    // A 3-2-1 countdown on screen, so there is time to switch to the thing
+    // being recorded. Clicking the number cancels it. Capture is already running.
+    let secs = countdown.unwrap_or(0).min(10);
+    if secs > 0 {
+        let _ = app.emit("rec-phase", "countdown");
+        let a2 = app.clone();
+        let cancelled = blocking(move || Ok(run_countdown(&a2, secs))).await.unwrap_or(true);
+        if cancelled {
+            let _ = session.discard();
+            fail_reset(&app);
+            return Err("Recording cancelled".into());
         }
     }
+    // The editor leaves immediately. The take's clock starts now, and the
+    // warm-up that was recorded while it was still on screen is cut out.
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+    session.arm();
+    let warnings = session.warnings.clone();
+    {
+        let state = app.state::<AppState>();
+        *state.recording.lock().unwrap() = Some(RecSlot::Running(session));
+    }
+    if mic {
+        watch_mic(app.clone());
+    }
+    show_indicator(&app);
+    Ok(warnings)
 }
 
 /// About two seconds after the recording starts, check that the microphone is
