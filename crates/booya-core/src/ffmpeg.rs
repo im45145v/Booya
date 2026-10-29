@@ -357,6 +357,8 @@ pub struct PreviewDecoder {
     path: std::path::PathBuf,
     w: u32,
     h: u32,
+    /// Replaces the plain scale. The camera preview crops to its pane with this.
+    vf: Option<String>,
     reader: Option<FrameReader>,
     start_ms: f64,
     last: Option<(f64, Frame)>,
@@ -366,7 +368,12 @@ pub const PREVIEW_FPS: f64 = 30.0;
 
 impl PreviewDecoder {
     pub fn new(path: &Path, w: u32, h: u32) -> Self {
-        Self { path: path.to_path_buf(), w, h, reader: None, start_ms: 0.0, last: None }
+        Self { path: path.to_path_buf(), w, h, vf: None, reader: None, start_ms: 0.0, last: None }
+    }
+
+    /// Like [`new`], decoding through `vf` (which must produce `w` x `h`).
+    pub fn with_filter(path: &Path, w: u32, h: u32, vf: String) -> Self {
+        Self { path: path.to_path_buf(), w, h, vf: Some(vf), reader: None, start_ms: 0.0, last: None }
     }
 
     pub fn matches(&self, path: &Path, w: u32, h: u32) -> bool {
@@ -387,7 +394,7 @@ impl PreviewDecoder {
         }
         if !sequential {
             self.reader = None;
-            return match frame_at(&self.path, t_ms, self.w, self.h) {
+            return match self.once(t_ms) {
                 Ok(f) => {
                     self.last = Some((t_ms, f.clone()));
                     Ok(f)
@@ -401,7 +408,8 @@ impl PreviewDecoder {
         }
         let next = self.next_ms();
         if self.reader.is_none() || !(t_ms + step / 2.0 >= next && t_ms - next < 2000.0) {
-            self.reader = Some(FrameReader::open(&self.path, t_ms, PREVIEW_FPS, self.w, self.h)?);
+            let vf = self.vf.clone().unwrap_or_else(|| format!("scale={}:{}", self.w, self.h));
+            self.reader = Some(FrameReader::open_filtered(&self.path, t_ms, PREVIEW_FPS, &vf, self.w, self.h)?);
             self.start_ms = t_ms;
         }
         let r = self.reader.as_mut().unwrap();
@@ -416,7 +424,7 @@ impl PreviewDecoder {
                 None => {
                     // End of the video: keep showing the last frame.
                     self.reader = None;
-                    return match frame_at(&self.path, t_ms, self.w, self.h) {
+                    return match self.once(t_ms) {
                         Ok(f) => {
                             self.last = Some((t_ms, f.clone()));
                             Ok(f)
@@ -428,6 +436,13 @@ impl PreviewDecoder {
                     };
                 }
             }
+        }
+    }
+
+    fn once(&self, t_ms: f64) -> Result<Frame> {
+        match &self.vf {
+            Some(vf) => frame_at_filtered(&self.path, t_ms, self.w, self.h, Some(vf)),
+            None => frame_at(&self.path, t_ms, self.w, self.h),
         }
     }
 }

@@ -327,6 +327,35 @@ impl Drop for FreshDir {
 /// clock (as a negative `-itsoffset`), filled in when ffmpeg is launched.
 pub(crate) const CLOCK_START: &str = "@clock-start@";
 
+/// How a wall-clock stamped microphone is written.
+///
+/// `-use_wallclock_as_timestamps` replaces each packet's own timestamp with
+/// the moment ffmpeg read it. A microphone that hands over a buffer a little
+/// late, or several buffers at once, then has packets piled on one instant.
+/// The muxer stacks that sound (it crackles, repeats, or collapses) and the
+/// remux, which lays samples out by count, closes the gaps so later speech
+/// plays early. The first packet's wall-clock time is the one that lines the
+/// voice up with the screen, so it is kept; every packet after it is spaced
+/// by its sample count, which is the rate the microphone actually captured.
+pub(crate) fn mic_timeline_filter() -> &'static str {
+    "asetpts=STARTPTS+N/SR/TB"
+}
+
+/// How a wall-clock stamped camera is written.
+///
+/// The same read-time stamp makes a steady camera look like a burst: many
+/// frames share one timestamp and the encoder keeps one of them. The picture
+/// then freezes, jumps, and drifts against the screen and the voice. The
+/// first frame keeps the wall-clock time that lines the camera up with the
+/// screen. Later frames step at the rate the device was opened at (`FR`),
+/// so a 30 fps camera stays 30 fps and a slower one is not sped up.
+pub(crate) fn camera_timeline_filter() -> &'static str {
+    // Commas inside the expression would otherwise split the filter graph.
+    // FR is the rate the device was opened at. avfoundation often leaves it
+    // unset, and the camera is then asked for 30 fps, so that is the fallback.
+    "setpts=STARTPTS+N/(if(gt(FR\\,1)\\,FR\\,30)*TB)"
+}
+
 /// Moves everything logged on the recording clock earlier by `shift_ms`, for
 /// a video whose first frame was stamped that long after the clock started.
 /// Times never go below zero.
@@ -533,12 +562,17 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     };
     let out = dir.join("webcam.mkv");
     let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
-    // Every frame is stamped with the wall clock since `epoch`, so its first
-    // frame lands where it really happened relative to the screen.
+    // The first frame is stamped with the wall clock since `epoch`, which is
+    // what lines the camera up with the screen. Later frames step at the
+    // camera's own rate so a burst of packets cannot freeze or warp it.
     let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
     cmd.args(["-copyts", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
     cmd.args(&input);
+    // passthrough keeps the timestamps the filter just wrote. The default
+    // constant-frame-rate mode would drop the burst back down to one frame
+    // and start the file at zero, which is the drift this is here to stop.
+    cmd.args(["-vf", camera_timeline_filter(), "-fps_mode", "passthrough"]);
     cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
@@ -848,6 +882,59 @@ mod tests {
         assert_eq!(capture_scale(2160, Some(0)), 1.0);
         assert_eq!(capture_scale(2160, Some(1080)), 0.5);
         assert_eq!(capture_scale(900, Some(1080)), 1.0);
+    }
+
+    /// A burst of packets that all carry one timestamp is what
+    /// `-use_wallclock_as_timestamps` does to a camera and a microphone.
+    /// The timeline filters have to keep every frame and every sample, keep
+    /// the shared start time, and space the rest at the real rate. The
+    /// filter runs in the same ffmpeg as the capture, before the encoder
+    /// can drop the frames.
+    #[test]
+    fn a_wallclock_burst_keeps_picture_and_sound_at_their_real_length() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("booya-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[String], out: &std::path::Path| {
+            let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(args).arg(out).status().unwrap().success();
+            assert!(ok, "ffmpeg failed for {}", out.display());
+        };
+        let pts = |path: &std::path::Path, kind: &str| -> Vec<f64> {
+            let o = crate::proc::command(crate::ffmpeg::ffprobe_bin())
+                .args(["-v", "error", "-select_streams", kind, "-show_entries", "packet=pts_time", "-of", "csv=p=0"])
+                .arg(path)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect()
+        };
+        let arg = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+
+        let smashed = dir.join("smashed.mkv");
+        let fixed = dir.join("fixed.mkv");
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", "setpts=0.4/TB", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &smashed);
+        let cam = format!("setpts=0.4/TB,{}", camera_timeline_filter());
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", &cam, "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &fixed);
+        let smashed_pts = pts(&smashed, "v");
+        let fixed_pts = pts(&fixed, "v");
+        assert!(smashed_pts.len() < 10, "a shared timestamp drops the frames, got {}", smashed_pts.len());
+        assert!(fixed_pts.len() >= 28, "the camera keeps its frames, got {}", fixed_pts.len());
+        assert!((fixed_pts[0] - 0.4).abs() < 0.05, "the start stays on the shared clock: {}", fixed_pts[0]);
+        let step = fixed_pts[1] - fixed_pts[0];
+        assert!((step - 1.0 / 30.0).abs() < 0.004, "frames step at the camera rate, got {step}");
+
+        let voice = dir.join("voice.mkv");
+        let mic = format!("asetpts=0.5/TB,{}", mic_timeline_filter());
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:d=2", "-af", &mic, "-c:a", "pcm_f32le"]), &voice);
+        let voice_pts = pts(&voice, "a");
+        assert!(voice_pts.len() > 10, "the microphone keeps its packets");
+        assert!((voice_pts[0] - 0.5).abs() < 0.05, "the voice keeps its start: {}", voice_pts[0]);
+        let span = voice_pts[voice_pts.len() - 1] - voice_pts[0];
+        assert!((span - 2.0).abs() < 0.08, "two seconds of voice stay two seconds, span {span}");
+        assert!(voice_pts.windows(2).all(|w| w[1] > w[0]), "packet times move forward");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

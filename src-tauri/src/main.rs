@@ -35,6 +35,9 @@ struct AppState {
     renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
     /// One ffmpeg decoder kept open while the preview plays.
     decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
+    /// The camera's decoder, kept open for the same reason. Opening it per
+    /// frame made the bubble lag the screen and the voice.
+    cam_decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
     /// Files the user picked in a native dialog this session. Commands that
     /// write files only write to these paths, so a compromised web view
     /// cannot write anywhere it likes.
@@ -393,8 +396,10 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
-        // The camera is not in the proxy, so it is read from its own file.
-        let cam = export::preview_cam(&r, &project, src_t);
+        let cam = {
+            let mut slot = state.cam_decoder.lock().unwrap();
+            export::preview_cam(&r, &project, src_t, playing.unwrap_or(false), &mut slot)
+        };
         let frame = r.render(&src, src_t, cam.as_ref());
         let png = frame.encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))

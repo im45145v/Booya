@@ -40,26 +40,38 @@ pub fn webcam_filter(w: u32, h: u32) -> String {
 }
 
 /// Camera files start at their own zero. `offset_ms` says where that zero
+/// lands on the screen recording's timeline. Nothing exists before that.
+pub fn camera_media_time(src_t: f64, offset_ms: f64) -> Option<f64> {
+    let t = src_t - offset_ms;
+    (t >= 0.0).then_some(t)
+}
+
+/// Camera files start at their own zero. `offset_ms` says where that zero
 /// lands on the screen recording's timeline, so no camera frame exists before
 /// the offset and later frames are measured from the decoder's actual seek.
 fn webcam_frame_index(src_t: f64, decoder_start: f64, offset_ms: f64, fps: f64) -> Option<u64> {
-    let cam_t = src_t - offset_ms;
+    let cam_t = camera_media_time(src_t, offset_ms)?;
     (cam_t >= decoder_start).then(|| ((cam_t - decoder_start) / 1000.0 * fps).floor() as u64)
 }
 
 /// The camera frame for the editor preview at source time `src_t`, or None
-/// when the layout there does not show the camera.
-pub fn preview_cam(renderer: &Renderer, project: &Project, src_t: f64) -> Option<Frame> {
+/// when the layout there does not show the camera or the camera had not
+/// started yet. `slot` keeps one decoder open while the preview plays, so
+/// the camera is not opened from scratch for every frame (that lagged the
+/// bubble behind the screen and the voice).
+pub fn preview_cam(renderer: &Renderer, project: &Project, src_t: f64, playing: bool, slot: &mut Option<ffmpeg::PreviewDecoder>) -> Option<Frame> {
     let w = project.webcam.as_ref().filter(|w| w.visible && w.path.exists())?;
     let mix = renderer.scene_at(src_t);
     if !(mix.kind.needs_camera() || mix.other.is_some_and(|o| o.0.needs_camera())) {
         return None;
     }
-    // The preview asks for one frame at a time, so it takes the camera
-    // already cropped to the biggest place it is shown.
+    let cam_t = camera_media_time(src_t, w.offset_ms)?;
     let (cw, ch) = renderer.cam_box();
     let vf = format!("scale={cw}:{ch}:force_original_aspect_ratio=increase,crop={cw}:{ch}");
-    ffmpeg::frame_at_filtered(&w.path, (src_t - w.offset_ms).max(0.0), cw, ch, Some(&vf)).ok()
+    if slot.as_ref().is_none_or(|d| !d.matches(&w.path, cw, ch)) {
+        *slot = Some(ffmpeg::PreviewDecoder::with_filter(&w.path, cw, ch, vf));
+    }
+    slot.as_mut()?.frame(cam_t, playing).ok()
 }
 
 /// Render a single preview frame at output time `out_ms` as PNG bytes.
@@ -69,7 +81,8 @@ pub fn preview_png(project: &Project, out_ms: f64, out_w: u32, out_h: u32) -> Re
     let src_t = project.source_time(out_ms).unwrap_or(project.duration_ms);
     let (sw, sh) = r.decode_size();
     let src = ffmpeg::frame_at(&project.source, src_t, sw, sh)?;
-    let cam = preview_cam(&r, project, src_t);
+    let mut cam_slot = None;
+    let cam = preview_cam(&r, project, src_t, false, &mut cam_slot);
     r.render(&src, src_t, cam.as_ref()).encode_png()
 }
 
@@ -559,6 +572,10 @@ mod tests {
         assert_eq!(webcam_frame_index(5606.0, 0.0, offset, fps), None);
         assert_eq!(webcam_frame_index(5607.0, 0.0, offset, fps), Some(0));
         assert_eq!(webcam_frame_index(6607.0, 0.0, offset, fps), Some(30));
+        assert_eq!(camera_media_time(0.0, offset), None);
+        assert_eq!(camera_media_time(5607.0, offset), Some(0.0));
+        // A camera that opened before the screen is read later in its file.
+        assert_eq!(camera_media_time(1000.0, -400.0), Some(1400.0));
 
         // A trimmed project seeks into the camera file and indexes relative
         // to that seek, while retaining the same timeline mapping.

@@ -276,7 +276,7 @@ fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
     cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}"),
     ]);
     cmd.args(&input);
-    cmd.args(["-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
+    cmd.args(["-af", super::mic_timeline_filter(), "-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut c = cmd.spawn().map_err(|e| format!("could not start ffmpeg for the microphone: {e}"))?;
     let err = drain_stderr(&mut c);

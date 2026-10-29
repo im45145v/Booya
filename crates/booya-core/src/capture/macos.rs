@@ -77,7 +77,11 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // began, and the timestamps are kept (`-copyts`), so the microphone lands
     // where it really happened relative to the first frame instead of both
     // tracks being shifted to start at zero. The event log uses the same
-    // origin, so clicks, zoom and sound all line up.
+    // origin, so clicks, zoom and sound all line up. The screen is raw frames
+    // with no clock of their own, so this wall clock plus a constant frame
+    // rate is its timeline. The camera and the microphone keep only the first
+    // packet's wall-clock time and then run at their own rate: spacing every
+    // packet by when it was read drops camera frames and stacks the audio.
     let t0 = super::CLOCK_START;
     let mut out_args = vec![s("-fps_mode"), s("cfr"), s("-r"), s(fps)];
     let region = match &o.target {
