@@ -150,6 +150,12 @@ pub struct RecordingSession {
     /// Frame source for backends that feed ffmpeg (stopped first on `stop`).
     feed: Option<Box<dyn Send>>,
     webcam: Option<Child>,
+    /// Unix time the screen and webcam recorders' clocks started at.
+    epoch: f64,
+    webcam_epoch: f64,
+    /// When the countdown finished and the editor was minimized. Frames
+    /// before this are warm-up and are cut out of the project.
+    armed_at: Option<Instant>,
     /// Separate microphone recorder (see `CapturePlan::mic_sidecar`).
     mic: Option<mic::MicRec>,
     /// What the microphone did, once it has been stopped.
@@ -324,6 +330,53 @@ impl Drop for FreshDir {
 /// clock (as a negative `-itsoffset`), filled in when ffmpeg is launched.
 pub(crate) const CLOCK_START: &str = "@clock-start@";
 
+/// How a wall-clock stamped microphone is written.
+///
+/// `-use_wallclock_as_timestamps` replaces each packet's own timestamp with
+/// the moment ffmpeg read it. A microphone that hands over a buffer a little
+/// late, or several buffers at once, then has packets piled on one instant.
+/// The muxer stacks that sound (it crackles, repeats, or collapses) and the
+/// remux, which lays samples out by count, closes the gaps so later speech
+/// plays early. The first packet's wall-clock time is the one that lines the
+/// voice up with the screen, so it is kept; every packet after it is spaced
+/// by its sample count, which is the rate the microphone actually captured.
+pub(crate) fn mic_timeline_filter() -> &'static str {
+    "asetpts=STARTPTS+N/SR/TB"
+}
+
+/// avfoundation index of the first camera, for the Camera permission prompt.
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_camera_index() -> Option<u32> {
+    macos::camera_index()
+}
+
+/// How a wall-clock stamped camera is written.
+///
+/// The same read-time stamp makes a steady camera look like a burst: many
+/// frames share one timestamp and the encoder keeps one of them. The picture
+/// then freezes, jumps, and drifts against the screen and the voice. The
+/// first frame keeps the wall-clock time that lines the camera up with the
+/// screen. Later frames step at `fps`, the rate the camera was opened at.
+///
+/// The rate ffmpeg reports on the stream (`FR`) is not that rate. A camera
+/// opened at 30 fps often claims 26 or 31, and stepping at the claimed rate
+/// stretches or squeezes the picture against the screen (about two seconds
+/// by the end of a minute when 31 is reported for a 30 fps camera).
+pub(crate) fn camera_timeline_filter(fps: u32) -> String {
+    let fps = fps.clamp(1, 60);
+    format!("setpts=STARTPTS+N/({fps}*TB)")
+}
+
+/// Source time, in ms, at which the real take begins.
+///
+/// `armed_after_start_ms` is how long the recorders had already been running
+/// when the countdown finished. `video_shift_ms` is how far the first video
+/// frame sits after the shared clock, which the event log has already been
+/// moved by. The warm-up before the countdown is cut; it is not counted twice.
+pub(crate) fn take_lead_ms(armed_after_start_ms: f64, video_shift_ms: f64) -> f64 {
+    (armed_after_start_ms - video_shift_ms).max(0.0)
+}
+
 /// Moves everything logged on the recording clock earlier by `shift_ms`, for
 /// a video whose first frame was stamped that long after the clock started.
 /// Times never go below zero.
@@ -347,6 +400,9 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
     let mic_file = opts.out_dir.join("recording.mic.mkv");
+    // The camera warms up slowly, so it opens alongside the screen, not after
+    // it. Both are stamped on the wall clock and aligned from those stamps.
+    let cam_job = if opts.webcam { Some(CamJob::spawn(opts.out_dir.clone())) } else { None };
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
         let _ = std::fs::remove_file(&mic_file);
@@ -407,55 +463,63 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
     }
     let mut warnings = plan.warnings;
-    // The microphone is recorded by its own ffmpeg, stamped with the same
-    // clock as the screen, and joined to it when the recording stops.
+    // The microphone and system audio each open their own recorder. Doing
+    // that one after the other is most of the wait before a recording feels
+    // started, so they open together, alongside the camera.
     let audio_log = opts.out_dir.join("audio.log");
-    let mic = match plan.mic_sidecar.take() {
+    let mic_job = match plan.mic_sidecar.take() {
         Some(_) => {
             let device = opts.mic_device.clone().or_else(|| {
                 std::env::var("BOOYA_MIC").ok().filter(|v| !v.trim().is_empty())
             });
-            match mic::MicRec::start(device.as_deref(), epoch, &mic_file, &audio_log) {
-                Ok(m) => Some(m),
-                Err(reason) => {
-                    mic::log_line(&audio_log, &format!("microphone could not start: {reason}"));
-                    warnings.push(format!("Mic not recorded: {reason}"));
-                    None
-                }
-            }
+            let (file, log, clock) = (mic_file.clone(), audio_log.clone(), epoch);
+            Some(std::thread::spawn(move || mic::MicRec::start(device.as_deref(), clock, &file, &log)))
         }
         None => None,
     };
-    // System audio is a sidecar on the same clock, and only when asked for
-    // (and not when the video-only retry dropped all sound).
     let sys_file = crate::finalize::sys_sidecar(&video);
-    let sys = if opts.system_audio && sysaudio::supported() && !audio_dropped {
-        match sysaudio::SysAudio::start(epoch, &sys_file, &audio_log) {
-            Ok(s) => Some(s),
-            Err(reason) => {
-                mic::log_line(&audio_log, &format!("system audio could not start: {reason}"),
-                );
-                warnings.push(format!("System audio not recorded: {reason}"));
-                None
-            }
-        }
+    let sys_job = if opts.system_audio && sysaudio::supported() && !audio_dropped {
+        let (file, log, clock) = (sys_file.clone(), audio_log.clone(), epoch);
+        Some(std::thread::spawn(move || sysaudio::SysAudio::start(clock, &file, &log)))
     } else {
         None
+    };
+    // The camera has been opening since the folder was created. Collect it
+    // while the microphone and system audio are still starting.
+    let (webcam, cam_warnings) = match cam_job {
+        Some(j) => j.finish(),
+        None => (None, Vec::new()),
+    };
+    warnings.extend(cam_warnings);
+    let mic = match mic_job.and_then(|j| j.join().ok()) {
+        Some(Ok(m)) => Some(m),
+        Some(Err(reason)) => {
+            mic::log_line(&audio_log, &format!("microphone could not start: {reason}"));
+            warnings.push(format!("Mic not recorded: {reason}"));
+            None
+        }
+        None => None,
+    };
+    let sys = match sys_job.and_then(|j| j.join().ok()) {
+        Some(Ok(s)) => Some(s),
+        Some(Err(reason)) => {
+            mic::log_line(&audio_log, &format!("system audio could not start: {reason}"));
+            warnings.push(format!("System audio not recorded: {reason}"));
+            None
+        }
+        None => None,
     };
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
         warnings.push("Key capture is on, but macOS has not allowed Booya to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch Booya on, then quit and reopen Booya.".into());
     }
     let logger = InputLogger::start(plan.region, opts.keys)?;
     logger.set_epoch(started);
-    let webcam = if opts.webcam { start_webcam(&opts.out_dir, &mut warnings) } else { None };
-    if let Some((_, first_output)) = &webcam {
-        let offset_ms = first_output.duration_since(started).as_secs_f64() * 1000.0;
-        let _ = std::fs::write(opts.out_dir.join("webcam.offset"), format!("{offset_ms:.0}"),
-        );
-    }
-    let webcam = webcam.map(|(child, _)| child);
+    let (webcam, webcam_epoch) = match webcam {
+        Some((c, e)) => (Some(c), e),
+        None => (None, 0.0),
+    };
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
+    Ok(RecordingSession { child, feed, webcam, epoch, webcam_epoch, armed_at: None, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
     })
 }
 
@@ -490,21 +554,60 @@ fn webcam_input() -> Option<Vec<String>> {
     }
 }
 
-fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, Instant)> {
+/// The webcam opening on its own thread. Dropped unfinished (the screen
+/// failed to start), it stops the camera again.
+struct CamJob(Option<std::thread::JoinHandle<(Option<(Child, f64)>, Vec<String>)>>);
+
+impl CamJob {
+    fn spawn(dir: PathBuf) -> Self {
+        CamJob(Some(std::thread::spawn(move || {
+            let mut w = Vec::new();
+            let r = start_webcam(&dir, &mut w);
+            (r, w)
+        })))
+    }
+
+    fn finish(mut self) -> (Option<(Child, f64)>, Vec<String>) {
+        self.0.take().and_then(|h| h.join().ok()).unwrap_or((None, Vec::new()))
+    }
+}
+
+impl Drop for CamJob {
+    fn drop(&mut self) {
+        if let Some((Some((mut c, _)), _)) = self.0.take().and_then(|h| h.join().ok()) {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// Starts the camera recorder; returns it with the unix time its clock started at.
+fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> {
     let Some(input) = webcam_input() else {
         warnings.push("No webcam found (check that a camera is connected and that Booya may use it), so there is no camera overlay.".into());
         return None;
     };
     let out = dir.join("webcam.mkv");
     let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
-    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]).args(&input);
-    cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
+    // The first frame is stamped with the wall clock since `epoch`, which is
+    // what lines the camera up with the screen. Later frames step at the
+    // camera's own rate so a burst of packets cannot freeze or warp it.
+    let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
+    cmd.args(["-copyts", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
+    cmd.args(&input);
+    // passthrough keeps the timestamps the filter just wrote. The default
+    // constant-frame-rate mode would drop the burst back down to one frame
+    // and start the file at zero, which is the drift this is here to stop.
+    let timeline = camera_timeline_filter(30);
+    cmd.args(["-vf", &timeline, "-fps_mode", "passthrough"]);
+    cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
         Ok(mut c) => {
             let err = Arc::new(Mutex::new(String::new()));
-            if let Ok(first_output) = wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT) {
-                Some((c, first_output))
+            if wait_until_writing(&mut c, &out, &err, FIRST_OUTPUT_TIMEOUT).is_ok() {
+                Some((c, epoch))
             } else {
                 warnings.push("The webcam did not start (check the Camera permission), so there is no camera overlay.".into());
                 None
@@ -588,8 +691,16 @@ impl RecordingSession {
         self.logger.mark()
     }
 
+    /// The countdown has finished and the editor is out of the picture.
+    /// Nothing recorded before this is part of the take.
+    pub fn arm(&mut self) {
+        if self.armed_at.is_none() {
+            self.armed_at = Some(Instant::now());
+        }
+    }
+
     pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
+        self.armed_at.unwrap_or(self.started).elapsed()
     }
 
     /// Whether the microphone is delivering sound. Ask 1 to 2 seconds in.
@@ -635,6 +746,10 @@ impl RecordingSession {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.
         let fed = self.feed.take().is_some(); // stops the capture, closes ffmpeg's stdin
+        // Stop the event log with the last frame. The flush below can take a
+        // second or two, and clicks logged during it land after the video.
+        let logger = std::mem::replace(&mut self.logger, InputLogger::idle());
+        let logged = logger.stop();
         // The microphone stops first, so the screen's flush does not leave it
         // running past the end of the video by much.
         if let Some(m) = self.mic.take() {
@@ -645,10 +760,7 @@ impl RecordingSession {
         if let Some(c) = self.webcam.as_mut() {
             finish(c, false);
         }
-        let duration = self.started.elapsed();
-        // Stop logging input now, before the remux takes its time.
-        let logger = std::mem::replace(&mut self.logger, InputLogger::idle());
-        let logged = logger.stop();
+        let duration = self.armed_at.unwrap_or(self.started).elapsed();
         let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
         if size == 0 {
             let e = self.stderr.lock().unwrap().clone();
@@ -707,10 +819,23 @@ impl RecordingSession {
         log.events = logged.events;
         if shift_ms > 0.0 {
             shift_timeline(&mut log.events, &mut pauses, shift_ms);
-            // The webcam offset was measured on the same clock.
-            let wc = self.dir.join("webcam.offset");
-            if let Some(ms) = std::fs::read_to_string(&wc).ok().and_then(|t| t.trim().parse::<f64>().ok()) {
-                let _ = std::fs::write(&wc, format!("{:.0}", ms - shift_ms));
+        }
+        // The recorders open before the countdown, so the file contains that
+        // warm-up. The take itself starts when the editor has minimized.
+        let lead_ms = self.armed_at.map(|t| take_lead_ms(t.duration_since(self.started).as_secs_f64() * 1000.0, shift_ms)).unwrap_or(0.0);
+        if lead_ms > 250.0 {
+            log.events.retain(|e| e.t >= lead_ms);
+            pauses.push((0.0, lead_ms));
+        }
+        // The camera's first frame against the screen's first frame, from the
+        // wall clock stamps both were written with.
+        if self.webcam_epoch > 0.0 && video.extension().is_some_and(|x| x == "mp4") {
+            let cam = self.dir.join("webcam.mkv");
+            if let Some((cam_start, _)) = crate::finalize::stream_times(&cam, "v") {
+                let ms = ((cam_start + self.webcam_epoch) - (video_start_s + self.epoch)) * 1000.0;
+                if ms.abs() < 15_000.0 {
+                    let _ = std::fs::write(cam.with_extension("offset"), format!("{ms:.0}"));
+                }
             }
         }
         // A screen recorded below its own resolution (see `max_height`): the
@@ -803,6 +928,59 @@ mod tests {
         assert_eq!(capture_scale(900, Some(1080)), 1.0);
     }
 
+    /// A burst of packets that all carry one timestamp is what
+    /// `-use_wallclock_as_timestamps` does to a camera and a microphone.
+    /// The timeline filters have to keep every frame and every sample, keep
+    /// the shared start time, and space the rest at the real rate. The
+    /// filter runs in the same ffmpeg as the capture, before the encoder
+    /// can drop the frames.
+    #[test]
+    fn a_wallclock_burst_keeps_picture_and_sound_at_their_real_length() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("booya-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[String], out: &std::path::Path| {
+            let ok = crate::proc::command(crate::ffmpeg::ffmpeg_bin()).args(args).arg(out).status().unwrap().success();
+            assert!(ok, "ffmpeg failed for {}", out.display());
+        };
+        let pts = |path: &std::path::Path, kind: &str| -> Vec<f64> {
+            let o = crate::proc::command(crate::ffmpeg::ffprobe_bin())
+                .args(["-v", "error", "-select_streams", kind, "-show_entries", "packet=pts_time", "-of", "csv=p=0"])
+                .arg(path)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect()
+        };
+        let arg = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+
+        let smashed = dir.join("smashed.mkv");
+        let fixed = dir.join("fixed.mkv");
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", "setpts=0.4/TB", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &smashed);
+        let cam = format!("setpts=0.4/TB,{}", camera_timeline_filter(30));
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", &cam, "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &fixed);
+        let smashed_pts = pts(&smashed, "v");
+        let fixed_pts = pts(&fixed, "v");
+        assert!(smashed_pts.len() < 10, "a shared timestamp drops the frames, got {}", smashed_pts.len());
+        assert!(fixed_pts.len() >= 28, "the camera keeps its frames, got {}", fixed_pts.len());
+        assert!((fixed_pts[0] - 0.4).abs() < 0.05, "the start stays on the shared clock: {}", fixed_pts[0]);
+        let step = fixed_pts[1] - fixed_pts[0];
+        assert!((step - 1.0 / 30.0).abs() < 0.004, "frames step at the camera rate, got {step}");
+
+        let voice = dir.join("voice.mkv");
+        let mic = format!("asetpts=0.5/TB,{}", mic_timeline_filter());
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:d=2", "-af", &mic, "-c:a", "pcm_f32le"]), &voice);
+        let voice_pts = pts(&voice, "a");
+        assert!(voice_pts.len() > 10, "the microphone keeps its packets");
+        assert!((voice_pts[0] - 0.5).abs() < 0.05, "the voice keeps its start: {}", voice_pts[0]);
+        let span = voice_pts[voice_pts.len() - 1] - voice_pts[0];
+        assert!((span - 2.0).abs() < 0.08, "two seconds of voice stay two seconds, span {span}");
+        assert!(voice_pts.windows(2).all(|w| w[1] > w[0]), "packet times move forward");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_timeline_shift_moves_events_and_pauses_and_stops_at_zero() {
         use crate::events::{Event, EventKind};
@@ -813,6 +991,20 @@ mod tests {
         shift_timeline(&mut ev, &mut pauses, 800.0);
         assert_eq!((ev[0].t, ev[1].t), (0.0, 700.0));
         assert_eq!(pauses[0], (100.0, 1200.0));
+    }
+
+    #[test]
+    fn the_camera_steps_at_the_rate_it_was_opened_at_not_the_rate_ffmpeg_reports() {
+        let f = camera_timeline_filter(30);
+        assert_eq!(f, "setpts=STARTPTS+N/(30*TB)");
+        assert!(!f.contains("FR"), "{f}");
+    }
+
+    #[test]
+    fn warmup_before_the_countdown_is_cut_once() {
+        assert_eq!(take_lead_ms(8_000.0, 400.0), 7_600.0);
+        assert_eq!(take_lead_ms(100.0, 400.0), 0.0);
+        assert_eq!(take_lead_ms(0.0, 0.0), 0.0);
     }
 
     use super::*;

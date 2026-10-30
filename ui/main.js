@@ -470,12 +470,15 @@ function setRecUi(on) {
 function setPausedUi(p) { $('rec-pause').innerHTML = icon(p ? 'i-play' : 'i-pause') + `<span>${p ? 'Resume' : 'Pause'}</span>`; $('rec-pause').dataset.paused = p; }
 $('rec-pause').onclick = () => invoke('pause_recording', { paused: $('rec-pause').dataset.paused !== 'true' }).catch(fail);
 window.__TAURI__.event.listen('rec-paused', e => { setPausedUi(!!e.payload); if (recording) status(e.payload ? 'Paused. Input capture is stopped and this part will be cut.' : 'Recording.', 'busy'); });
+window.__TAURI__.event.listen('rec-phase', e => {
+  if (e.payload === 'countdown') status('Starting in 3 seconds. Click the number to cancel.', 'busy');
+});
 $('rec-btn').onclick = async () => {
   if ($('rec-btn').disabled) return;
   try {
     if (!recording) {
       const target = recSource.target;
-      $('rec-btn').disabled = true; status('Starting in 3 seconds. Click the number to cancel. If macOS asks for permission, allow it.', 'busy');
+      $('rec-btn').disabled = true; status('Getting the recorder ready. The countdown starts once the screen is actually coming through.', 'busy');
       await meterStopAndWait();
       showRecWarn([]);
       let warn;

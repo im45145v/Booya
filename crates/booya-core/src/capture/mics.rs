@@ -162,7 +162,7 @@ pub(crate) fn pick_camera(names: &[String], wanted: Option<&str>) -> Option<Stri
 pub(crate) fn input_args(name: Option<&str>) -> Result<Vec<String>> {
     #[cfg(target_os = "macos")]
     {
-        let (_, audio) = super::macos::list_devices();
+        let (_, audio) = super::macos::cached_devices();
         let d = super::macos::pick_mic(&audio, name).ok_or_else(|| anyhow!("No microphone was found."))?;
         Ok(vec!["-f".into(), "avfoundation".into(), "-i".into(), format!(":{}", d.index)])
     }

@@ -17,6 +17,7 @@ MAC = [
     dict(id="mic", title="Microphone", detail="Records your voice with the video.", status="unknown", required=False, note=""),
     dict(id="input", title="Input Monitoring", detail="Shows the shortcuts you press (like Cmd+K) in the video. Never what you type.", status="unknown", required=False, note=""),
     dict(id="system-audio", title="System audio", detail="Records what your Mac plays. It uses the Screen Recording permission, and stays off until you switch it on in Record options.", status="denied", required=False, note=""),
+    dict(id="camera", title="Camera", detail="Records you when the webcam overlay is turned on for a recording.", status="unknown", required=False, note=""),
 ]
 SHOTS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 
@@ -50,6 +51,7 @@ def test_first_launch_on_a_mac(pw, fx):
         s.page.wait_for_selector("#perm-overlay")
         text = s.page.inner_text("#perm-overlay")
         assert "Welcome to Booya" in text
+        assert "Camera" in text
         assert "Booya never sends your recordings anywhere" in text
         assert "Accessibility permission" in text and "does not need" in text
         assert "Usage data" not in text and "telemetry" not in text.lower()

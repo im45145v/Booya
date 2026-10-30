@@ -1,7 +1,8 @@
 //! What the operating system lets Booya do, for the permissions screen.
 //!
-//! macOS asks for three things: Screen Recording (required, it is the whole
-//! point), Microphone, and Input Monitoring (only to show typed shortcuts).
+//! macOS asks for four things: Screen Recording (required, it is the whole
+//! point), Microphone, Camera (only when the webcam overlay is on), and
+//! Input Monitoring (only to show typed shortcuts).
 //! Booya needs no Accessibility permission: clicks, the cursor and scroll
 //! come from permission free polling in `input.rs`. System audio goes through
 //! ScreenCaptureKit and so is covered by Screen Recording.
@@ -39,6 +40,7 @@ pub struct Item {
 
 pub const SCREEN: &str = "screen";
 pub const MIC: &str = "mic";
+pub const CAMERA: &str = "camera";
 pub const INPUT: &str = "input";
 pub const SYSTEM_AUDIO: &str = "system-audio";
 
@@ -50,13 +52,17 @@ pub fn list() -> Vec<Item> {
         vec![
             Item { id: SCREEN, title: "Screen Recording", detail: "Lets Booya see your screen so it can record it.", status: screen, required: true, note: "macOS may ask you to quit and reopen Booya after you switch this on." },
             Item { id: MIC, title: "Microphone", detail: "Records your voice with the video.", status: mac::mic_status(), required: false, note: "" },
+            Item { id: CAMERA, title: "Camera", detail: "Records you when the webcam overlay is turned on for a recording.", status: mac::camera_status(), required: false, note: "" },
             Item { id: INPUT, title: "Input Monitoring", detail: "Shows the shortcuts you press (like Cmd+K) in the video. Never what you type.", status: mac::input_status(), required: false, note: "" },
             Item { id: SYSTEM_AUDIO, title: "System audio", detail: "Records what your Mac plays. It uses the Screen Recording permission, and stays off until you switch it on in Record options.", status: screen, required: false, note: "" },
         ]
     }
     #[cfg(windows)]
     {
-        vec![Item { id: MIC, title: "Microphone", detail: "Windows has a switch, \"Let desktop apps access your microphone\", that must be on for Booya to hear you.", status: win::mic_status(), required: false, note: "" }]
+        vec![
+            Item { id: MIC, title: "Microphone", detail: "Windows has a switch, \"Let desktop apps access your microphone\", that must be on for Booya to hear you.", status: win::mic_status(), required: false, note: "" },
+            Item { id: CAMERA, title: "Camera", detail: "Windows has a switch, \"Let desktop apps access your camera\", that must be on for the webcam overlay.", status: win::camera_status(), required: false, note: "" },
+        ]
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
@@ -92,6 +98,12 @@ pub fn request(id: &str) -> anyhow::Result<Option<&'static str>> {
                     return Ok(None);
                 }
             }
+            CAMERA => {
+                if mac::camera_status() == Status::Unknown {
+                    mac::request_camera();
+                    return Ok(None);
+                }
+            }
             INPUT => {
                 if mac::input_status() == Status::Unknown {
                     mac::request_input();
@@ -122,13 +134,18 @@ pub fn settings_url(id: &str) -> Option<&'static str> {
         Some(match id {
             SCREEN | SYSTEM_AUDIO => "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
             MIC => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            CAMERA => "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
             INPUT => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
             _ => return None,
         })
     }
     #[cfg(windows)]
     {
-        (id == MIC).then_some("ms-settings:privacy-microphone")
+        match id {
+            MIC => Some("ms-settings:privacy-microphone"),
+            CAMERA => Some("ms-settings:privacy-webcam"),
+            _ => None,
+        }
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
@@ -174,7 +191,8 @@ pub fn parse_consent(reg_output: &str) -> Option<bool> {
 #[cfg(windows)]
 mod win {
     use super::*;
-    const BASE: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+    const MIC_BASE: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+    const CAM_BASE: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
 
     fn read(key: &str) -> Option<bool> {
         let out = crate::proc::command("reg").args(["query", key, "/v", "Value"]).output().ok()?;
@@ -184,14 +202,22 @@ mod win {
         parse_consent(&String::from_utf8_lossy(&out.stdout))
     }
 
-    /// Both the whole-microphone switch and the "desktop apps" switch must allow it.
-    pub fn mic_status() -> Status {
-        match (read(BASE), read(&format!(r"{BASE}\NonPackaged"))) {
+    /// Both the device switch and the "desktop apps" switch must allow it.
+    fn consent(base: &str) -> Status {
+        match (read(base), read(&format!(r"{base}\NonPackaged"))) {
             (Some(false), _) | (_, Some(false)) => Status::Denied,
             (Some(true), _) | (_, Some(true)) => Status::Granted,
             // Neither key is there: Windows has not been asked, which means allowed.
             _ => Status::Granted,
         }
+    }
+
+    pub fn mic_status() -> Status {
+        consent(MIC_BASE)
+    }
+
+    pub fn camera_status() -> Status {
+        consent(CAM_BASE)
     }
 }
 
@@ -208,6 +234,7 @@ mod mac {
     #[link(name = "AVFoundation", kind = "framework")]
     extern "C" {
         static AVMediaTypeAudio: *const c_void;
+        static AVMediaTypeVideo: *const c_void;
     }
     #[link(name = "objc")]
     extern "C" {
@@ -222,21 +249,29 @@ mod mac {
         crate::capture::macos_sck::has_permission()
     }
 
-    /// AVCaptureDevice.authorizationStatus(for: .audio): 0 not determined, 1 restricted, 2 denied, 3 authorized.
-    pub fn mic_status() -> Status {
+    /// AVCaptureDevice.authorizationStatus(for:): 0 not determined, 1 restricted, 2 denied, 3 authorized.
+    fn media_status(media_type: *const c_void) -> Status {
         unsafe {
             let class = objc_getClass(c"AVCaptureDevice".as_ptr());
-            if class.is_null() || AVMediaTypeAudio.is_null() {
+            if class.is_null() || media_type.is_null() {
                 return Status::Unknown;
             }
             let sel = sel_registerName(c"authorizationStatusForMediaType:".as_ptr());
             let f: extern "C" fn(*const c_void, *const c_void, *const c_void) -> isize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            match f(class, sel, AVMediaTypeAudio) {
+            match f(class, sel, media_type) {
                 3 => Status::Granted,
                 0 => Status::Unknown,
                 _ => Status::Denied,
             }
         }
+    }
+
+    pub fn mic_status() -> Status {
+        unsafe { media_status(AVMediaTypeAudio) }
+    }
+
+    pub fn camera_status() -> Status {
+        unsafe { media_status(AVMediaTypeVideo) }
     }
 
     /// Opens the default microphone for a moment, which makes macOS show its
@@ -266,6 +301,16 @@ mod mac {
             1 => Status::Denied,
             _ => Status::Unknown,
         }
+    }
+
+    /// Opens the camera for one frame, which makes macOS show its prompt.
+    pub fn request_camera() {
+        std::thread::spawn(|| {
+            let idx = crate::capture::macos_camera_index().unwrap_or(0);
+            let _ = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
+                .args(["-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-framerate", "15", "-video_size", "320x240", "-i", &format!("{idx}:none"), "-frames:v", "1", "-f", "null", "-"])
+                .output();
+        });
     }
 
     pub fn request_input() {
@@ -313,6 +358,11 @@ mod tests {
             assert!(l.iter().find(|i| i.id == SCREEN).unwrap().required);
             assert!(l.iter().all(|i| i.id != "accessibility"), "no Accessibility permission is used");
             assert!(settings_url(INPUT).unwrap().ends_with("Privacy_ListenEvent"));
+            assert!(l.iter().any(|i| i.id == CAMERA));
+            assert!(settings_url(CAMERA).unwrap().ends_with("Privacy_Camera"));
+        }
+        if cfg!(windows) {
+            assert_eq!(settings_url(CAMERA), Some("ms-settings:privacy-webcam"));
         }
         if cfg!(windows) {
             assert_eq!(settings_url(MIC), Some("ms-settings:privacy-microphone"));

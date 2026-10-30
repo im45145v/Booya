@@ -45,6 +45,23 @@ pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
     parse_avfoundation_devices(&text)
 }
 
+/// The device list, reused for a few seconds. Opening a recording asks for it
+/// once for the microphone and again for the camera; each ask is its own
+/// ffmpeg process and can take several seconds.
+pub(crate) fn cached_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(Instant, (Vec<AvDevice>, Vec<AvDevice>))>> = Mutex::new(None);
+    let mut slot = CACHE.lock().unwrap();
+    if let Some((at, devices)) = &*slot {
+        if at.elapsed() < Duration::from_secs(8) {
+            return devices.clone();
+        }
+    }
+    let devices = list_devices();
+    *slot = Some((Instant::now(), devices.clone()));
+    devices
+}
+
 /// The built in microphone when there is one: a Bluetooth headset that is
 /// listed first would drop its sound quality as soon as it is used as an input.
 pub(crate) fn pick_mic<'a>(audio: &'a [AvDevice], wanted: Option<&str>) -> Option<&'a AvDevice> {
@@ -67,7 +84,16 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // System audio comes from a ScreenCaptureKit audio stream, recorded on the side.
     let mut warnings = Vec::new();
     let fps = o.fps.clamp(1, 60);
-    let cap = macos_sck::open(&o.target, fps, o.max_height, std::time::Duration::from_secs(8)).map_err(|e| anyhow!(e))?;
+    // Listing microphones and cameras is a separate ffmpeg process. It runs
+    // while ScreenCaptureKit is opening, instead of after it.
+    let devices = if o.mic || o.webcam {
+        Some(std::thread::spawn(cached_devices))
+    } else {
+        None
+    };
+    let opened = macos_sck::open(&o.target, fps, o.max_height, std::time::Duration::from_secs(8));
+    let listed = devices.and_then(|h| h.join().ok());
+    let cap = opened.map_err(|e| anyhow!(e))?;
     // (w, h) is the size of the screen in capture pixels, which is what events
     // and area picks use; the stream may be smaller (see `scale`).
     let scale = cap.scale.clamp(0.1, 1.0);
@@ -77,7 +103,11 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // began, and the timestamps are kept (`-copyts`), so the microphone lands
     // where it really happened relative to the first frame instead of both
     // tracks being shifted to start at zero. The event log uses the same
-    // origin, so clicks, zoom and sound all line up.
+    // origin, so clicks, zoom and sound all line up. The screen is raw frames
+    // with no clock of their own, so this wall clock plus a constant frame
+    // rate is its timeline. The camera and the microphone keep only the first
+    // packet's wall-clock time and then run at their own rate: spacing every
+    // packet by when it was read drops camera frames and stacks the audio.
     let t0 = super::CLOCK_START;
     let mut out_args = vec![s("-fps_mode"), s("cfr"), s("-r"), s(fps)];
     let region = match &o.target {
@@ -97,7 +127,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
         }
         _ => Region { x: cap.origin.0, y: cap.origin.1, w, h },
     };
-    let mut args = vec![
+    let args = vec![
         s("-copyts"),
         s("-thread_queue_size"), s("8"),
         s("-use_wallclock_as_timestamps"), s("1"),
@@ -114,7 +144,7 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // busy. It is recorded by its own ffmpeg and joined at the end.
     let mut mic_sidecar = None;
     if o.mic {
-        let (_, audio) = list_devices();
+        let audio = listed.clone().map(|(_, a)| a).unwrap_or_default();
         match pick_mic(&audio, o.mic_device.as_deref()) {
             Some(d) => mic_sidecar = Some(vec![s("-f"), s("avfoundation"), s("-i"), format!(":{}", d.index)]),
             None => warnings.push("No microphone was found, so this recording has no sound.".into()),
@@ -172,7 +202,7 @@ fn plan_avfoundation(o: &RecordOptions) -> Result<CapturePlan> {
 
 /// avfoundation index of the first camera (not a screen), if any.
 pub fn camera_index() -> Option<u32> {
-    let (video, _) = list_devices();
+    let (video, _) = cached_devices();
     video.iter().find(|d| !d.name.starts_with("Capture screen")).map(|d| d.index)
 }
 

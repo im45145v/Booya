@@ -35,6 +35,9 @@ struct AppState {
     renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
     /// One ffmpeg decoder kept open while the preview plays.
     decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
+    /// The camera's decoder, kept open for the same reason. Opening it per
+    /// frame made the bubble lag the screen and the voice.
+    cam_decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
     /// Files the user picked in a native dialog this session. Commands that
     /// write files only write to these paths, so a compromised web view
     /// cannot write anywhere it likes.
@@ -45,6 +48,8 @@ struct AppState {
     proxying: Mutex<HashSet<String>>,
     /// Set to abort the 3-2-1 countdown.
     cancel_countdown: std::sync::atomic::AtomicBool,
+    /// Set by the countdown page when it has shown its last number.
+    countdown_done: std::sync::atomic::AtomicBool,
     /// Auto edit observes cancellation between steps, transcription windows,
     /// and OCR frames.
     cancel_auto_edit: std::sync::atomic::AtomicBool,
@@ -391,8 +396,10 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             }
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
-        // The camera is not in the proxy, so it is read from its own file.
-        let cam = export::preview_cam(&r, &project, src_t);
+        let cam = {
+            let mut slot = state.cam_decoder.lock().unwrap();
+            export::preview_cam(&r, &project, src_t, playing.unwrap_or(false), &mut slot)
+        };
         let frame = r.render(&src, src_t, cam.as_ref());
         let png = frame.encode_png().map_err(e)?;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
@@ -474,21 +481,11 @@ async fn start_recording(
             None => *slot = Some(RecSlot::Starting),
         }
         state.cancel_countdown.store(false, std::sync::atomic::Ordering::SeqCst);
+        state.countdown_done.store(false, std::sync::atomic::Ordering::SeqCst);
     }
     let fail_reset = |app: &tauri::AppHandle| {
         *app.state::<AppState>().recording.lock().unwrap() = None;
     };
-    // A 3-2-1 countdown on screen, so there is time to switch to the thing
-    // being recorded. Clicking the number cancels it.
-    let secs = countdown.unwrap_or(0).min(10);
-    if secs > 0 {
-        let a2 = app.clone();
-        let cancelled = blocking(move || Ok(run_countdown(&a2, secs))).await.unwrap_or(true);
-        if cancelled {
-            fail_reset(&app);
-            return Err("Recording cancelled".into());
-        }
-    }
     // Recordings go to Videos/Booya/<timestamp>. The folder is only
     // created once capture really starts (see capture::start).
     let base = recordings_dir(&app)?;
@@ -500,32 +497,51 @@ async fn start_recording(
     if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
         m.stop();
     }
+    // Open the screen, microphone and camera first. That is the slow part
+    // (several seconds). The countdown and the minimize happen only once
+    // frames are actually being written, so the take does not start during
+    // the warm-up and the window does not sit there after the countdown.
+    let _ = app.emit("rec-phase", "preparing");
     let res = blocking(move || {
         capture::start(&RecordOptions { target, fps: 30, mic, system_audio, out_dir, keys, webcam, mic_device, max_height,
         }).map_err(e)
     }).await;
-    let state = app.state::<AppState>();
-    let mut slot = state.recording.lock().unwrap();
-    match res {
-        Ok(s) => {
-            let warnings = s.warnings.clone();
-            *slot = Some(RecSlot::Running(s));
-            drop(slot);
-            if mic {
-                watch_mic(app.clone());
-            }
-            show_indicator(&app);
-            // Get the editor out of the picture while recording.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.minimize();
-            }
-            Ok(warnings)
-        }
+    let mut session = match res {
+        Ok(s) => s,
         Err(err) => {
-            *slot = None;
-            Err(err)
+            fail_reset(&app);
+            return Err(err);
+        }
+    };
+    // A 3-2-1 countdown on screen, so there is time to switch to the thing
+    // being recorded. Clicking the number cancels it. Capture is already running.
+    let secs = countdown.unwrap_or(0).min(10);
+    if secs > 0 {
+        let _ = app.emit("rec-phase", "countdown");
+        let a2 = app.clone();
+        let cancelled = blocking(move || Ok(run_countdown(&a2, secs))).await.unwrap_or(true);
+        if cancelled {
+            let _ = session.discard();
+            fail_reset(&app);
+            return Err("Recording cancelled".into());
         }
     }
+    // The editor leaves immediately. The take's clock starts now, and the
+    // warm-up that was recorded while it was still on screen is cut out.
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+    session.arm();
+    let warnings = session.warnings.clone();
+    {
+        let state = app.state::<AppState>();
+        *state.recording.lock().unwrap() = Some(RecSlot::Running(session));
+    }
+    if mic {
+        watch_mic(app.clone());
+    }
+    show_indicator(&app);
+    Ok(warnings)
 }
 
 /// About two seconds after the recording starts, check that the microphone is
@@ -568,6 +584,17 @@ fn rec_mic_status(app: tauri::AppHandle) -> serde_json::Value {
 /// Show the countdown window and wait. True when the user cancelled.
 fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
     use std::sync::atomic::Ordering;
+    // A window from an earlier countdown that is still closing would make the
+    // build fail and the recording start with no countdown at all.
+    if let Some(old) = app.get_webview_window("countdown") {
+        let _ = old.close();
+        for _ in 0..40 {
+            if app.get_webview_window("countdown").is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
     let w = tauri::WebviewWindowBuilder::new(app, "countdown", tauri::WebviewUrl::App(format!("countdown.html?n={secs}").into()),
     )
         .title("Booya countdown")
@@ -583,19 +610,29 @@ fn run_countdown(app: &tauri::AppHandle, secs: u32) -> bool {
         .build();
     let Ok(w) = w else { return false };
     let state = app.state::<AppState>();
-    let end = std::time::Instant::now() + std::time::Duration::from_millis(secs as u64 * 1000 + 150);
+    // The page reports when its last number has gone, so a slow page load
+    // cannot cut the count short. The deadline is only a safety net.
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(secs as u64 * 1000 + 5000);
     let mut cancelled = false;
     while std::time::Instant::now() < end {
         if state.cancel_countdown.load(Ordering::SeqCst) {
             cancelled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        if state.countdown_done.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
     let _ = w.close();
     // Let the window actually disappear before the first frame is captured.
-    std::thread::sleep(std::time::Duration::from_millis(250));
+    std::thread::sleep(std::time::Duration::from_millis(350));
     cancelled
+}
+
+#[tauri::command]
+fn countdown_done(app: tauri::AppHandle) {
+    app.state::<AppState>().countdown_done.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -624,6 +661,19 @@ fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
 fn request_stop(app: tauri::AppHandle) {
     restore_main(&app);
     let _ = app.emit("rec-stop-request", ());
+    // A window that was minimized may not have its page awake yet, so the
+    // first event can be missed. Ask again while the recording still runs.
+    std::thread::spawn(move || {
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            let running = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+            if !running {
+                return;
+            }
+            restore_main(&app);
+            let _ = app.emit("rec-stop-request", ());
+        }
+    });
 }
 
 fn restore_main(app: &tauri::AppHandle) {
@@ -809,6 +859,7 @@ fn show_indicator(app: &tauri::AppHandle) {
         .visible_on_all_workspaces(true)
         .skip_taskbar(true)
         .focused(false)
+        .accept_first_mouse(true)
         .content_protected(true)
         .build();
     if let Ok(w) = w {
@@ -2572,6 +2623,7 @@ fn main() {
             start_recording,
             stop_recording,
             cancel_countdown,
+            countdown_done,
             rec_status,
             request_stop,
             discard_recording,
