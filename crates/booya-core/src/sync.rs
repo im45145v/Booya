@@ -127,7 +127,7 @@ fn calculate_adjustments(
     
     if let (Some(audio), Some(drift)) = (audio, drift) {
         // Check for significant drift
-        if drift.abs() > 0.01 { // More than 10ms drift
+        if drift.abs() >= 0.005 { // 5ms or more drift
             if drift > 0.0 {
                 adjustments.push(PtsAdjustment {
                     kind: AdjustmentKind::Delay,
