@@ -113,22 +113,20 @@ pub fn audio_filter(project: &Project) -> String {
 pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
     let mut f = String::new();
     let n = project.clips.len();
-    // A positive offset delays the audio, so it is read from earlier in the file.
-    let off = project.audio.offset_ms / 1000.0;
+    // Don't use offset_ms for read range - that's handled by pad_audio_graph with front_ms
     for (i, c) in project.clips.iter().enumerate() {
         // A short fade at each cut avoids clicks where the audio is joined.
         let len = c.out_len() / 1000.0;
         let fade = if n > 1 { (project.export.crossfade_ms / 1000.0).min(len / 3.0).max(0.0) } else { 0.0 };
         let fades = if fade > 0.005 { format!(",afade=t=in:d={fade:.3},afade=t=out:st={:.3}:d={fade:.3}", (len - fade).max(0.0)) } else { String::new() };
-        let start = (c.src_start_ms / 1000.0 - off).max(0.0);
-        let end = (c.src_end_ms / 1000.0 - off).max(start + 0.001);
-        // A clip that starts before the (delayed) audio does gets silence first.
-        let pad = ((off - c.src_start_ms / 1000.0).max(0.0) / c.speed.max(0.01) * 1000.0).round();
-        let pad = if pad > 0.0 { format!(",adelay={pad:.0}:all=1") } else { String::new() };
+        // Clamp start to 0 but don't subtract offset from range - that was the bug!
+        let start = (c.src_start_ms / 1000.0).max(0.0);
+        let end = (c.src_end_ms / 1000.0).max(start + 0.001);
+        // Speed change for the clip
         let rebase = if project.audio.rebase_start { "asetpts=PTS-STARTPTS," } else { "" };
-        // A muted clip keeps its length, so everything after it stays in sync.
+        // Mute handling
         let mute = if c.mute { ",volume=0" } else { "" };
-        f.push_str(&format!("[{idx}:a]aresample=48000,{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{mute}{pad}{fades}[a{i}];", atempo_chain(c.speed)));
+        f.push_str(&format!("[{idx}:a]aresample=48000,{rebase}atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,{}{mute}{fades}[a{i}];", atempo_chain(c.speed)));
     }
     for i in 0..n {
         f.push_str(&format!("[a{i}]"));
@@ -164,8 +162,20 @@ pub fn with_audio_lead(project: &Project, zero_based: bool) -> Project {
 /// (a title card), then padding behind, so a track shorter than the picture
 /// never cuts the video short.
 pub fn pad_audio_graph(graph: &str, front_ms: f64, whole_dur_s: f64) -> String {
-    let delay = if front_ms > 0.5 { format!("adelay={front_ms:.0}:all=1,") } else { String::new() };
-    format!("{}[ao0];[ao0]{delay}apad=whole_dur={whole_dur_s:.3}[aout]", graph.trim_end_matches("[aout]"))
+    // Handle alignment via adelay (for positive delay) or atrim (for negative/early audio)
+    // Use 10ms threshold to handle small offsets while avoiding unnecessary filters
+    let alignment = if front_ms > 10.0 {  // Threshold in milliseconds
+        // Add silence at the start to delay the audio (adelay expects milliseconds)
+        format!("adelay={:.0}:all=1,", front_ms)
+    } else if front_ms < -10.0 {  // Threshold in milliseconds
+        // Trim the start of the audio (audio starts earlier than video)
+        // Convert to seconds for atrim filter
+        let trim_seconds = -front_ms / 1000.0;
+        format!("atrim=start={:.3},asetpts=PTS-STARTPTS,", trim_seconds)
+    } else {
+        String::new()
+    };
+    format!("{}[ao0];[ao0]{}apad=whole_dur={whole_dur_s:.3}[aout]", graph.trim_end_matches("[aout]"), alignment)
 }
 
 /// The music file, when the project has one that can be mixed.
@@ -312,7 +322,9 @@ fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f6
     } else {
         let ap = with_audio_lead(project, false);
         let m = if ap.audio.normalize { measure_export_audio(&ap, &project.source) } else { None };
-        let graph = pad_audio_graph(&audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), 0.0, project.output_duration_ms() / 1000.0);
+        // Pass full offset (including negative) to handle alignment via adelay or atrim in pad_audio_graph
+        let off_ms = ap.audio.offset_ms;
+        let graph = pad_audio_graph(&audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), off_ms, project.output_duration_ms() / 1000.0);
         cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]);
     }
     cmd.args(["-movflags", "+faststart"]);
@@ -420,7 +432,10 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
             let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
             // Silence under the intro, and padding to the full length so neither a
             // short microphone track nor the outro card cuts the video short.
-            Some(pad_audio_graph(&g, if intro_n > 0 { intro_ms } else { 0.0 }, whole_s))
+            let front_ms = if intro_n > 0 { intro_ms } else { 0.0 };
+            // Also apply audio offset (alignment delay or trim) if positive/negative
+            let offset_ms = ap.audio.offset_ms;
+            Some(pad_audio_graph(&g, front_ms + offset_ms, whole_s))
         } else {
             None
         };
@@ -829,12 +844,17 @@ mod tests {
         p.audio.offset_ms = 300.0;
         p.audio.volume = 0.5;
         p.audio.fade_out_ms = 500.0;
-        let g = audio_filter(&p);
+        let base_graph = audio_graph(&p, 1, &post_chain(&p, None, true));
+        let g = pad_audio_graph(&base_graph, p.audio.offset_ms, p.output_duration_ms() / 1000.0);
+        // Delay is now in pad_audio_graph, not in audio_filter
         assert!(g.contains("adelay=300"), "{g}");
         assert!(g.contains("volume=0.500") && g.contains("afade=t=out"), "{g}");
         p.audio.offset_ms = -200.0;
-        // Earlier audio reads later in the file.
-        assert!(audio_filter(&p).contains("atrim=start=0.200"));
+        // Earlier audio is trimmed at the start via pad_audio_graph
+        let base_graph = audio_graph(&p, 1, &post_chain(&p, None, true));
+        let g = pad_audio_graph(&base_graph, p.audio.offset_ms, p.output_duration_ms() / 1000.0);
+        // For negative offset, we convert to seconds for atrim filter
+        assert!(g.contains("atrim=start=0.200"), "{g}");
     }
 
     fn make_tone(dir: &std::path::Path, name: &str, hz: u32, secs: f64) -> std::path::PathBuf {
