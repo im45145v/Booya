@@ -27,7 +27,10 @@ pub mod playback;
 pub mod proc;
 pub mod touch;
 pub mod splice;
+pub mod sync; // Our new synchronization module
 pub mod syncprobe;
+#[cfg(test)]
+mod sync_test; // Tests for our synchronization module
 pub mod zoom;
 
 pub use events::{Event, EventKind, EventLog};

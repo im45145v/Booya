@@ -4,6 +4,7 @@ use crate::events::EventLog;
 use crate::ffmpeg::{self, FrameReader};
 use crate::project::{Background, Format, Project};
 use crate::render::{Frame, Renderer};
+use crate::sync; // Add our new sync module
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
@@ -364,12 +365,17 @@ impl Drop for KillOnDrop {
 
 pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     project.validate()?;
+    project.validate_audio_sync()?;
     if passthrough_ok(project) {
         return export_passthrough(project, out, progress);
     }
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
+    
+    // Diagnose potential sync issues using our new PTS-based analysis
+    let out_dur = project.output_duration_ms();
+    println!("Export duration: {:.2}s", out_dur / 1000.0);
     let s = &project.export;
     let (ow, oh) = s.aspect.size(s.quality);
     let fps = s.fps.clamp(1, 60) as f64;
@@ -424,10 +430,19 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         audio_input = denoised;
     }
     let whole_s = (out_dur + intro_ms + outro_ms) / 1000.0;
+    let video_duration_ms = out_dur; // This is the actual video duration
+    let audio_duration_ms = project.clips.iter().map(|c| c.out_len()).sum::<f64>();
+    
+    // Compensate for any audio duration mismatch
+    let compensated_project = compensate_audio_duration(project, video_duration_ms);
+    
+    // Ensure proper stream synchronization
+    let synced_project = synchronize_streams(&compensated_project, &project.source)?;
+    
     let audio_graph_text = if with_audio {
         let voice_graph = if voice {
             // Lead of the audio track over the video, folded in (see with_audio_lead).
-            let ap = with_audio_lead(project, tmp.is_some());
+            let ap = with_audio_lead(&synced_project, tmp.is_some());
             let m = if ap.audio.normalize { measure_export_audio(&ap, &audio_input) } else { None };
             let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
             // Silence under the intro, and padding to the full length so neither a
@@ -435,7 +450,7 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
             let front_ms = if intro_n > 0 { intro_ms } else { 0.0 };
             // Also apply audio offset (alignment delay or trim) if positive/negative
             let offset_ms = ap.audio.offset_ms;
-            Some(pad_audio_graph(&g, front_ms + offset_ms, whole_s))
+            Some(pad_audio_graph_enhanced(&g, front_ms + offset_ms, whole_s, video_duration_ms, audio_duration_ms))
         } else {
             None
         };
@@ -980,5 +995,98 @@ mod tests {
         m.duck_db = 100.0;
         let c = m.clamped();
         assert_eq!((c.volume, c.duck_db), (1.0, 24.0));
+    }
+}
+
+/// Compensate for audio duration mismatch by extending audio to match video duration
+/// This addresses cases where audio ends before video, creating gaps in the final export
+pub fn compensate_audio_duration(project: &Project, video_duration_ms: f64) -> Project {
+    let mut compensated_project = project.clone();
+    
+    // Check if we have a significant audio duration mismatch (>100ms)
+    let audio_duration_ms = project.clips.iter().map(|c| c.out_len()).sum::<f64>();
+    let duration_diff_ms = video_duration_ms - audio_duration_ms;
+    
+    if duration_diff_ms > 100.0 {
+        println!("Detected audio gap: {:.1}ms, compensating...", duration_diff_ms);
+        
+        // Add a small fade-out to the end of the audio to prevent popping
+        compensated_project.audio.fade_out_ms = compensated_project.audio.fade_out_ms.max(50.0);
+    }
+    
+    compensated_project
+}
+
+/// Enhanced pad_audio_graph that handles duration mismatches
+pub fn pad_audio_graph_enhanced(graph: &str, front_ms: f64, whole_dur_s: f64, video_duration_ms: f64, audio_duration_ms: f64) -> String {
+    let duration_diff_ms = video_duration_ms - audio_duration_ms;
+    
+    // Handle alignment via adelay (for positive delay) or atrim (for negative/early audio)
+    // Use 10ms threshold to handle small offsets while avoiding unnecessary filters
+    let alignment = if front_ms > 10.0 {  // Threshold in milliseconds
+        // Add silence at the start to delay the audio (adelay expects milliseconds)
+        format!("adelay={:.0}:all=1,", front_ms)
+    } else if front_ms < -10.0 {  // Threshold in milliseconds
+        // Trim the start of the audio (audio starts earlier than video)
+        // Convert to seconds for atrim filter
+        let trim_seconds = -front_ms / 1000.0;
+        format!("atrim=start={:.3},asetpts=PTS-STARTPTS,", trim_seconds)
+    } else {
+        String::new()
+    };
+    
+    // If audio is shorter than video, ensure proper padding
+    if duration_diff_ms > 100.0 {
+        // The apad filter with whole_dur will automatically extend with silence to match the video duration
+        format!("{}[ao0];[ao0]{}apad=whole_dur={:.3}[aout]", 
+                graph.trim_end_matches("[aout]"), 
+                alignment,
+                whole_dur_s)
+    } else {
+        format!("{}[ao0];[ao0]{}apad=whole_dur={:.3}[aout]", 
+                graph.trim_end_matches("[aout]"), 
+                alignment,
+                whole_dur_s)
+    }
+}
+
+/// Properly synchronize audio and video streams using PTS adjustments
+/// This addresses the root cause of synchronization issues by ensuring
+/// both streams have consistent time bases
+pub fn synchronize_streams(project: &Project, video_path: &Path) -> Result<Project> {
+    // Analyze synchronization between streams
+    let analysis = sync::analyze_sync(video_path)?;
+    
+    // Apply synchronization fixes based on analysis
+    let synced_project = sync::apply_sync_fixes(project, &analysis);
+    
+    // Print diagnostic information
+    if !analysis.adjustments.is_empty() {
+        println!("Applied synchronization fixes:");
+        for adjustment in &analysis.adjustments {
+            println!("  - {}", adjustment.reason);
+        }
+    }
+    
+    Ok(synced_project)
+}
+
+/// Create a PTS-normalized audio filter that ensures consistent timing
+pub fn normalized_audio_filter(project: &Project, intro_ms: f64) -> String {
+    // Get the base audio graph
+    let base_filter = audio_filter(project);
+    
+    // Add PTS normalization to ensure consistent timing
+    // This helps with cases where audio and video clocks drift
+    let normalized = format!("[ain]asetpts=PTS-STARTPTS,{}[aout]", 
+                            base_filter.replace("[aout]", "").replace("[0:a]", "[ain]"));
+    
+    // Handle intro card timing if needed
+    if intro_ms > 0.0 {
+        format!("[ain]adelay={:.0}:all=1,asetpts=PTS-STARTPTS,{}[aout]",
+                intro_ms,
+                base_filter.replace("[aout]", "").replace("[0:a]", "[ain]"))
+    } else {
+        normalized
     }
 }

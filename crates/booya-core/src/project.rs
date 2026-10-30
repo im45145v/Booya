@@ -1117,6 +1117,27 @@ impl Project {
         }
         Ok(())
     }
+
+    /// Validate that audio and video durations are reasonably matched
+    pub fn validate_audio_sync(&self) -> Result<()> {
+        let video_duration_ms = self.duration_ms;
+        let audio_duration_ms = self.clips.iter().map(|c| c.out_len()).sum::<f64>();
+        let duration_diff_ms = (video_duration_ms - audio_duration_ms).abs();
+        
+        if duration_diff_ms > 5000.0 { // More than 5 seconds difference
+            eprintln!("WARNING: Significant audio-video duration mismatch detected ({:.1} seconds)", duration_diff_ms / 1000.0);
+            eprintln!("Video duration: {:.1}s", video_duration_ms / 1000.0);
+            eprintln!("Audio duration: {:.1}s", audio_duration_ms / 1000.0);
+            
+            if audio_duration_ms < video_duration_ms {
+                eprintln!("Audio is shorter than video. The export will have silence at the end.");
+            } else {
+                eprintln!("Audio is longer than video. The end of audio may be cut off.");
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]
