@@ -1,13 +1,29 @@
 //! Local LLM access through an OpenAI compatible chat endpoint on
 //! localhost. In order of preference:
 //! 1. `BOOYA_LLM_URL` (any OpenAI compatible server, e.g. LM Studio)
-//! 2. Ollama on 127.0.0.1:11434
+//! 2. Ollama on 127.0.0.1:11434 (Gemma models are preferred if available)
 //! 3. a llama.cpp server already running on 127.0.0.1:8080
 //! 4. the managed llama.cpp runtime plus a GGUF model from the model manager,
 //!    started on a free port for the duration of the job.
 //! Nothing is sent off the machine unless the user points
 //! `BOOYA_LLM_URL` at a remote https server and sets
 //! `BOOYA_ALLOW_REMOTE_LLM=1`; the app then asks before each use.
+//!
+//! ## Installing Gemma via Ollama
+//!
+//! To use Google Gemma models locally through Ollama:
+//! ```bash
+//! # Install a Gemma model (choose one)
+//! ollama pull gemma2:2b        # Lightweight, fast
+//! ollama pull gemma2:9b        # Better quality
+//! ollama pull gemma2:27b       # Best quality, most RAM
+//!
+//! # Or use the original Gemma 1 models
+//! ollama pull gemma:2b
+//! ollama pull gemma:7b
+//! ```
+//!
+//! Booya will automatically detect and prefer Gemma models when available.
 
 use crate::models::{self, Kind};
 use anyhow::{bail, Context, Result};
@@ -93,9 +109,26 @@ impl Llm {
             return Ok(Some(Llm { base: url.trim_end_matches('/').into(), model, label: "custom endpoint".into(), child: None, api_key: None }));
         }
         if let Some(tags) = get_json("http://127.0.0.1:11434/api/tags", 800) {
-            if let Some(name) = tags["models"].as_array().and_then(|m| m.first()).and_then(|m| m["name"].as_str()) {
-                let model = std::env::var("BOOYA_LLM_MODEL").unwrap_or_else(|_| name.to_string());
-                return Ok(Some(Llm { base: "http://127.0.0.1:11434/v1".into(), label: format!("Ollama ({model})"), model, child: None, api_key: None }));
+            if let Some(models) = tags["models"].as_array() {
+                // Prefer Gemma models if available, preferring latest versions
+                let gemma_model = models.iter()
+                    .filter_map(|m| m["name"].as_str())
+                    .find(|name| name.starts_with("gemma"));
+                
+                // Fall back to first available model if no Gemma found
+                let model = std::env::var("BOOYA_LLM_MODEL")
+                    .ok()
+                    .or(gemma_model.map(|s| s.to_string()))
+                    .or_else(|| models.first().and_then(|m| m["name"].as_str().map(|s| s.to_string())));
+                
+                if let Some(model) = model {
+                    let label = if model.contains("gemma") {
+                        format!("Ollama Gemma ({model})")
+                    } else {
+                        format!("Ollama ({model})")
+                    };
+                    return Ok(Some(Llm { base: "http://127.0.0.1:11434/v1".into(), label, model, child: None, api_key: None }));
+                }
             }
         }
         if get_json("http://127.0.0.1:8080/v1/models", 800).is_some() {
@@ -190,5 +223,49 @@ mod host_tests {
         assert!(!is_local("http://user@evil.com:80"));
         assert!(!is_local("http://0.0.0.0:8080"));
         assert_eq!(host_of("https://a:b@Api.Example.com:443/x"), "api.example.com");
+    }
+}
+
+#[cfg(test)]
+mod gemma_tests {
+    use super::*;
+    use serde_json::json;
+    
+    #[test]
+    fn prefers_gemma_over_other_models() {
+        // Simulate Ollama response with mixed models
+        let tags = json!({
+            "models": [
+                {"name": "llama3.1:8b"},
+                {"name": "gemma2:9b"},
+                {"name": "mistral:7b"}
+            ]
+        });
+        
+        let models = tags["models"].as_array().unwrap();
+        let gemma_model = models.iter()
+            .filter_map(|m| m["name"].as_str())
+            .find(|name| name.starts_with("gemma"));
+        
+        assert_eq!(gemma_model, Some("gemma2:9b"));
+    }
+    
+    #[test]
+    fn falls_back_to_first_without_gemma() {
+        let tags = json!({
+            "models": [
+                {"name": "llama3.1:8b"},
+                {"name": "mistral:7b"}
+            ]
+        });
+        
+        let models = tags["models"].as_array().unwrap();
+        let gemma_model = models.iter()
+            .filter_map(|m| m["name"].as_str())
+            .find(|name| name.starts_with("gemma"));
+        
+        let fallback = models.first().and_then(|m| m["name"].as_str());
+        assert!(gemma_model.is_none());
+        assert_eq!(fallback, Some("llama3.1:8b"));
     }
 }

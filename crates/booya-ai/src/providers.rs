@@ -22,11 +22,13 @@ pub enum Provider {
     OpenAi,
     Anthropic,
     Gemini,
+    Gemma,
     Groq,
     OpenRouter,
     Deepgram,
     AssemblyAi,
     ElevenLabs,
+    Backboard,
     /// Any OpenAI compatible endpoint (base URL from the config).
     Custom,
 }
@@ -77,11 +79,13 @@ pub const ALL: &[Provider] = &[
     Provider::OpenAi,
     Provider::Anthropic,
     Provider::Gemini,
+    Provider::Gemma,
     Provider::Groq,
     Provider::OpenRouter,
     Provider::Deepgram,
     Provider::AssemblyAi,
     Provider::ElevenLabs,
+    Provider::Backboard,
     Provider::Custom,
 ];
 
@@ -91,11 +95,13 @@ impl Provider {
             Provider::OpenAi => "openai",
             Provider::Anthropic => "anthropic",
             Provider::Gemini => "gemini",
+            Provider::Gemma => "gemma",
             Provider::Groq => "groq",
             Provider::OpenRouter => "openrouter",
             Provider::Deepgram => "deepgram",
             Provider::AssemblyAi => "assemblyai",
             Provider::ElevenLabs => "elevenlabs",
+            Provider::Backboard => "backboard",
             Provider::Custom => "custom",
         }
     }
@@ -110,11 +116,13 @@ impl Provider {
             Provider::OpenAi => ("OpenAI", &[Stt, Llm, Tts], "https://api.openai.com/v1", "https://openai.com/policies/row-terms-of-use/", "https://openai.com/policies/row-privacy-policy/", "https://platform.openai.com/api-keys", &[(Stt, "whisper-1"), (Llm, "gpt-4o-mini"), (Tts, "gpt-4o-mini-tts")]),
             Provider::Anthropic => ("Anthropic", &[Llm], "https://api.anthropic.com/v1", "https://www.anthropic.com/legal/commercial-terms", "https://www.anthropic.com/legal/privacy", "https://console.anthropic.com/settings/keys", &[(Llm, "claude-3-5-haiku-latest")]),
             Provider::Gemini => ("Google Gemini", &[Llm], "https://generativelanguage.googleapis.com/v1beta/openai", "https://ai.google.dev/gemini-api/terms", "https://policies.google.com/privacy", "https://aistudio.google.com/apikey", &[(Llm, "gemini-2.0-flash")]),
+            Provider::Gemma => ("Google Gemma", &[Llm], "https://generativelanguage.googleapis.com/v1beta/openai", "https://ai.google.dev/gemini-api/terms", "https://policies.google.com/privacy", "https://aistudio.google.com/apikey", &[(Llm, "gemma-2-9b-it")]),
             Provider::Groq => ("Groq", &[Stt, Llm], "https://api.groq.com/openai/v1", "https://groq.com/terms-of-use/", "https://groq.com/privacy-policy/", "https://console.groq.com/keys", &[(Stt, "whisper-large-v3-turbo"), (Llm, "llama-3.1-8b-instant")]),
             Provider::OpenRouter => ("OpenRouter", &[Llm], "https://openrouter.ai/api/v1", "https://openrouter.ai/terms", "https://openrouter.ai/privacy", "https://openrouter.ai/settings/keys", &[(Llm, "openai/gpt-4o-mini")]),
             Provider::Deepgram => ("Deepgram", &[Stt], "https://api.deepgram.com/v1", "https://deepgram.com/terms", "https://deepgram.com/privacy", "https://console.deepgram.com/", &[(Stt, "nova-2")]),
             Provider::AssemblyAi => ("AssemblyAI", &[Stt], "https://api.assemblyai.com/v2", "https://www.assemblyai.com/legal/terms-of-service", "https://www.assemblyai.com/legal/privacy-policy", "https://www.assemblyai.com/app/account", &[(Stt, "best")]),
             Provider::ElevenLabs => ("ElevenLabs", &[Stt, Tts], "https://api.elevenlabs.io/v1", "https://elevenlabs.io/terms-of-use", "https://elevenlabs.io/privacy-policy", "https://elevenlabs.io/app/settings/api-keys", &[(Stt, "scribe_v1"), (Tts, "eleven_multilingual_v2")]),
+            Provider::Backboard => ("Backboard", &[Llm], "https://api.backboard.ai/v1", "https://backboard.ai/terms", "https://backboard.ai/privacy", "https://backboard.ai/settings/api-keys", &[(Llm, "backboard-1")]),
             Provider::Custom => ("OpenAI compatible endpoint", &[Stt, Llm, Tts], "", "", "", "", &[(Stt, "whisper-1"), (Llm, "local"), (Tts, "tts-1")]),
         };
         Info { id: self, name, tasks, base, terms, privacy, key_url, default_models }
@@ -613,5 +621,25 @@ pub(crate) mod tests {
         assert_eq!(p.endpoint, "https://api.openai.com/v1/audio/transcriptions");
         assert!(p.terms.starts_with("https://") && p.privacy.starts_with("https://"));
         assert_eq!(p.consented_on.as_deref(), Some("2026-10-27"));
+    }
+
+    #[test]
+    fn gemma_llm_uses_openai_compatible_endpoint() {
+        let (base, seen) = mock(vec![(200, "application/json", br#"{"choices":[{"message":{"content":"Test response"}}]}"#.to_vec())]);
+        let l = llm(&cfg(&base, Provider::Gemma, Task::Llm), Provider::Gemma, "test-key").unwrap();
+        assert_eq!(l.chat("system", "user message", 100).unwrap(), "Test response");
+        let s = seen.lock().unwrap();
+        assert!(s[0].0.starts_with("POST /chat/completions"));
+        assert!(String::from_utf8_lossy(&s[0].2).contains("gemma-2-9b-it"));
+    }
+
+    #[test]
+    fn backboard_llm_endpoint() {
+        let (base, seen) = mock(vec![(200, "application/json", br#"{"choices":[{"message":{"content":"Backboard response"}}]}"#.to_vec())]);
+        let l = llm(&cfg(&base, Provider::Backboard, Task::Llm), Provider::Backboard, "bb-key").unwrap();
+        assert_eq!(l.chat("system", "user message", 100).unwrap(), "Backboard response");
+        let s = seen.lock().unwrap();
+        assert!(s[0].0.starts_with("POST /chat/completions"));
+        assert!(String::from_utf8_lossy(&s[0].2).contains("backboard-1"));
     }
 }

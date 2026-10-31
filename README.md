@@ -82,7 +82,7 @@ If you record developer tools, your screen is full of tokens, emails and custome
 - **Local models** (optional, offline, see below): captions, auto cut of filler words and long pauses, blur for emails, API keys and card numbers, and written docs (title, chapters, a step by step guide, a social post).
 - **Audio cleanup**: background noise removal and mute.
 - **Export**: MP4 (H.264 + AAC), WebM (VP9 + Opus) or GIF (palette optimised), 480p to 4K, in 16:9, 9:16 or 1:1, with presets for YouTube, Reels and Shorts, feed posts and READMEs. An untouched recording is remuxed without re-encoding.
-- **Optional cloud providers and storage**: bring your own key for OpenAI, Anthropic, Gemini, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs or any OpenAI compatible endpoint, and your own S3 or R2 bucket. Off by default; see [Cloud providers](#cloud-providers-optional).
+- **Optional cloud providers and storage**: bring your own key for OpenAI, Anthropic, Gemini, Gemma, Groq, OpenRouter, Deepgram, AssemblyAI, ElevenLabs, Backboard or any OpenAI compatible endpoint, and your own S3 or R2 bucket. Off by default; see [Cloud providers](#cloud-providers-optional).
 
 ## How it works
 
@@ -171,11 +171,13 @@ Off by default. Open **Settings > Cloud & API keys**, paste your own key (stored
 | OpenAI | yes | yes | yes |
 | Anthropic | | yes | |
 | Google Gemini | | yes | |
+| Google Gemma | | yes | |
 | Groq | yes | yes | |
 | OpenRouter | | yes | |
 | Deepgram | yes | | |
 | AssemblyAI | yes (deleted after transcription) | | |
 | ElevenLabs | yes | | yes |
+| Backboard | | yes | |
 | Any OpenAI compatible endpoint (https) | yes | yes | yes |
 
 Speech to text sends only the audio track as 16 kHz mono WAV. Writing sends only the transcript and chapter timings. Video and event logs are never sent.
