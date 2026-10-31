@@ -312,6 +312,15 @@ pub fn passthrough_ok(p: &Project) -> bool {
 /// Copy the streams into an MP4 without re-encoding.
 fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     let info = ffmpeg::probe(&project.source)?;
+    
+    // Perform sync analysis even for passthrough
+    let sync_analysis = sync::analyze_sync(&project.source)
+        .context("Failed to analyze stream synchronization")?;
+    
+    if sync_analysis.has_issues {
+        eprintln!("⚠️  Sync warning in passthrough mode: {}", sync_analysis.diagnostic);
+    }
+    
     let mut cmd = crate::proc::command(ffmpeg::ffmpeg_bin());
     cmd.args(["-v", "error", "-nostdin", "-y", "-i"]).arg(ffmpeg::file_url(&project.source));
     // The capture is H.264 already; audio may be PCM or Opus, which MP4
@@ -325,7 +334,22 @@ fn export_passthrough(project: &Project, out: &Path, progress: &mut dyn FnMut(f6
         let m = if ap.audio.normalize { measure_export_audio(&ap, &project.source) } else { None };
         // Pass full offset (including negative) to handle alignment via adelay or atrim in pad_audio_graph
         let off_ms = ap.audio.offset_ms;
-        let graph = pad_audio_graph(&audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), off_ms, project.output_duration_ms() / 1000.0);
+        let whole_dur_s = project.output_duration_ms() / 1000.0;
+        
+        // Use precise audio/video durations from sync analysis
+        let video_dur_ms = sync_analysis.video_timing.duration * 1000.0;
+        let audio_dur_ms = sync_analysis.audio_timing
+            .as_ref()
+            .map(|a| a.duration * 1000.0)
+            .unwrap_or(whole_dur_s * 1000.0);
+        
+        let graph = pad_audio_graph_enhanced(
+            &audio_graph(&ap, 0, &post_chain(&ap, m.as_ref(), true)), 
+            off_ms, 
+            whole_dur_s,
+            video_dur_ms,
+            audio_dur_ms
+        );
         cmd.args(["-filter_complex", &graph, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]);
     }
     cmd.args(["-movflags", "+faststart"]);
@@ -373,7 +397,7 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         std::fs::create_dir_all(dir)?;
     }
     
-    // Diagnose potential sync issues using our new PTS-based analysis
+    // Diagnose potential sync issues using PTS-based analysis
     let out_dur = project.output_duration_ms();
     println!("Export duration: {:.2}s", out_dur / 1000.0);
     let s = &project.export;
@@ -386,6 +410,17 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     if total == 0 {
         bail!("nothing to export");
     }
+    
+    // Perform deep synchronization analysis
+    let sync_analysis = sync::analyze_sync(&project.source)
+        .context("Failed to analyze stream synchronization")?;
+    
+    if sync_analysis.has_issues {
+        eprintln!("⚠️  WARNING: {}", sync_analysis.diagnostic);
+        let diagnostic = sync::generate_diagnostic(&sync_analysis);
+        eprintln!("{}", diagnostic);
+    }
+    
     // Title cards sit before and after the recording.
     let (intro_ms, outro_ms) = project.card_lengths_ms();
     let intro_n = (intro_ms / 1000.0 * fps).round() as u64;
@@ -430,19 +465,28 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         audio_input = denoised;
     }
     let whole_s = (out_dur + intro_ms + outro_ms) / 1000.0;
-    let video_duration_ms = out_dur; // This is the actual video duration
-    let audio_duration_ms = project.clips.iter().map(|c| c.out_len()).sum::<f64>();
     
-    // Compensate for any audio duration mismatch
-    let compensated_project = compensate_audio_duration(project, video_duration_ms);
+    // Use precise stream durations from sync analysis
+    let video_duration_ms = sync_analysis.video_timing.duration * 1000.0;
+    let audio_duration_ms = sync_analysis.audio_timing
+        .as_ref()
+        .map(|a| a.duration * 1000.0)
+        .unwrap_or(out_dur);
     
-    // Ensure proper stream synchronization
-    let synced_project = synchronize_streams(&compensated_project, &project.source)?;
+    // Apply synchronization fixes to the project
+    let synced_project = if sync_analysis.has_issues {
+        sync::apply_sync_fixes(project, &sync_analysis)
+    } else {
+        project.clone()
+    };
+    
+    // Compensate for any audio duration mismatch  
+    let compensated_project = compensate_audio_duration(&synced_project, video_duration_ms);
     
     let audio_graph_text = if with_audio {
         let voice_graph = if voice {
             // Lead of the audio track over the video, folded in (see with_audio_lead).
-            let ap = with_audio_lead(&synced_project, tmp.is_some());
+            let ap = with_audio_lead(&compensated_project, tmp.is_some());
             let m = if ap.audio.normalize { measure_export_audio(&ap, &audio_input) } else { None };
             let g = audio_graph(&ap, 1, &post_chain(&ap, m.as_ref(), true));
             // Silence under the intro, and padding to the full length so neither a
@@ -1008,7 +1052,7 @@ pub fn compensate_audio_duration(project: &Project, video_duration_ms: f64) -> P
     let duration_diff_ms = video_duration_ms - audio_duration_ms;
     
     if duration_diff_ms > 100.0 {
-        println!("Detected audio gap: {:.1}ms, compensating...", duration_diff_ms);
+        println!("Detected audio gap: {:.1}ms, will extend with silence", duration_diff_ms);
         
         // Add a small fade-out to the end of the audio to prevent popping
         compensated_project.audio.fade_out_ms = compensated_project.audio.fade_out_ms.max(50.0);
@@ -1017,7 +1061,7 @@ pub fn compensate_audio_duration(project: &Project, video_duration_ms: f64) -> P
     compensated_project
 }
 
-/// Enhanced pad_audio_graph that handles duration mismatches
+/// Enhanced pad_audio_graph that handles duration mismatches with precise measurement
 pub fn pad_audio_graph_enhanced(graph: &str, front_ms: f64, whole_dur_s: f64, video_duration_ms: f64, audio_duration_ms: f64) -> String {
     let duration_diff_ms = video_duration_ms - audio_duration_ms;
     
@@ -1035,40 +1079,17 @@ pub fn pad_audio_graph_enhanced(graph: &str, front_ms: f64, whole_dur_s: f64, vi
         String::new()
     };
     
-    // If audio is shorter than video, ensure proper padding
-    if duration_diff_ms > 100.0 {
-        // The apad filter with whole_dur will automatically extend with silence to match the video duration
-        format!("{}[ao0];[ao0]{}apad=whole_dur={:.3}[aout]", 
-                graph.trim_end_matches("[aout]"), 
-                alignment,
-                whole_dur_s)
-    } else {
-        format!("{}[ao0];[ao0]{}apad=whole_dur={:.3}[aout]", 
-                graph.trim_end_matches("[aout]"), 
-                alignment,
-                whole_dur_s)
-    }
-}
-
-/// Properly synchronize audio and video streams using PTS adjustments
-/// This addresses the root cause of synchronization issues by ensuring
-/// both streams have consistent time bases
-pub fn synchronize_streams(project: &Project, video_path: &Path) -> Result<Project> {
-    // Analyze synchronization between streams
-    let analysis = sync::analyze_sync(video_path)?;
-    
-    // Apply synchronization fixes based on analysis
-    let synced_project = sync::apply_sync_fixes(project, &analysis);
-    
-    // Print diagnostic information
-    if !analysis.adjustments.is_empty() {
-        println!("Applied synchronization fixes:");
-        for adjustment in &analysis.adjustments {
-            println!("  - {}", adjustment.reason);
-        }
+    // Log significant duration mismatches for debugging
+    if duration_diff_ms.abs() > 500.0 {
+        eprintln!("Audio-Video duration gap: {:.1}s - applying padding", duration_diff_ms / 1000.0);
     }
     
-    Ok(synced_project)
+    // Always use whole_dur to ensure audio matches video duration
+    // The apad filter will extend audio with silence if shorter
+    format!("{}[ao0];[ao0]{}apad=whole_dur={:.3}[aout]", 
+            graph.trim_end_matches("[aout]"), 
+            alignment,
+            whole_dur_s)
 }
 
 /// Create a PTS-normalized audio filter that ensures consistent timing
