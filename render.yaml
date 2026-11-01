@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: booya-site
+    runtime: static
+    rootDir: site
+    buildCommand: echo "static site"
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff

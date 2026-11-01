@@ -50,6 +50,41 @@ pub fn audio_align_filter(video: (f64, f64), audio: (f64, f64)) -> Option<String
     Some(f)
 }
 
+/// The length of the audio as its samples add up (count over rate), which
+/// differs from the container's timestamp span when the capture device lost
+/// samples while the packet stamps kept following the wall clock.
+pub(crate) fn sample_duration(path: &Path, stream: &str) -> Option<f64> {
+    let out = crate::proc::command(ffmpeg_bin())
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(ffmpeg::file_url(path))
+        .args(["-map", stream, "-af", "aresample=48000,asetpts=N/SR/TB", "-f", "null", "-progress", "pipe:1", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let us = text.lines().rev().find_map(|l| l.strip_prefix("out_time_us=").or_else(|| l.strip_prefix("out_time_ms=")).and_then(|v| v.trim().parse::<f64>().ok()))?;
+    (us > 0.0).then_some(us / 1e6)
+}
+
+/// The atempo factor that stretches audio whose samples add up to `samples`
+/// seconds back over the `span` seconds it really took. Only a plausible
+/// clock drift or sample loss (0.5% to 20% short) is corrected; anything else
+/// (a mic that simply stopped early) is left to the padding.
+pub fn drift_tempo(samples: f64, span: f64) -> Option<f64> {
+    if samples <= 0.0 || span < 5.0 {
+        return None;
+    }
+    let ratio = samples / span;
+    (0.8..=0.995).contains(&ratio).then_some(ratio)
+}
+
+fn with_tempo(filter: String, tempo: Option<f64>) -> String {
+    match tempo {
+        Some(t) => filter.replacen(ALIGN_BASE, &format!("{ALIGN_BASE},atempo={t:.6},{ALIGN_REBASE}"), 1),
+        None => filter,
+    }
+}
+
 /// Samples are laid out by their count, never by their (jittery) packet
 /// stamps, at the 48 kHz every export and player handles well.
 const ALIGN_REBASE: &str = "asetpts=N/SR/TB";
@@ -240,7 +275,8 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
-        align = Some(f);
+        let tempo = sample_duration(&side, "0:a:0").and_then(|n| drift_tempo(n, a.1));
+        align = Some(with_tempo(f, tempo));
         cmd.arg("-i").arg(ffmpeg::file_url(mkv)).arg("-i").arg(ffmpeg::file_url(&side));
         cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
     } else if let (Some(v), Some(a)) = (video, audio) {
@@ -253,7 +289,12 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
             cmd.args(["-itsoffset", &format!("{:.3}", vs - a_start), "-i"]).arg(ffmpeg::file_url(mkv));
             cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
         } else {
+            let tempo = sample_duration(mkv, "0:a:0").and_then(|n| drift_tempo(n, a.1));
             align = audio_align_filter(v, a);
+            if align.is_none() && tempo.is_some() {
+                align = Some(audio_plain_filter());
+            }
+            align = align.map(|f| with_tempo(f, tempo));
             if align.is_none() && audio_rate(mkv).is_some_and(|r| r != 48_000) {
                 align = Some(audio_plain_filter());
             }
@@ -408,6 +449,17 @@ mod tests {
         let rep = sync_report(&mp4, None).unwrap();
         assert!(rep.issues.is_empty(), "{:?}", rep.issues);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn drift_is_stretched_back_over_the_recorded_span() {
+        // 61 s of samples that took 67 s: slowed down to fit.
+        let t = drift_tempo(61.0, 67.0).unwrap();
+        assert!((t - 0.9104).abs() < 0.001);
+        assert!(drift_tempo(66.9, 67.0).is_none());
+        assert!(drift_tempo(30.0, 67.0).is_none());
+        let f = with_tempo(audio_plain_filter(), Some(t));
+        assert!(f.starts_with("aresample=48000,asetpts=N/SR/TB,atempo=0.91"), "{f}");
     }
 
     #[test]
