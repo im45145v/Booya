@@ -17,8 +17,14 @@ pub(crate) fn stream_times(path: &Path, kind: &str) -> Option<(f64, f64)> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let st = v["streams"].as_array()?.first()?;
     let start = st["start_time"].as_str().and_then(|s| s.parse::<f64>().ok())?;
-    let dur = st["duration"].as_str().or(v["format"]["duration"].as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let dur = stream_duration(st, &v["format"], start);
     Some((start, dur))
+}
+
+fn stream_duration(stream: &serde_json::Value, format: &serde_json::Value, start: f64) -> f64 {
+    stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| {
+        Some((format["duration"].as_str()?.parse::<f64>().ok()? - start).max(0.0))
+    }).unwrap_or(0.0)
 }
 
 /// Where the audio starts relative to the video, in seconds (positive means
@@ -48,6 +54,47 @@ pub fn audio_align_filter(video: (f64, f64), audio: (f64, f64)) -> Option<String
     }
     f.push_str(",apad");
     Some(f)
+}
+
+/// The length of the audio as its samples add up (count over rate), which
+/// differs from the container's timestamp span when the capture device lost
+/// samples while the packet stamps kept following the wall clock.
+pub(crate) fn sample_duration(path: &Path, stream: &str) -> Option<f64> {
+    let out = crate::proc::command(ffmpeg_bin())
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(ffmpeg::file_url(path))
+        .args(["-map", stream, "-af", "aresample=48000,asetpts=N/SR/TB", "-f", "null", "-progress", "pipe:1", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let us = text.lines().rev().find_map(|l| l.strip_prefix("out_time_us=").or_else(|| l.strip_prefix("out_time_ms=")).and_then(|v| v.trim().parse::<f64>().ok()))?;
+    (us > 0.0).then_some(us / 1e6)
+}
+
+/// The atempo factor that stretches audio whose samples add up to `samples`
+/// seconds back over the `span` seconds it really took. Only a substantial
+/// shortfall (2.5% to 20%) is corrected; smaller differences are left alone.
+pub fn drift_tempo(samples: f64, span: f64) -> Option<f64> {
+    if samples <= 0.0 || span < 5.0 {
+        return None;
+    }
+    let ratio = samples / span;
+    (0.8..=0.975).contains(&ratio).then_some(ratio)
+}
+
+fn track_drift_tempo(samples: f64, video: (f64, f64), audio_start: f64) -> Option<f64> {
+    let trim = (video.0 - audio_start).max(0.0);
+    let remaining_samples = (samples - trim).max(0.0);
+    let span = (video.0 + video.1 - audio_start.max(video.0)).max(0.0);
+    drift_tempo(remaining_samples, span)
+}
+
+fn with_tempo(filter: String, tempo: Option<f64>) -> String {
+    match tempo {
+        Some(t) => filter.replacen(ALIGN_BASE, &format!("{ALIGN_BASE},atempo={t:.6},{ALIGN_REBASE}"), 1),
+        None => filter,
+    }
 }
 
 /// Samples are laid out by their count, never by their (jittery) packet
@@ -240,7 +287,8 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
-        align = Some(f);
+        let tempo = sample_duration(&side, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
+        align = Some(with_tempo(f, tempo));
         cmd.arg("-i").arg(ffmpeg::file_url(mkv)).arg("-i").arg(ffmpeg::file_url(&side));
         cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
     } else if let (Some(v), Some(a)) = (video, audio) {
@@ -253,7 +301,12 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
             cmd.args(["-itsoffset", &format!("{:.3}", vs - a_start), "-i"]).arg(ffmpeg::file_url(mkv));
             cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
         } else {
+            let tempo = sample_duration(mkv, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
             align = audio_align_filter(v, a);
+            if align.is_none() && tempo.is_some() {
+                align = Some(audio_plain_filter());
+            }
+            align = align.map(|f| with_tempo(f, tempo));
             if align.is_none() && audio_rate(mkv).is_some_and(|r| r != 48_000) {
                 align = Some(audio_plain_filter());
             }
@@ -379,6 +432,16 @@ pub fn sync_report(video: &Path, events: Option<&Path>) -> Result<SyncReport> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_container_duration_fallback_excludes_a_late_stream_start() {
+        let stream = serde_json::json!({});
+        let format = serde_json::json!({"duration": "10.0"});
+        assert!((stream_duration(&stream, &format, 0.35) - 9.65).abs() < 1e-9);
+
+        let format = serde_json::json!({"duration": "4.0"});
+        assert!((stream_duration(&stream, &format, 0.5) - 3.5).abs() < 1e-9);
+    }
+
     fn tmpdir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("dl-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
@@ -407,6 +470,61 @@ mod tests {
         assert!((info.duration_ms - 1500.0).abs() < 200.0, "{}", info.duration_ms);
         let rep = sync_report(&mp4, None).unwrap();
         assert!(rep.issues.is_empty(), "{:?}", rep.issues);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn drift_is_stretched_back_over_the_recorded_span() {
+        // 61 s of samples that took 67 s: slowed down to fit.
+        let slow = drift_tempo(61.0, 67.0).unwrap();
+        assert!((slow - 0.9104).abs() < 0.001);
+        assert!(drift_tempo(65.5, 67.0).is_none());
+        assert!(drift_tempo(30.0, 67.0).is_none());
+        assert!(drift_tempo(53.5, 54.0).is_none());
+        let f = with_tempo(audio_plain_filter(), Some(slow));
+        assert!(f.starts_with("aresample=48000,asetpts=N/SR/TB,atempo=0.91"), "{f}");
+    }
+
+    #[test]
+    fn drift_uses_the_video_span_after_alignment() {
+        let t = track_drift_tempo(48.4, (0.0, 54.0), 0.0).unwrap();
+        assert!((t - 48.4 / 54.0).abs() < 1e-9);
+
+        let t = track_drift_tempo(48.4, (0.0, 54.0), 0.35).unwrap();
+        assert!((t - 48.4 / 53.65).abs() < 1e-9);
+
+        assert!(track_drift_tempo(54.4, (0.0, 54.0), -0.4).is_none());
+    }
+
+    #[test]
+    fn a_short_mic_stream_is_stretched_to_the_video_span() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-short-mic");
+        let mkv = d.join("recording.mkv");
+        let reference = d.join("reference.mkv");
+        crate::syncprobe::make_reference(&mkv, 54, true, false, 0.0).unwrap();
+        crate::syncprobe::make_reference(&reference, 54, false, true, 0.0).unwrap();
+        let side = mic_sidecar(&mkv);
+        let ok = crate::proc::command(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&reference)
+            .args(["-vn", "-af", "atempo=1.1157024793", "-c:a", "pcm_f32le", "-f", "matroska"])
+            .arg(&side)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let raw_duration = sample_duration(&side, "0:a:0").unwrap();
+        assert!((raw_duration - 48.4).abs() < 0.3, "{raw_duration}");
+
+        let joined = remux_to_mp4_info(&mkv).unwrap();
+        let result = crate::syncprobe::measure(&joined.path).unwrap();
+        assert!(result.pairs >= 50, "{result:?}");
+        assert!(result.offset_ms.abs() < 40.0, "{result:?}");
+        assert!(result.worst_ms < 50.0, "{result:?}");
+        assert!(result.drift_total_ms.abs() < 75.0, "{result:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -555,8 +673,7 @@ mod tests {
         assert!(!sys_sidecar(&mkv).exists(), "the system file is folded in");
         let (start, dur) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
         assert!((start - 0.5).abs() < 0.06, "starts with the voice: {start}");
-        // (Matroska reports the end time as the duration of a file that starts late.)
-        assert!((dur - 4.0).abs() < 0.2, "ends with the system sound: {dur}");
+        assert!((dur - 3.5).abs() < 0.2, "ends with the system sound: {dur}");
         // Both are really in the mix, where they belong (times here count from the file start). Mean level: the voice alone first (a mono sine
         // placed in a stereo mix reads about -24 dB), both together while they overlap (about 2 dB more),
         // then the system sound alone (0.8 of the level, about -26 dB).

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="32" height="32">
+  <title>Booya</title>
+  <rect width="1024" height="1024" rx="232" fill="#E9E4FB"/>
+  <path d="M 323 258 Q 318 238 340 246 L 708 460 Q 728 473 706 483 L 646 508 Q 626 518 640 537 L 700 618 Q 724 650 712 672 Q 700 695 668 688 C 640 681 622 656 602 658 C 584 660 580 702 556 707 C 530 710 508 670 486 665 C 462 661 442 715 422 720 Q 402 723 399 704 Z" fill="#FFFFFF" stroke="#1E1B2E" stroke-width="34" stroke-linejoin="round"/>
+  <circle cx="447" cy="463" r="30" fill="#1E1B2E"/><circle cx="545" cy="462" r="30" fill="#1E1B2E"/>
+</svg>
