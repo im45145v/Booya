@@ -17,8 +17,14 @@ pub(crate) fn stream_times(path: &Path, kind: &str) -> Option<(f64, f64)> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let st = v["streams"].as_array()?.first()?;
     let start = st["start_time"].as_str().and_then(|s| s.parse::<f64>().ok())?;
-    let dur = st["duration"].as_str().or(v["format"]["duration"].as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let dur = stream_duration(st, &v["format"], start);
     Some((start, dur))
+}
+
+fn stream_duration(stream: &serde_json::Value, format: &serde_json::Value, start: f64) -> f64 {
+    stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| {
+        Some((format["duration"].as_str()?.parse::<f64>().ok()? - start).max(0.0))
+    }).unwrap_or(0.0)
 }
 
 /// Where the audio starts relative to the video, in seconds (positive means
@@ -420,6 +426,16 @@ pub fn sync_report(video: &Path, events: Option<&Path>) -> Result<SyncReport> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_container_duration_fallback_excludes_a_late_stream_start() {
+        let stream = serde_json::json!({});
+        let format = serde_json::json!({"duration": "10.0"});
+        assert!((stream_duration(&stream, &format, 0.35) - 9.65).abs() < 1e-9);
+
+        let format = serde_json::json!({"duration": "4.0"});
+        assert!((stream_duration(&stream, &format, 0.5) - 3.5).abs() < 1e-9);
+    }
+
     fn tmpdir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("dl-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
@@ -607,8 +623,7 @@ mod tests {
         assert!(!sys_sidecar(&mkv).exists(), "the system file is folded in");
         let (start, dur) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
         assert!((start - 0.5).abs() < 0.06, "starts with the voice: {start}");
-        // (Matroska reports the end time as the duration of a file that starts late.)
-        assert!((dur - 4.0).abs() < 0.2, "ends with the system sound: {dur}");
+        assert!((dur - 3.5).abs() < 0.2, "ends with the system sound: {dur}");
         // Both are really in the mix, where they belong (times here count from the file start). Mean level: the voice alone first (a mono sine
         // placed in a stereo mix reads about -24 dB), both together while they overlap (about 2 dB more),
         // then the system sound alone (0.8 of the level, about -26 dB).
