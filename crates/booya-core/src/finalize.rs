@@ -73,15 +73,14 @@ pub(crate) fn sample_duration(path: &Path, stream: &str) -> Option<f64> {
 }
 
 /// The atempo factor that stretches audio whose samples add up to `samples`
-/// seconds back over the `span` seconds it really took. Only a plausible
-/// clock drift or sample loss (0.5% to 20% short) is corrected; anything else
-/// (a mic that simply stopped early) is left to the padding.
+/// seconds back over the `span` seconds it really took. Only a substantial
+/// shortfall (2.5% to 20%) is corrected; smaller differences are left alone.
 pub fn drift_tempo(samples: f64, span: f64) -> Option<f64> {
     if samples <= 0.0 || span < 5.0 {
         return None;
     }
     let ratio = samples / span;
-    (0.8..=0.995).contains(&ratio).then_some(ratio)
+    (0.8..=0.975).contains(&ratio).then_some(ratio)
 }
 
 fn track_drift_tempo(samples: f64, video: (f64, f64), audio_start: f64) -> Option<f64> {
@@ -477,11 +476,12 @@ mod tests {
     #[test]
     fn drift_is_stretched_back_over_the_recorded_span() {
         // 61 s of samples that took 67 s: slowed down to fit.
-        let t = drift_tempo(61.0, 67.0).unwrap();
-        assert!((t - 0.9104).abs() < 0.001);
-        assert!(drift_tempo(66.9, 67.0).is_none());
+        let slow = drift_tempo(61.0, 67.0).unwrap();
+        assert!((slow - 0.9104).abs() < 0.001);
+        assert!(drift_tempo(65.5, 67.0).is_none());
         assert!(drift_tempo(30.0, 67.0).is_none());
-        let f = with_tempo(audio_plain_filter(), Some(t));
+        assert!(drift_tempo(53.5, 54.0).is_none());
+        let f = with_tempo(audio_plain_filter(), Some(slow));
         assert!(f.starts_with("aresample=48000,asetpts=N/SR/TB,atempo=0.91"), "{f}");
     }
 
