@@ -84,6 +84,13 @@ pub fn drift_tempo(samples: f64, span: f64) -> Option<f64> {
     (0.8..=0.995).contains(&ratio).then_some(ratio)
 }
 
+fn track_drift_tempo(samples: f64, video: (f64, f64), audio_start: f64) -> Option<f64> {
+    let trim = (video.0 - audio_start).max(0.0);
+    let remaining_samples = (samples - trim).max(0.0);
+    let span = (video.0 + video.1 - audio_start.max(video.0)).max(0.0);
+    drift_tempo(remaining_samples, span)
+}
+
 fn with_tempo(filter: String, tempo: Option<f64>) -> String {
     match tempo {
         Some(t) => filter.replacen(ALIGN_BASE, &format!("{ALIGN_BASE},atempo={t:.6},{ALIGN_REBASE}"), 1),
@@ -281,7 +288,7 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
-        let tempo = sample_duration(&side, "0:a:0").and_then(|n| drift_tempo(n, a.1));
+        let tempo = sample_duration(&side, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
         align = Some(with_tempo(f, tempo));
         cmd.arg("-i").arg(ffmpeg::file_url(mkv)).arg("-i").arg(ffmpeg::file_url(&side));
         cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
@@ -295,7 +302,7 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
             cmd.args(["-itsoffset", &format!("{:.3}", vs - a_start), "-i"]).arg(ffmpeg::file_url(mkv));
             cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
         } else {
-            let tempo = sample_duration(mkv, "0:a:0").and_then(|n| drift_tempo(n, a.1));
+            let tempo = sample_duration(mkv, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
             align = audio_align_filter(v, a);
             if align.is_none() && tempo.is_some() {
                 align = Some(audio_plain_filter());
@@ -476,6 +483,49 @@ mod tests {
         assert!(drift_tempo(30.0, 67.0).is_none());
         let f = with_tempo(audio_plain_filter(), Some(t));
         assert!(f.starts_with("aresample=48000,asetpts=N/SR/TB,atempo=0.91"), "{f}");
+    }
+
+    #[test]
+    fn drift_uses_the_video_span_after_alignment() {
+        let t = track_drift_tempo(48.4, (0.0, 54.0), 0.0).unwrap();
+        assert!((t - 48.4 / 54.0).abs() < 1e-9);
+
+        let t = track_drift_tempo(48.4, (0.0, 54.0), 0.35).unwrap();
+        assert!((t - 48.4 / 53.65).abs() < 1e-9);
+
+        assert!(track_drift_tempo(54.4, (0.0, 54.0), -0.4).is_none());
+    }
+
+    #[test]
+    fn a_short_mic_stream_is_stretched_to_the_video_span() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("remux-short-mic");
+        let mkv = d.join("recording.mkv");
+        let reference = d.join("reference.mkv");
+        crate::syncprobe::make_reference(&mkv, 54, true, false, 0.0).unwrap();
+        crate::syncprobe::make_reference(&reference, 54, false, true, 0.0).unwrap();
+        let side = mic_sidecar(&mkv);
+        let ok = crate::proc::command(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-i"])
+            .arg(&reference)
+            .args(["-vn", "-af", "atempo=1.1157024793", "-c:a", "pcm_f32le", "-f", "matroska"])
+            .arg(&side)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let raw_duration = sample_duration(&side, "0:a:0").unwrap();
+        assert!((raw_duration - 48.4).abs() < 0.3, "{raw_duration}");
+
+        let joined = remux_to_mp4_info(&mkv).unwrap();
+        let result = crate::syncprobe::measure(&joined.path).unwrap();
+        assert!(result.pairs >= 50, "{result:?}");
+        assert!(result.offset_ms.abs() < 40.0, "{result:?}");
+        assert!(result.worst_ms < 50.0, "{result:?}");
+        assert!(result.drift_total_ms.abs() < 75.0, "{result:?}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
