@@ -1,8 +1,7 @@
-<p align="center"><img src="brand/icon.svg" width="128" height="128" alt="Booya logo"></p>
-
-<h1 align="center">booya</h1>
-
-<p align="center"><b>Record it. Booya.</b></p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme-header-dark.png">
+  <img alt="Booya, open source screen recorder" src="docs/brand/readme-header-light.png" width="100%">
+</picture>
 
 Booya is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
 
@@ -316,6 +315,10 @@ Done: blur boxes, a visual area picker with window snapping, webcam overlay, opt
 - Windows.Graphics.Capture (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.
 - Motion blur on the cursor (zoom and pan blur is done).
+
+## Brand
+
+The logo, app and tray icons, colours, fonts and guideline are in [`brand/`](brand/). Start with [`brand/README.md`](brand/README.md).
 
 ## License
 

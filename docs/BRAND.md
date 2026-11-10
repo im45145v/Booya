@@ -1,5 +1,5 @@
 # Booya brand
 
-The brand guideline lives in [`brand/GUIDELINES.md`](../brand/GUIDELINES.md): palette for light and dark, type, motion, voice and the icon assets.
+The brand kit lives in [`brand/`](../brand/): the guideline (PDF and HTML), logo and icon assets, design tokens and fonts. Read [`brand/README.md`](../brand/README.md) first.
 
-The UI tokens are at the top of `ui/style.css`. Videos you export keep their own presets and are not covered by the guideline.
+The app uses the tokens from `ui/styles/tokens.css`, which is a copy of `brand/tokens/tokens.css`. Videos you export keep their own presets and are not covered by the guideline.
