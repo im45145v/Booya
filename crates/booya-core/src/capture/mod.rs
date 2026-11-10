@@ -406,6 +406,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     // The camera warms up slowly, so it opens alongside the screen, not after
     // it. Both are stamped on the wall clock and aligned from those stamps.
     let cam_job = if opts.webcam { Some(CamJob::spawn(opts.out_dir.clone())) } else { None };
+    #[allow(clippy::type_complexity)]
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
         let _ = std::fs::remove_file(&mic_file);
@@ -559,6 +560,7 @@ fn webcam_input() -> Option<Vec<String>> {
 
 /// The webcam opening on its own thread. Dropped unfinished (the screen
 /// failed to start), it stops the camera again.
+#[allow(clippy::type_complexity)]
 struct CamJob(Option<std::thread::JoinHandle<(Option<(Child, f64)>, Vec<String>)>>);
 
 impl CamJob {
@@ -920,6 +922,7 @@ pub fn screen_index(video: &[AvDevice], display: u32) -> Option<u32> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // the platform backends follow
 mod tests {
     #[test]
     fn events_follow_a_video_that_was_recorded_smaller() {

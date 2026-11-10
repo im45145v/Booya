@@ -39,11 +39,7 @@ pub fn visual_changes(src: &Path) -> Result<Vec<f64>> {
     let mut buf = vec![0u8; W * H];
     let mut times = Vec::new();
     let mut n = 0usize;
-    loop {
-        match out.read_exact(&mut buf) {
-            Ok(()) => {}
-            Err(_) => break,
-        }
+    while out.read_exact(&mut buf).is_ok() {
         if let Some(p) = &prev {
             let changed = p.iter().zip(&buf).filter(|(a, b)| (**a as i16 - **b as i16).abs() > PIXEL_DELTA).count();
             if changed as f64 / (W * H) as f64 >= FRAME_SHARE {

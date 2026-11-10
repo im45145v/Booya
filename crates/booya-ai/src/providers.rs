@@ -445,11 +445,11 @@ pub fn speak(cfg: &CloudConfig, p: Provider, key: &str, text: &str) -> Result<Ve
         Provider::ElevenLabs => a
             .post(&format!("{base}{}", endpoint_path(p, Task::Tts, &model, cfg.voice.as_deref())))
             .header("xi-api-key", key)
-            .send_json(&json!({ "text": text, "model_id": model }))?,
+            .send_json(json!({ "text": text, "model_id": model }))?,
         _ => a
             .post(&format!("{base}/audio/speech"))
             .header("Authorization", &format!("Bearer {key}"))
-            .send_json(&json!({ "model": model, "input": text, "voice": cfg.voice.clone().unwrap_or_else(|| "alloy".into()), "response_format": "mp3" }))?,
+            .send_json(json!({ "model": model, "input": text, "voice": cfg.voice.clone().unwrap_or_else(|| "alloy".into()), "response_format": "mp3" }))?,
     };
     let status = r.status().as_u16();
     let bytes = r.body_mut().with_config().limit(200 * 1024 * 1024).read_to_vec()?;
@@ -468,6 +468,7 @@ pub(crate) mod tests {
 
     /// A tiny HTTP server that answers each request with the next canned
     /// response and records (request line, headers, body).
+    #[allow(clippy::type_complexity)]
     pub fn mock(responses: Vec<(u16, &'static str, Vec<u8>)>) -> (String, Arc<Mutex<Vec<(String, String, Vec<u8>)>>>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", l.local_addr().unwrap());

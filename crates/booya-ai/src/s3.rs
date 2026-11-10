@@ -148,7 +148,7 @@ pub fn presign_get(cfg: &S3Config, secret: &str, key: &str, expiry_s: u64, now: 
     let region = cfg.region();
     let scope = format!("{date}/{region}/s3/aws4_request");
     let path = object_path(cfg, key);
-    let mut q = vec![
+    let mut q = [
         ("X-Amz-Algorithm".to_string(), "AWS4-HMAC-SHA256".to_string()),
         ("X-Amz-Credential".into(), format!("{}/{scope}", cfg.access_key_id)),
         ("X-Amz-Date".into(), stamp.clone()),

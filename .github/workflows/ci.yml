@@ -31,6 +31,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+          components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-ggml
@@ -66,6 +67,12 @@ jobs:
         run: cargo test -p booya-core -p booya-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
+      - name: Clippy (booya-core on Linux, warnings are errors)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p booya-core --all-targets -- -D warnings
+      - name: Clippy (whole workspace, report only for now)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets
       - name: Sound against picture, every stage that works on files
         shell: bash
         run: |

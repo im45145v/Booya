@@ -29,11 +29,7 @@ pub struct Pcm {
 
 impl Pcm {
     pub fn frames(&self) -> usize {
-        if self.channels == 0 {
-            0
-        } else {
-            self.data.len() / self.channels
-        }
+        self.data.len().checked_div(self.channels).unwrap_or(0)
     }
     pub fn seconds(&self) -> f64 {
         if self.rate == 0 {
@@ -74,7 +70,7 @@ pub fn decode(path: &Path, channels: usize, rate: u32, max_secs: f64) -> Result<
     if !out.status.success() {
         bail!("could not read the sound file: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""));
     }
-    let data: Vec<i16> = out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+    let data: Vec<i16> = out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
     if data.is_empty() {
         bail!("the sound file has no audio in it");
     }

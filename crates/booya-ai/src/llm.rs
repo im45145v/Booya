@@ -5,6 +5,7 @@
 //! 3. a llama.cpp server already running on 127.0.0.1:8080
 //! 4. the managed llama.cpp runtime plus a GGUF model from the model manager,
 //!    started on a free port for the duration of the job.
+//!
 //! Nothing is sent off the machine unless the user points
 //! `BOOYA_LLM_URL` at a remote https server and sets
 //! `BOOYA_ALLOW_REMOTE_LLM=1`; the app then asks before each use.
