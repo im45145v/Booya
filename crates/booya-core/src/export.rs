@@ -429,21 +429,65 @@ impl Drop for KillOnDrop {
     }
 }
 
+/// Refuse an export that would write over one of the files it reads. ffmpeg
+/// truncates its output first, so exporting an imported `demo.mp4` back onto
+/// `demo.mp4` destroyed the recording halfway through reading it.
+pub fn check_output_is_not_an_input(project: &Project, out: &Path) -> Result<()> {
+    let mut inputs: Vec<&Path> = vec![project.source.as_path()];
+    if let Some(w) = project.webcam.as_ref() {
+        inputs.push(&w.path);
+    }
+    if let Some(m) = project.music.as_ref() {
+        inputs.push(&m.path);
+    }
+    if let crate::project::Background::Image { path } = &project.style.background {
+        inputs.push(path);
+    }
+    for i in inputs.into_iter().filter(|i| !i.as_os_str().is_empty()) {
+        if crate::fsutil::same_file(i, out) {
+            bail!("{} is one of the files this project uses. Export to a new name so the original is kept", out.display());
+        }
+    }
+    Ok(())
+}
+
 pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
     export_inner(project, out, enc, progress, &AtomicBool::new(false))
 }
 
 fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64), cancel: &AtomicBool) -> Result<ExportStats> {
     project.validate()?;
+    check_output_is_not_an_input(project, out)?;
     if cancel.load(Ordering::SeqCst) {
         return Err(Cancelled.into());
-    }
-    if passthrough_ok(project) {
-        return export_passthrough(project, out, progress);
     }
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
+    // Encode next to the destination and move it into place only when ffmpeg
+    // finished. A full disk, a cancel or a crash used to leave a broken file
+    // under the user's name, and replaced last week's good export with it.
+    let staged = crate::fsutil::Staged::new(out);
+    let stats = if passthrough_ok(project) {
+        export_passthrough(project, staged.path(), progress)?
+    } else {
+        export_encoded(project, staged.path(), enc, progress, cancel)?
+    };
+    staged.commit()?;
+    Ok(stats)
+}
+
+/// Removes the private scratch folder however the export ends.
+struct RemoveDirOnDrop(Option<std::path::PathBuf>);
+impl Drop for RemoveDirOnDrop {
+    fn drop(&mut self) {
+        if let Some(d) = self.0.take() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64), cancel: &AtomicBool) -> Result<ExportStats> {
     let s = &project.export;
     let (ow, oh) = s.aspect.size(s.quality);
     let fps = s.fps.clamp(1, 60) as f64;
@@ -492,6 +536,9 @@ fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, prog
     // it as the audio input instead of the original.
     let mut audio_input = project.source.clone();
     let tmp = if voice && project.audio.denoise { Some(private_tmp()?) } else { None };
+    // A decode error halfway used to return early and leave the denoised
+    // copy of the whole sound track in the temp folder.
+    let _scratch = RemoveDirOnDrop(tmp.clone());
     if let Some(t) = &tmp {
         let denoised = t.join("denoised.wav");
         crate::audio::denoise_file(&project.source, &denoised)?;
@@ -550,13 +597,10 @@ fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, prog
     cmd.arg(ffmpeg::file_url(out));
     // Cleaning the sound and measuring its loudness can take a while.
     if cancel.load(Ordering::SeqCst) {
-        if let Some(t) = &tmp {
-            let _ = std::fs::remove_dir_all(t);
-        }
         return Err(Cancelled.into());
     }
     let mut guard = KillOnDrop(Some(cmd.stdin(Stdio::null()).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg encoder")?));
-    let stdin = guard.0.as_mut().unwrap().stdin.take().unwrap();
+    let stdin = guard.0.as_mut().and_then(|c| c.stdin.take()).context("could not talk to the ffmpeg encoder")?;
     // Frames go to the encoder from their own thread, so the next frame is
     // drawn while ffmpeg takes the last one.
     let mut stdin = FrameWriter::new(stdin);
@@ -653,21 +697,15 @@ fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, prog
         // Stop the encoder before it finishes a short file, wait for it to
         // let go of the file (Windows keeps it locked until then), and
         // remove what it wrote.
-        let mut child = guard.0.take().unwrap();
+        let mut child = guard.0.take().context("the encoder is gone")?;
         let _ = child.kill();
         drop(stdin);
         let _ = child.wait();
         remove_soon(out);
-        if let Some(t) = tmp {
-            let _ = std::fs::remove_dir_all(t);
-        }
         return Err(Cancelled.into());
     }
     stdin.finish();
-    let res = guard.0.take().unwrap().wait_with_output()?;
-    if let Some(t) = tmp {
-        let _ = std::fs::remove_dir_all(t);
-    }
+    let res = guard.0.take().context("the encoder is gone")?.wait_with_output()?;
     if !res.status.success() {
         bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&res.stderr));
     }
@@ -677,6 +715,51 @@ fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, prog
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("booya-export-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn exporting_onto_the_source_is_refused_and_the_source_kept() {
+        let d = scratch("onto-source");
+        let src = d.join("My Demo é.mp4");
+        std::fs::write(&src, vec![7u8; 4096]).unwrap();
+        let mut p = Project::new(src.clone(), None, 1280, 720, 5_000.0);
+        let err = export(&p, &src, |_| {}).unwrap_err().to_string();
+        assert!(err.contains("Export to a new name"), "{err}");
+        assert_eq!(std::fs::read(&src).unwrap().len(), 4096, "the recording is untouched");
+        // The same file through another spelling of the path.
+        let other = d.join(".").join("My Demo é.mp4");
+        assert!(check_output_is_not_an_input(&p, &other).is_err());
+        // The music and the camera are inputs too.
+        let song = d.join("song.mp4");
+        std::fs::write(&song, b"x").unwrap();
+        p.music = Some(crate::project::Music::new(song.clone()));
+        assert!(check_output_is_not_an_input(&p, &song).is_err());
+        assert!(check_output_is_not_an_input(&p, &d.join("export.mp4")).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_failed_export_keeps_the_previous_file_and_leaves_no_partial_one() {
+        let d = scratch("failed");
+        // Not a video at all, so the export fails after it has started.
+        let src = d.join("broken.mkv");
+        std::fs::write(&src, b"not a video").unwrap();
+        let mut p = Project::new(src, None, 1280, 720, 5_000.0);
+        p.zoom.push(crate::zoom::ZoomSegment { start_ms: 0.0, end_ms: 2_000.0, scale: 2.0, follow_cursor: false, focus: (640.0, 360.0), reason: "manual".into() });
+        let out = d.join("demo.mp4");
+        std::fs::write(&out, b"last good export").unwrap();
+        assert!(export(&p, &out, |_| {}).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"last good export");
+        let names: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.contains("booya-part")), "{names:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn webcam_offset_delays_camera_frames_instead_of_cancelling_out() {

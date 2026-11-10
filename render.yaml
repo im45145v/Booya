@@ -1,11 +1,87 @@
+# Render Blueprint for the Booya website (site/).
+# Steps to connect it and point a .tech domain at it: docs/DEPLOY_SITE.md
 services:
   - type: web
-    name: booya-site
     runtime: static
-    rootDir: site
-    buildCommand: echo "static site"
-    staticPublishPath: .
+    name: booya-site
+    # No Node or npm needed. build.sh copies site/ to site/dist, fills in the
+    # site URL and adds content hashes to the CSS and JS file names.
+    buildCommand: sh site/build.sh
+    staticPublishPath: ./site/dist
+    autoDeployTrigger: commit
+    # Only rebuild when the site or this file changes, not on every Rust commit.
+    buildFilter:
+      paths:
+        - site/**
+        - render.yaml
+      ignoredPaths:
+        - site/dist/**
+    previews:
+      generation: automatic
+    envVars:
+      # Your public URL with no trailing slash, for example https://booya.tech.
+      # Used for the canonical link, Open Graph tags, sitemap and robots.txt.
+      # Leave it empty until the domain works; the onrender.com URL is used then.
+      - key: SITE_URL
+        sync: false
+    # Uncomment once you own the domain, or add it in the dashboard instead.
+    # Render adds the www. version and redirects it to the root.
+    # domains:
+    #   - YOUR-DOMAIN.tech
     headers:
+      # Security
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com; manifest-src 'self'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests"
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
       - path: /*
         name: X-Content-Type-Options
         value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      # Caching. HTML keeps Render's default (revalidate, and every deploy
+      # clears the CDN), so only the static files get long lifetimes here.
+      # CSS and JS have a content hash in the name, so they never change.
+      - path: /styles/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /scripts/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /fonts/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /img/*
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /*.png
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /*.svg
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /*.ico
+        name: Cache-Control
+        value: public, max-age=604800
+    routes:
+      - type: redirect
+        source: /download
+        destination: /#download
+      - type: redirect
+        source: /github
+        destination: https://github.com/im45145v/Booya
+      - type: redirect
+        source: /releases
+        destination: https://github.com/im45145v/Booya/releases/latest

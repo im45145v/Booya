@@ -1,6 +1,7 @@
-/* Booya tokens. Light by default, dark via prefers-color-scheme, and [data-theme] wins over both. */
-@font-face { font-family: 'Geist'; src: url('../fonts/Geist-Variable.ttf') format('truetype'); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: 'Geist Mono'; src: url('../fonts/GeistMono-Variable.ttf') format('truetype'); font-weight: 100 900; font-display: swap; }
+/* Booya tokens, copied from brand/tokens/tokens.css. The only change for the site: the fonts are Latin subset WOFF2 files.
+   Booya tokens. Light by default, dark via prefers-color-scheme, and [data-theme] wins over both. */
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-latin.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'Geist Mono'; src: url('../fonts/GeistMono-latin.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
 
 :root {
   --by-font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;

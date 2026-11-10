@@ -857,7 +857,8 @@ impl Project {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+        // Never truncate the old project before the new one is safely written.
+        crate::fsutil::write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
 
