@@ -3,6 +3,8 @@
   <img alt="Booya, open source screen recorder" src="docs/brand/readme-header-light.png" width="100%">
 </picture>
 
+<p align="center"><a href="https://github.com/im45145v/Booya/releases/latest">Download</a> · <a href="#quick-start">Quick start</a> · <a href="#install">Install</a> · <a href="#troubleshooting">Troubleshooting</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
+
 Booya is a free, open source screen recorder for product demos, for Windows, macOS and Linux. It does what Screen Studio does (zoom in on clicks, smooth the cursor, put the video on a styled background) but runs on your own computer. There is no account and no telemetry. By default the only network use is downloading the optional models when you ask for them. Cloud providers and uploads exist but stay off until you turn them on.
 
 While you record, Booya writes the cursor, clicks and key presses to a file next to the video. The editor uses that file to zoom on the right spots, draw a clean cursor and show key presses. Export to MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.
@@ -19,30 +21,86 @@ Screenshots of the app in this README come from the real interface running in a 
 
 ## Quick start
 
-1. Download the installer for your OS from [Releases](https://github.com/im45145v/Booya/releases) (`.msi` or `.exe` on Windows, `.dmg` on macOS, `.deb` or `.AppImage` on Linux). ffmpeg is included, so there is nothing else to install.
-2. Open Booya and click **Try the sample**, or **Record screen**.
-3. Open the **Auto edit** tab and click **Run auto edit**. It adds zooms, captions, cuts filler words and pauses, blurs secrets and removes noise. Each step reports what it did, and Ctrl+Z undoes all of it.
-4. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
+1. Download the file for your system from the [latest release](https://github.com/im45145v/Booya/releases/latest). The [Install](#install) table says which one to pick.
+2. Open it. Booya isn't signed with a paid certificate yet, so macOS or Windows warns you the first time. [Install](#install) shows how to get past that in two clicks.
+3. Click **Try the sample** to see what Booya does without recording anything, or **Record screen** to start.
+4. Stop the recording, open the **Auto edit** tab and click **Run auto edit**. It adds zooms and captions, cuts filler words and pauses, blurs secrets and removes noise. Each step reports what it did, and Ctrl+Z (Cmd+Z on a Mac) undoes all of it.
+5. Pick a template in **Style**, then a destination in **Export** (YouTube, X, Reels, a README GIF).
 
-Press `?` in the app for all keyboard shortcuts.
+Press `?` in the app for all keyboard shortcuts. Recordings are saved in `Videos/Booya` (`Movies/Booya` on a Mac).
+
+## Install
+
+Every release has these files. ffmpeg is bundled, so you don't need to install anything else.
+
+| System | File | Notes |
+|---|---|---|
+| macOS, Apple Silicon | `Booya_<version>_aarch64.dmg` | macOS 12.3 or newer. Intel Macs can [build from source](#building) for now |
+| Windows 10 and 11, 64-bit | `Booya_<version>_x64-setup.exe` | The one most people want |
+| Windows, managed installs | `Booya_<version>_x64_en-US.msi` | For Intune, Group Policy or `msiexec /qn` |
+| Linux, any distro | `Booya_<version>_amd64.AppImage` | Runs without installing and updates itself |
+| Debian, Ubuntu, Mint | `Booya_<version>_amd64.deb` | Update it through apt |
+| Fedora, RHEL, openSUSE | `Booya-<version>-1.x86_64.rpm` | Update it through dnf or zypper |
+| Command line only | `booya-cli-<os>.tar.gz` or `.zip` | The `booya` tool without the editor |
+
+### macOS
+
+1. Open the `.dmg` and drag Booya into **Applications**.
+2. The app is signed ad hoc, not with a paid Apple Developer ID, so Gatekeeper blocks it the first time. Use any one of these:
+   - Right click (or Control click) Booya in Applications, choose **Open**, then **Open** again.
+   - Or try to open it once, then go to **System Settings > Privacy & Security**, scroll down and click **Open Anyway**.
+   - Or, if macOS says the app "is damaged and can't be opened", run this in Terminal and open it again:
+
+     ```sh
+     xattr -cr /Applications/Booya.app
+     ```
+
+     This removes the download quarantine flag that your browser added. The app is not actually damaged.
+3. The first time you record, macOS asks for **Screen & System Audio Recording** and, with the mic on, **Microphone** access. Allow both, then quit and reopen Booya if macOS asks you to. You can change this later in **System Settings > Privacy & Security**.
+
+### Windows
+
+1. Download `Booya_<version>_x64-setup.exe`. If Edge says the file "isn't commonly downloaded", click the **...** next to it, then **Keep**, then **Show more** and **Keep anyway**.
+2. Run it. Windows SmartScreen may show **Windows protected your PC**, because the installer isn't signed with a paid code signing certificate yet. Click **More info**, check that the app name is the Booya installer you just downloaded, then click **Run anyway**.
+3. Follow the installer. On Windows 10 without WebView2 it downloads WebView2 for you. Windows 11 already has it.
+4. If the microphone stays silent, open **Settings > Privacy & security > Microphone** and turn on **Let desktop apps access your microphone**.
+
+The `.msi` installs silently with `msiexec /i Booya_<version>_x64_en-US.msi /qn`.
+
+### Linux
+
+Booya records on X11. On Wayland, pick the X11 session on the login screen (on Ubuntu, click the gear and choose **Ubuntu on Xorg**). Wayland support is on the [roadmap](#roadmap).
+
+AppImage:
+
+```sh
+chmod +x Booya_*_amd64.AppImage
+./Booya_*_amd64.AppImage
+```
+
+If it complains about FUSE, install it with `sudo apt install libfuse2` (Ubuntu 22.04) or `sudo apt install libfuse2t64` (Ubuntu 24.04 and newer).
+
+Debian and Ubuntu:
+
+```sh
+sudo apt install ./Booya_*_amd64.deb
+```
+
+Fedora:
+
+```sh
+sudo dnf install ./Booya-*.x86_64.rpm
+```
+
+On a touch screen, taps count as clicks for auto zoom on X11 and Windows. Touch support is new and so far only checked by automated tests, not on a range of real touch screens, so please [tell us](https://github.com/im45145v/Booya/issues/new/choose) how it behaves on yours.
+
+### Updates
+
+Booya checks the latest GitHub release when it starts (you can turn that off) and shows a banner when there is a new version. Updates are signed and checked before anything is replaced. A `.deb` or `.rpm` install can't replace itself, so update those through your package manager. Details are in [docs/UPDATES.md](docs/UPDATES.md).
+
+### ffmpeg
 
 Booya looks for ffmpeg in this order: the copy bundled with the app, your PATH, then common folders such as `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. If none works, it shows the one line install command for your OS (`brew install ffmpeg`, `winget install Gyan.FFmpeg` or `sudo apt install ffmpeg`). Licenses for the bundled ffmpeg are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the app under About.
-
-### Opening Booya on macOS
-
-The macOS app is signed ad hoc, not with a paid Apple Developer ID, so Gatekeeper blocks it the first time. Use any one of these:
-
-- Right click (or Control click) Booya in Applications, choose **Open**, then **Open** again.
-- Or try to open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**.
-- Or, if macOS says the app "is damaged and can't be opened", run this in Terminal and open it again:
-
-  ```sh
-  xattr -cr /Applications/Booya.app
-  ```
-
-  This removes the download quarantine flag that your browser added. The app is not actually damaged.
-
-The first time you record, macOS asks for **Screen & System Audio Recording** and, with the mic on, **Microphone** access. Allow both, then quit and reopen Booya if macOS asks you to. You can change this later in System Settings > Privacy & Security.
 
 ## Why Booya
 
@@ -146,7 +204,7 @@ Open **Models...** in the app (or run `booya models list`) to see, download and 
 
 What each feature does:
 
-- **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (with size control) or exported as SRT or VTT. Words you cut never show up.
+- **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (as a boxed line, an outlined line, or a few big words at a time for short videos, at the bottom, middle or top, in any size) or exported as SRT or VTT. Words you cut never show up.
 - **Auto cut**: removes filler words (um, uh) and pauses longer than a threshold you choose. Each cut is a normal clip edit, so undo works.
 - **Auto blur secrets**: samples frames (skipping frames that did not change), reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), bearer tokens, card numbers (Luhn checked), phone numbers, Aadhaar (Verhoeff checked), PAN, UPI IDs, IBANs (mod 97), IP addresses and password fields. It can miss text: watch the export before sharing.
 - **Write docs**: builds steps from the transcript, clicks, typing and zooms, then writes a title, YouTube style chapters, a Markdown guide and a short social post. With no LLM it falls back to a rule based writer.
@@ -216,6 +274,30 @@ booya doctor --seconds 5
 It reports the Screen Recording permission, the displays ScreenCaptureKit sees (macOS), the ffmpeg in use, and a short test capture (file size, frame count, resolution). `next_steps` says what to fix. On macOS the permission belongs to the app that launched the command, so allow your terminal under System Settings > Privacy & Security > Screen & System Audio Recording.
 
 The macOS build is ad-hoc signed, so each update is a new app identity to macOS. If recording stops after an update, remove Booya from the Screen Recording list, add it again, and reopen the app.
+
+## Troubleshooting
+
+**macOS says Booya is damaged, or can't be opened.** See [Install, macOS](#macos). The short version is `xattr -cr /Applications/Booya.app`.
+
+**Recording stops working on macOS after an update.** The ad hoc signature changes with every build, so macOS sees a new app. Open **System Settings > Privacy & Security > Screen & System Audio Recording**, remove Booya with the minus button, add it again and reopen Booya. Do the same under Microphone and Input Monitoring if those stopped too.
+
+**Windows says "Windows protected your PC".** Click **More info**, then **Run anyway**. See [Install, Windows](#windows).
+
+**The video is black, or nothing is captured on Linux.** You are probably on Wayland. Log out and pick the X11 (Xorg) session.
+
+**The AppImage won't start.** Install FUSE (`libfuse2`, or `libfuse2t64` on Ubuntu 24.04), then run it from a terminal to see the error.
+
+**The microphone is silent.** Run `booya doctor --audio`. It records 3 seconds and prints the level. On Windows, set `BOOYA_MIC` to the device name it lists if the wrong mic is picked. On macOS, check that Booya is allowed under **Microphone** in Privacy & Security. The ffmpeg output for each recording is in `audio.log` in its project folder.
+
+**Sound and picture drift apart.** Record a short take and clap at the start, middle and end. If the claps don't line up, open an [issue](https://github.com/im45145v/Booya/issues/new/choose) with your OS, the Booya version and the `microphone clock:` line from `audio.log`.
+
+**Captions don't appear.** Captions need a Whisper model. Open **Models...** in the app and download Whisper base.en, or run `booya models download whisper-base.en`. After that they work offline.
+
+**Nothing records at all.** Run `booya doctor`. It checks permissions, the displays it can see and ffmpeg, makes a short test capture and says what to fix next. See [Is capture working?](#is-capture-working-booya-doctor).
+
+**"ffmpeg not found".** The bundled copy should always be found. If it isn't, install ffmpeg with the command the app shows, or see [ffmpeg](#ffmpeg).
+
+Still stuck? Open an [issue](https://github.com/im45145v/Booya/issues/new/choose). The bug report form asks for what we need.
 
 ## Building
 
@@ -307,7 +389,7 @@ Run the tests with `cargo test -p booya-core -p booya-ai`.
 
 Done: blur boxes, a visual area picker with window snapping, webcam overlay, optional cloud providers and storage, auto edit, templates, glass frame and glass app look, configurable recording shortcuts, markers, installers for all three systems, local captions, auto cut, blur of sensitive text, noise cleanup, a local docs writer, undo and redo.
 
-- Bundled ffmpeg and signed builds.
+- Signed builds: a paid Apple Developer ID for macOS and a code signing certificate for Windows, so Gatekeeper and SmartScreen stop warning. ffmpeg is already bundled in every installer.
 - Wayland capture through the PipeWire portal (Wayland is not supported yet; use an X11 session).
 - Intel Mac builds. The release ships Apple Silicon only; Intel Macs can build from source with `cargo build --release --target x86_64-apple-darwin`.
 - Local voiceover with Piper, to replace or fix narration.
@@ -315,6 +397,10 @@ Done: blur boxes, a visual area picker with window snapping, webcam overlay, opt
 - Windows.Graphics.Capture (Windows).
 - GPU rendering (wgpu) for faster 4K export and live playback in the editor.
 - Motion blur on the cursor (zoom and pan blur is done).
+
+## Contributing
+
+Bug reports, fixes and ideas are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a pull request. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## Brand
 

@@ -26,3 +26,6 @@ ureq = { version = "3", features = ["json"] }
 whisper-rs = { version = "0.16", optional = true }
 ocrs = { version = "0.13", optional = true }
 rten = { version = "0.26", optional = true }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

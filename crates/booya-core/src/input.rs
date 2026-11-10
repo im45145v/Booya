@@ -96,6 +96,8 @@ impl Shared {
 
 pub struct InputLogger {
     shared: Arc<Mutex<Shared>>,
+    // Read only where there is a key watcher to start (macOS, or the hook helper).
+    #[cfg_attr(not(any(target_os = "macos", feature = "input-hooks")), allow(dead_code))]
     keys: KeyLogging,
     hook: Option<std::process::Child>,
     poller: Option<std::thread::JoinHandle<()>>,
@@ -141,10 +143,12 @@ impl InputLogger {
         {
             self.hook = keyhook::spawn(self.shared.clone(), self.keys != KeyLogging::Off);
         }
-        if self.keys == KeyLogging::Off {
-        }
+        // macOS has no wheel only mode: the key watcher is the event tap, and
+        // it (and the Input Monitoring prompt) only starts when key logging
+        // was switched on. The clippy cleanup once removed the early return
+        // here, which turned key logging on for every macOS recording.
         #[cfg(target_os = "macos")]
-        {
+        if self.keys != KeyLogging::Off {
             self.keypoll = mac_keys::spawn(self.shared.clone());
         }
     }
@@ -354,7 +358,7 @@ mod keyhook {
         #[cfg(windows)]
         {
             // Windows virtual-key codes.
-            return Some(match code {
+            Some(match code {
                 0xAD => "Mute".into(),
                 0xAE => "VolumeDown".into(),
                 0xAF => "VolumeUp".into(),
@@ -364,7 +368,7 @@ mod keyhook {
                 0xB3 => "PlayPause".into(),
                 0x7C..=0x87 => format!("F{}", code - 0x7C + 13),
                 _ => return None,
-            });
+            })
         }
         #[cfg(not(windows))]
         {
@@ -932,7 +936,7 @@ mod mac_tap {
         let now_ms = st.start.elapsed().as_secs_f64() * 1000.0;
         let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) };
         let flags = unsafe { CGEventGetFlags(event) };
-        let mut push = |kind: crate::events::EventKind| {
+        let push = |kind: crate::events::EventKind| {
             if let Ok(mut g) = st.shared.lock() {
                 g.push(now, kind);
             }
@@ -1082,6 +1086,19 @@ mod mac_keys {
 mod tests {
     use super::{classify, KeyLogging};
     use crate::events::PRINTABLE;
+
+    /// Key logging is off unless the user switches it on. On macOS that
+    /// means no key event tap and no Input Monitoring prompt at all.
+    #[test]
+    fn with_key_logging_off_no_key_watcher_starts() {
+        let mut l = super::InputLogger::idle();
+        assert_eq!(l.keys, KeyLogging::Off);
+        l.start_hook();
+        assert!(l.keypoll.is_none(), "a key watcher started with key logging off");
+        #[cfg(target_os = "macos")]
+        assert!(l.hook.is_none());
+        l.stop_hook();
+    }
     #[test]
     fn mac_key_codes_map_to_names_and_modifiers() {
         use super::mackeys;

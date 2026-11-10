@@ -228,12 +228,14 @@ impl MicMeter {
             // In process, the same way the recording opens the device.
             let on_level = std::sync::Mutex::new(on_level);
             match super::wasapi::meter(name.map(str::to_string), move |r, p| (on_level.lock().unwrap())(r, p)) {
-                Ok(w) => return Ok(Self { child: None, stop: Arc::new(AtomicBool::new(false)), _wasapi: Some(w) }),
-                Err(_) => return Err(anyhow!("the microphone could not be opened for the level meter")),
+                Ok(w) => Ok(Self { child: None, stop: Arc::new(AtomicBool::new(false)), _wasapi: Some(w) }),
+                Err(_) => Err(anyhow!("the microphone could not be opened for the level meter")),
             }
         }
         #[cfg(not(windows))]
-        Self::start_ffmpeg(name, on_level)
+        {
+            Self::start_ffmpeg(name, on_level)
+        }
     }
 
     #[cfg(not(windows))]

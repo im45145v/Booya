@@ -1,0 +1,85 @@
+name: Bug report
+description: Something doesn't work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time. For security problems, please follow SECURITY.md instead of filing here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+      placeholder: I recorded a 2 minute take with the mic on. The captions run about half a second behind my voice by the end.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Booya
+        2. Click Record screen
+        3. ...
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - Windows 11
+        - Windows 10
+        - Linux (X11)
+        - Linux (Wayland)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: macOS 15.1, Windows 11 24H2, Ubuntu 24.04
+  - type: input
+    id: version
+    attributes:
+      label: Booya version
+      description: Settings > About and updates, or `booya --version`.
+      placeholder: v0.7.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - .dmg
+        - setup .exe
+        - .msi
+        - AppImage
+        - .deb
+        - .rpm
+        - Built from source
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Which part is affected
+      options:
+        - label: Recording or capture
+        - label: Sound, camera or caption sync
+        - label: Auto zoom
+        - label: Captions or other local models
+        - label: Touch screen
+        - label: Editor
+        - label: Export
+        - label: Install or update
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: For sound or sync problems, paste `audio.log` from the recording's project folder (at least the `microphone clock:` line). For capture problems, paste the output of `booya doctor`.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a short clip, your hardware (mic, camera, touch screen model).
