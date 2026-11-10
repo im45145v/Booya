@@ -27,7 +27,7 @@ Auto edit can be cancelled while it is running. Cancellation is checked between 
 
 ## Background and camera framing
 
-**Style tab > Background > None** removes the wallpaper and uses a plain black canvas (exports are opaque, not transparent). Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
+**Style tab > Background > None** exports just the recording and the camera: no wallpaper, and the padding, corners, shadow, glass and device frame are cleared so the recording fills the frame. Undo brings them back, and you can still add padding afterwards, which shows as black (exports are opaque, not transparent). The **No background** template does the same in one click. Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
 
 ## Callouts (short notes on the video)
 

@@ -176,7 +176,18 @@ function setBgType(t) {
   $('bg-colors').hidden = t === 'image' || t === 'mesh' || t === 'none'; $('bg-image-row').hidden = t !== 'image';
   if (typeof markWall === 'function') markWall();
 }
-document.querySelectorAll('.seg button[data-bg]').forEach(b => (b.onclick = () => { setBgType(b.dataset.bg); if (project) { readPanel(); refresh(); } }));
+// None means just the recording (and the camera), so the frame goes too. Undo brings it back.
+function clearFrame() {
+  const was = +$('padding').value || +$('radius').value || +$('shadow').value || $('gl-on').checked || $('frame-sel').value !== 'none';
+  $('padding').value = 0; $('radius').value = 0; $('shadow').value = 0; $('gl-on').checked = false; $('frame-sel').value = 'none';
+  return was;
+}
+document.querySelectorAll('.seg button[data-bg]').forEach(b => (b.onclick = () => {
+  setBgType(b.dataset.bg); if (!project) return;
+  const cleared = b.dataset.bg === 'none' && clearFrame();
+  readPanel(); markTemplate(); refresh();
+  if (cleared) status('No background: the recording fills the frame. Undo to get the padding, corners and shadow back.');
+}));
 function setFit(f) { $('bg-fit-seg').dataset.fit = f; document.querySelectorAll('#bg-fit-seg button').forEach(b => b.setAttribute('aria-checked', b.dataset.fit === f)); }
 document.querySelectorAll('#bg-fit-seg button').forEach(b => (b.onclick = () => { setFit(b.dataset.fit); if (project) { readPanel(); refresh(); } }));
 async function useBackground(path) {
