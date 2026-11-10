@@ -672,11 +672,12 @@ fn cancel_countdown(app: tauri::AppHandle) {
 #[tauri::command]
 fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
     let state = app.state::<AppState>();
-    let slot = state.recording.lock().unwrap();
-    match &*slot {
+    let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
+    match &mut *slot {
         Some(RecSlot::Running(s)) => serde_json::json!({
             "recording": true, "paused": s.is_paused(),
             "elapsed_ms": s.elapsed().as_millis() as u64, "paused_ms": s.paused().as_millis() as u64,
+            "failed": s.failure(),
         }),
         Some(RecSlot::Starting) => serde_json::json!({ "recording": false, "starting": true }),
         None => serde_json::json!({ "recording": false }),
@@ -1623,7 +1624,11 @@ fn reveal(app: tauri::AppHandle, path: String) -> R<()> {
     #[cfg(target_os = "macos")]
     let r = booya_core::proc::command("open").arg("-R").arg(&p).spawn();
     #[cfg(target_os = "windows")]
-    let r = booya_core::proc::command("explorer").arg(format!("/select,{}", p.display())).spawn();
+    let r = {
+        use std::os::windows::process::CommandExt;
+        // Explorer parses its own command line; see explorer_select_arg.
+        booya_core::proc::command("explorer").raw_arg(booya_core::proc::explorer_select_arg(&p)).spawn()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let r = booya_core::proc::command("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
     r.map(|_| ()).map_err(e)

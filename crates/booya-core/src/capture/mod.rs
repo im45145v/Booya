@@ -172,6 +172,8 @@ pub struct RecordingSession {
     dir: PathBuf,
     /// The folder did not exist before this recording (so an empty result may delete it).
     created: bool,
+    /// Set once the screen recorder is found to have exited on its own.
+    failed: Option<String>,
 }
 
 pub struct Recording {
@@ -467,6 +469,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
     }
     let mut warnings = plan.warnings;
+    warnings.extend(crate::storage::low_space_warning(crate::storage::free_bytes(&opts.out_dir)));
     // The microphone and system audio each open their own recorder. Doing
     // that one after the other is most of the wait before a recording feels
     // started, so they open together, alongside the camera.
@@ -523,7 +526,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         None => (None, 0.0),
     };
     fresh.keep = true;
-    Ok(RecordingSession { child, feed, webcam, epoch, webcam_epoch, armed_at: None, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created,
+    Ok(RecordingSession { child, feed, webcam, epoch, webcam_epoch, armed_at: None, mic, mic_verdict: None, sys, logger, started, stderr: err, video, events, region: plan.region, warnings, dir: opts.out_dir.clone(), created: fresh.created, failed: None,
     })
 }
 
@@ -677,6 +680,21 @@ impl Drop for RecordingSession {
     }
 }
 
+/// What to tell the user when the screen recorder exits mid recording.
+fn failure_message(stderr: &str, at: Duration) -> String {
+    let s = at.as_secs();
+    let when = format!("{}:{:02}", s / 60, s % 60);
+    let low = stderr.to_ascii_lowercase();
+    if low.contains("no space left") || low.contains("disk full") || low.contains("not enough space") || low.contains("there is not enough space") {
+        format!("The disk is full, so recording stopped at {when}. Stop to keep what was recorded, then free some space.")
+    } else if low.contains("permission denied") || low.contains("access is denied") {
+        format!("Booya lost permission to write the recording at {when}. Stop to keep what was recorded.")
+    } else {
+        let detail = first_line(stderr);
+        format!("The screen recorder stopped at {when} ({detail}). Stop to keep what was recorded.")
+    }
+}
+
 fn first_line(s: &str) -> String {
     let l = s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("ffmpeg exited");
     // Drop ffmpeg's "[in#1 @ 0x55...]" prefix.
@@ -694,6 +712,20 @@ impl RecordingSession {
 
     pub fn is_paused(&self) -> bool {
         self.logger.is_paused()
+    }
+
+    /// Why the screen recorder stopped on its own (the disk filled up, the
+    /// display went away, ffmpeg crashed), or None while it is still going.
+    /// Until now that was only found out at Stop, maybe half an hour later.
+    /// What was written before it stopped is kept, and Stop still opens it.
+    pub fn failure(&mut self) -> Option<String> {
+        if self.failed.is_none() {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                let err = self.stderr.lock().map(|e| e.clone()).unwrap_or_default();
+                self.failed = Some(failure_message(&err, self.elapsed().saturating_sub(self.paused())));
+            }
+        }
+        self.failed.clone()
     }
 
     /// Drop a marker at the cursor. False while paused.
@@ -755,6 +787,8 @@ impl RecordingSession {
     pub fn stop(mut self) -> Result<Recording> {
         // "q" makes ffmpeg finish the file cleanly. If it does not exit in
         // time (a stuck device), kill it: Matroska keeps what was written.
+        // Asked before anything is stopped, so a normal exit is not mistaken for it.
+        let died = self.failure();
         let fed = self.feed.take().is_some(); // stops the capture, closes ffmpeg's stdin
         // Stop the event log with the last frame. The flush below can take a
         // second or two, and clicks logged during it land after the video.
@@ -783,7 +817,7 @@ impl RecordingSession {
             eprintln!("booya: ffmpeg did not stop on q, it was killed");
         }
         let audio_log = self.dir.join("audio.log");
-        let mut warnings: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = died.into_iter().collect();
         if let Some(w) = self.mic_verdict.as_ref().and_then(|v| v.message()) {
             warnings.push(w);
         }
@@ -924,6 +958,18 @@ pub fn screen_index(video: &[AvDevice], display: u32) -> Option<u32> {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)] // the platform backends follow
 mod tests {
+    #[test]
+    fn a_recorder_that_dies_says_why_and_when() {
+        use std::time::Duration;
+        let m = super::failure_message("[out#0/matroska @ 0x1] Error writing trailer: No space left on device", Duration::from_secs(754));
+        assert!(m.starts_with("The disk is full") && m.contains("12:34"), "{m}");
+        let m = super::failure_message("av_interleaved_write_frame(): Permission denied", Duration::from_secs(5));
+        assert!(m.contains("permission") && m.contains("0:05"), "{m}");
+        let m = super::failure_message("[avfoundation @ 0x2] Display disconnected\n", Duration::from_secs(61));
+        assert!(m.contains("1:01") && m.contains("Display disconnected") && !m.contains("0x2"), "{m}");
+        assert!(super::failure_message("", Duration::ZERO).contains("ffmpeg exited"));
+    }
+
     #[test]
     fn events_follow_a_video_that_was_recorded_smaller() {
         use crate::events::{scale_coords, Event, EventKind};

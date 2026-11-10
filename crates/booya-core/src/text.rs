@@ -29,6 +29,26 @@ pub fn measure(text: &str, px: f32) -> f32 {
     w
 }
 
+/// Height above the baseline at size `px`.
+pub fn ascent(px: f32) -> f32 {
+    font().as_scaled(PxScale::from(px)).ascent()
+}
+
+/// Draw `text` with a dark edge of `edge` pixels round every letter, then
+/// the letters themselves. Returns the x after the text.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_outlined(frame: &mut Frame, x: f32, y: f32, px: f32, text: &str, rgb: [f32; 3], edge: f32, alpha: f32) -> f32 {
+    if edge > 0.0 {
+        // Twelve offsets round a circle read as a smooth stroke at caption sizes.
+        for k in 0..12 {
+            let a = k as f32 * std::f32::consts::TAU / 12.0;
+            draw(frame, x + edge * a.cos(), y + edge * a.sin(), px, text, [0.0; 3], alpha * 0.55);
+        }
+        draw(frame, x, y + edge * 0.6, px, text, [0.0; 3], alpha * 0.4);
+    }
+    draw(frame, x, y, px, text, rgb, alpha)
+}
+
 /// Line height (ascent - descent) at size `px`.
 pub fn line_height(px: f32) -> f32 {
     let f = font().as_scaled(PxScale::from(px));

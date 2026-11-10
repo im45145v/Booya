@@ -133,7 +133,7 @@ If you record developer tools, your screen is full of tokens, emails and custome
 - **Interactive demo**: `booya interactive demo.json` (or the Auto edit tab) turns a recording into one self-contained HTML click-through, built from the event log, with blur boxes applied and no network calls. Share it with a signed link to your own bucket.
 - **Editing**: trim, split, delete pieces and set per clip speed (0.25x to 16x, audio follows).
 - **Blur boxes**: draw blur regions with the mouse on the frame; they move correctly with the zoom. A visual picker lets you drag the area to record on a screenshot, or hover a window and click to snap to its exact frame (hold Alt, Option on a Mac, to turn snapping off). Edges snap to nearby window and screen edges while you drag.
-- **Templates and presets**: start from built in looks (Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
+- **Templates and presets**: start from built in looks (No background, Sunset, Midnight, Ocean, Clean light, Minimal, Social card) or save a brand style per product (background, frame, cursor, keys) and reapply it to any recording.
 - **Auto edit**: one button (or `D`, or `booya ready`) runs zoom, captions, cuts, blur and noise removal and reports each step.
 - **Editor**: dark and light themes, an optional glass look for the app (Settings > Appearance), undo and redo, a timeline you can zoom and scrub, and keyboard shortcuts for most actions (press `?`). Opening a video also loads the event log next to it.
 - **Local models** (optional, offline, see below): captions, auto cut of filler words and long pauses, blur for emails, API keys and card numbers, and written docs (title, chapters, a step by step guide, a social post).
@@ -204,7 +204,7 @@ Open **Models...** in the app (or run `booya models list`) to see, download and 
 
 What each feature does:
 
-- **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (with size control) or exported as SRT or VTT. Words you cut never show up.
+- **Transcribe and captions**: whisper.cpp with word timestamps. Words are snapped to the real speech using silence detection. Captions can be burned in (as a boxed line, an outlined line, or a few big words at a time for short videos, at the bottom, middle or top, in any size) or exported as SRT or VTT. Words you cut never show up.
 - **Auto cut**: removes filler words (um, uh) and pauses longer than a threshold you choose. Each cut is a normal clip edit, so undo works.
 - **Auto blur secrets**: samples frames (skipping frames that did not change), reads them with OCR and adds blur boxes over emails, API keys (`sk_live_...` and similar), bearer tokens, card numbers (Luhn checked), phone numbers, Aadhaar (Verhoeff checked), PAN, UPI IDs, IBANs (mod 97), IP addresses and password fields. It can miss text: watch the export before sharing.
 - **Write docs**: builds steps from the transcript, clicks, typing and zooms, then writes a title, YouTube style chapters, a Markdown guide and a short social post. With no LLM it falls back to a rule based writer.

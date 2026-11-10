@@ -101,6 +101,15 @@ pub fn captions_cmd(mut a: Args) -> Result<()> {
     if let Some(v) = a.opt(&["--size"]) {
         p.caption_style.size = v.parse()?;
     }
+    if let Some(v) = a.opt(&["--look"]) {
+        p.caption_style.look = serde_json::from_value(serde_json::Value::String(v.to_ascii_lowercase())).map_err(|_| anyhow::anyhow!("--look is box, outline or pop"))?;
+    }
+    if let Some(v) = a.opt(&["--position"]) {
+        p.caption_style.position = serde_json::from_value(serde_json::Value::String(v.to_ascii_lowercase())).map_err(|_| anyhow::anyhow!("--position is bottom, middle or top"))?;
+    }
+    if let Some(v) = a.opt(&["--caps"]) {
+        p.caption_style.uppercase = on_off(&v)?;
+    }
     if let Some(out) = a.opt(&["-o"]) {
         let text = if out.ends_with(".vtt") { captions::to_vtt(&p) } else { captions::to_srt(&p) };
         std::fs::write(&out, text)?;

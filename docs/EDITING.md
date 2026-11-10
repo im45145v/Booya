@@ -13,13 +13,21 @@ Needs a transcript first: **Auto edit > Tools > Transcribe** (or tick Captions i
 - The time at the left of a line jumps the playhead there.
 
 Show them in the video: **Style tab > Keys and captions > Burn in captions**, size with **Caption size**.
+
+Three looks, under **Caption look**:
+
+- **Box**: the whole line on a dark plate, the spoken word in the highlight colour. The default.
+- **Outline**: the whole line with a dark edge round each letter and no plate, so more of the recording shows.
+- **Pop**: three words at a time, bigger, with the spoken word growing a little and turning the highlight colour. Groups are fixed, so the words do not shuffle while you talk. Made for Reels, Shorts and TikTok.
+
+**Caption position** puts them at the bottom, the middle or the top (the top keeps them clear of a camera bubble in a bottom corner), and **Captions in capitals** shows every word in capitals. All of it shows in the preview and the export, and none of it changes the SRT or VTT file. From the command line: `booya captions project.json --look pop --position middle --caps on`.
 Take them out as a file: **Auto edit > Tools > Export subtitles** (SRT or VTT). Your edits are what gets written.
 
 Auto edit can be cancelled while it is running. Cancellation is checked between pipeline steps, transcription windows and scanned frames; changes are discarded when cancelled.
 
 ## Background and camera framing
 
-**Style tab > Background > None** removes the wallpaper and uses a plain black canvas (exports are opaque, not transparent). Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
+**Style tab > Background > None** exports just the recording and the camera: no wallpaper, and the padding, corners, shadow, glass and device frame are cleared so the recording fills the frame. Undo brings them back, and you can still add padding afterwards, which shows as black (exports are opaque, not transparent). The **No background** template does the same in one click. Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
 
 ## Callouts (short notes on the video)
 
