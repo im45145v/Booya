@@ -39,12 +39,11 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     // fallback); see `capture::mic`. The marker only says "record one".
     let mic_sidecar = if o.mic { Some(Vec::new()) } else { None };
     // System audio is also recorded on the side (WASAPI loopback), on the same clock.
-    if mic_sidecar.is_some() || o.system_audio {
-        // Keep the screen's own (wall clock) timestamps, relative to the start
-        // of the recording, so the sound recorded on the side lands where it
-        // really happened relative to the first frame.
-        args.splice(0..0, [s("-copyts"), s("-itsoffset"), s(super::CLOCK_START)]);
-    }
+    // Keep the screen's own (wall clock) timestamps, relative to the start of
+    // the recording, so the sound recorded on the side lands where it really
+    // happened relative to the first frame, and clicks and zoom (logged on
+    // the same clock) line up with the picture even with no sound at all.
+    args.splice(0..0, [s("-copyts"), s("-itsoffset"), s(super::CLOCK_START)]);
     Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar })
 }
 

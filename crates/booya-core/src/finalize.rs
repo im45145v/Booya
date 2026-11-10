@@ -90,6 +90,13 @@ fn track_drift_tempo(samples: f64, video: (f64, f64), audio_start: f64) -> Optio
     drift_tempo(remaining_samples, span)
 }
 
+fn with_rate(filter: String, rate: Option<String>) -> String {
+    match rate {
+        Some(r) => filter.replacen(ALIGN_BASE, &format!("{ALIGN_BASE},{r},{ALIGN_REBASE}"), 1),
+        None => filter,
+    }
+}
+
 fn with_tempo(filter: String, tempo: Option<f64>) -> String {
     match tempo {
         Some(t) => filter.replacen(ALIGN_BASE, &format!("{ALIGN_BASE},atempo={t:.6},{ALIGN_REBASE}"), 1),
@@ -142,6 +149,154 @@ pub fn mic_sidecar(mkv: &Path) -> PathBuf {
     mkv.with_extension("mic.mkv")
 }
 
+/// The packet log written next to a microphone file (see `capture::mic`).
+pub fn mic_timing(mic: &Path) -> PathBuf {
+    mic.with_extension("timing")
+}
+
+/// Where a microphone recording really sits on the recording clock.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MicClock {
+    /// Seconds after the recording clock started at which the first sample
+    /// was taken.
+    pub start_s: f64,
+    /// Seconds of samples per second of wall clock: below 1 the microphone
+    /// delivered fewer samples than the time that passed (a slow clock or
+    /// lost buffers), above 1 more.
+    pub ratio: f64,
+    /// Wall-clock seconds the packets cover.
+    pub span_s: f64,
+}
+
+fn pcm_bytes(codec: &str) -> Option<usize> {
+    let c = codec.trim().strip_prefix("pcm_")?;
+    let digits: String = c.chars().skip_while(|ch| !ch.is_ascii_digit()).take_while(|ch| ch.is_ascii_digit()).collect();
+    let bits: usize = digits.parse().ok()?;
+    (bits > 0 && bits.is_multiple_of(8)).then_some(bits / 8)
+}
+
+fn layout_channels(name: &str) -> Option<usize> {
+    let n = name.trim();
+    if let Some(k) = n.strip_suffix(" channels").and_then(|k| k.trim().parse().ok()) {
+        return Some(k);
+    }
+    Some(match n {
+        "mono" => 1,
+        "stereo" | "downmix" => 2,
+        "2.1" | "3.0" | "3.0(back)" => 3,
+        "4.0" | "quad" | "quad(side)" | "3.1" => 4,
+        "5.0" | "5.0(side)" | "4.1" => 5,
+        "5.1" | "5.1(side)" | "6.0" | "hexagonal" => 6,
+        "6.1" | "7.0" => 7,
+        "7.1" | "7.1(wide)" | "octagonal" => 8,
+        _ => return None,
+    })
+}
+
+/// Reads a microphone's packet log (ffmpeg `framecrc`: read time and size of
+/// every packet) into where its first sample was taken and how its sample
+/// clock ran against the wall clock.
+///
+/// A packet is read some time after its last sample was captured, never
+/// before. So `read time - samples so far / rate` is the start of the
+/// recording plus that packet's delay. A straight line through those points
+/// gives the rate, and the smallest delay gives the start. The first
+/// packet's read time alone (what the file carries) is late by at least that
+/// packet's length and by whatever the device had buffered before the first
+/// read, which differs from one recording to the next.
+pub fn parse_mic_timing(text: &str) -> Option<MicClock> {
+    let (mut tb, mut rate, mut bytes, mut channels) = (None, None, None, None);
+    let mut pts: Vec<f64> = Vec::new();
+    let mut sizes: Vec<f64> = Vec::new();
+    for l in text.lines() {
+        let l = l.trim();
+        if let Some(h) = l.strip_prefix('#') {
+            let Some((k, v)) = h.split_once(':') else { continue };
+            let v = v.trim();
+            match k.trim() {
+                "tb 0" => {
+                    let (a, b) = v.split_once('/')?;
+                    tb = Some(a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok()?);
+                }
+                "sample_rate 0" => rate = v.parse::<f64>().ok(),
+                "codec_id 0" => bytes = pcm_bytes(v),
+                "channel_layout_name 0" => channels = layout_channels(v),
+                _ => {}
+            }
+            continue;
+        }
+        let f: Vec<&str> = l.split(',').map(str::trim).collect();
+        if f.len() < 5 || f[0] != "0" {
+            continue;
+        }
+        let (Ok(p), Ok(sz)) = (f[1].parse::<f64>(), f[4].parse::<f64>()) else { continue };
+        pts.push(p);
+        sizes.push(sz);
+    }
+    let (tb, rate, frame) = (tb?, rate?, (bytes? * channels?) as f64);
+    if pts.len() < 8 || rate <= 0.0 || frame <= 0.0 {
+        return None;
+    }
+    // x: seconds of samples up to the end of each packet; y: its read time.
+    let mut cum = 0.0;
+    let xy: Vec<(f64, f64)> = pts.iter().zip(&sizes).map(|(p, sz)| {
+        cum += sz / frame / rate;
+        (cum, p * tb)
+    }).collect();
+    let span = xy[xy.len() - 1].1 - xy[0].1;
+    // Wall seconds per second of samples, from the lower edge of the delays:
+    // the quickest read in each tenth of the take. Read delays come and go
+    // (a busy machine adds tens of ms), the quickest read in a stretch does
+    // not, so a line through those is the clock and not the load. A take
+    // under 30 s cannot tell a rate apart from that noise and is taken as
+    // exact.
+    let mut slope = 1.0;
+    if span >= 30.0 {
+        let x_end = xy[xy.len() - 1].0;
+        let mut lows: Vec<(f64, f64)> = Vec::new();
+        for b in 0..10 {
+            let (lo, hi) = (x_end * b as f64 / 10.0, x_end * (b + 1) as f64 / 10.0);
+            if let Some(p) = xy.iter().filter(|v| v.0 > lo && v.0 <= hi).min_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0))) {
+                lows.push(*p);
+            }
+        }
+        let n = lows.len() as f64;
+        if n >= 6.0 {
+            let (mx, my) = (lows.iter().map(|v| v.0).sum::<f64>() / n, lows.iter().map(|v| v.1).sum::<f64>() / n);
+            let sxx: f64 = lows.iter().map(|v| (v.0 - mx).powi(2)).sum();
+            if sxx > 0.0 {
+                slope = lows.iter().map(|v| (v.0 - mx) * (v.1 - my)).sum::<f64>() / sxx;
+            }
+        }
+    }
+    if !(0.8..=1.25).contains(&slope) {
+        slope = 1.0;
+    }
+    let start = xy.iter().map(|(x, y)| y - x * slope).fold(f64::INFINITY, f64::min);
+    start.is_finite().then_some(MicClock { start_s: start, ratio: 1.0 / slope, span_s: span })
+}
+
+/// The clock of a microphone file from its packet log, when there is one.
+pub fn mic_clock(mic: &Path) -> Option<MicClock> {
+    parse_mic_timing(&std::fs::read_to_string(mic_timing(mic)).ok()?)
+}
+
+/// The filter that plays samples recorded at `ratio` seconds of samples per
+/// wall-clock second back over the wall-clock time they really took. A
+/// difference under 0.05% is left alone (under 30 ms in a minute). Up to 1%
+/// the samples are only relabelled (a pitch change nobody hears, and no
+/// artefacts); beyond that the tempo is changed without changing the pitch.
+pub fn clock_rate_filter(ratio: f64) -> Option<String> {
+    if !(0.8..=1.25).contains(&ratio) || (ratio - 1.0).abs() < 0.0005 {
+        return None;
+    }
+    if (ratio - 1.0).abs() <= 0.01 {
+        Some(format!("asetrate={:.3},aresample=48000", 48_000.0 * ratio))
+    } else {
+        Some(format!("atempo={ratio:.6}"))
+    }
+}
+
 /// The separate system audio file that goes with `recording.mkv`, when the
 /// capture recorded one (Windows and macOS; Linux mixes it while recording).
 pub fn sys_sidecar(mkv: &Path) -> PathBuf {
@@ -178,11 +333,17 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     }
     let mic = mic_sidecar(mkv);
     if !big(&mic) {
+        let _ = std::fs::remove_file(mic_timing(&mic));
         std::fs::rename(&sys, &mic).context("could not move the system audio into place")?;
         return Ok(true);
     }
     let (m, s) = (stream_times(&mic, "a:0"), stream_times(&sys, "a:0"));
-    let (Some(m), Some(s)) = (m, s) else { bail!("the {} file could not be read", if m.is_none() { "microphone" } else { "system audio" }) };
+    let (Some(mut m), Some(s)) = (m, s) else { bail!("the {} file could not be read", if m.is_none() { "microphone" } else { "system audio" }) };
+    // The voice's real start from its packet log. The mixed file replaces
+    // the microphone file, so the log no longer describes it afterwards.
+    if let Some(c) = mic_clock(&mic).filter(|c| (c.start_s - m.0).abs() < 5.0) {
+        m.0 = c.start_s;
+    }
     let tmp = mic.with_extension("mkv.part");
     let base = m.0.min(s.0);
     let out = crate::proc::command(ffmpeg_bin())
@@ -201,6 +362,7 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     }
     std::fs::rename(&tmp, &mic)?;
     let _ = std::fs::remove_file(&sys);
+    let _ = std::fs::remove_file(mic_timing(&mic));
     Ok(true)
 }
 
@@ -280,6 +442,11 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         // Video and microphone are separate files on the same clock. Silence
         // goes in front of a microphone that opened late; the video is not
         // touched.
+        // The packet log knows where the first sample really was and how
+        // the microphone's clock ran; the file's own start is only the
+        // moment its first packet was read.
+        let clock = mic_clock(&side).filter(|c| (c.start_s - a.0).abs() < 5.0);
+        let a = match clock { Some(c) => (c.start_s, a.1), None => a };
         let a_start = if (a.0 - v.0).abs() > 30.0 + v.1 { v.0 } else { a.0 };
         let mut f = audio_align_filter(v, (a_start, a.1)).unwrap_or_else(audio_plain_filter);
         if join == Join::Plain {
@@ -287,8 +454,14 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         } else if a_start < v.0 && !f.contains("atrim") {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
-        let tempo = sample_duration(&side, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
-        align = Some(with_tempo(f, tempo));
+        align = Some(match clock {
+            Some(c) if join == Join::Aligned => with_rate(f, clock_rate_filter(c.ratio)),
+            Some(_) => f,
+            None => {
+                let tempo = sample_duration(&side, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
+                with_tempo(f, tempo)
+            }
+        });
         cmd.arg("-i").arg(ffmpeg::file_url(mkv)).arg("-i").arg(ffmpeg::file_url(&side));
         cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
     } else if let (Some(v), Some(a)) = (video, audio) {
@@ -346,6 +519,7 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
     let _ = std::fs::remove_file(mkv);
     if join != Join::Skip {
         let _ = std::fs::remove_file(&side);
+        let _ = std::fs::remove_file(mic_timing(&side));
     }
     Ok(Remuxed { path: mp4, video_start_s, warnings: Vec::new() })
 }
@@ -525,6 +699,74 @@ mod tests {
         assert!(result.offset_ms.abs() < 40.0, "{result:?}");
         assert!(result.worst_ms < 50.0, "{result:?}");
         assert!(result.drift_total_ms.abs() < 75.0, "{result:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Packets of 1024 stereo 16 bit frames at 48 kHz from a microphone whose
+    /// first sample was taken at 1.000 s and whose clock runs `slope` wall
+    /// seconds per second of samples. The first 300 ms were buffered by the
+    /// device and read in one go; every later read comes 2 to 40 ms late.
+    fn timing_text(slope: f64, secs: f64) -> String {
+        let mut t = String::from("#software: Lavf61\n#tb 0: 1/1000000\n#media_type 0: audio\n#codec_id 0: pcm_s16le\n#sample_rate 0: 48000\n#channel_layout_name 0: stereo\n");
+        let (mut cum, mut k) = (0.0f64, 0u64);
+        while cum < secs {
+            cum += 1024.0 / 48_000.0;
+            k += 1;
+            let jitter = 0.002 + 0.038 * (((k * 7919) % 101) as f64 / 100.0);
+            let read = (1.0 + cum * slope + jitter).max(1.0 + 0.3 * slope + 0.002);
+            t.push_str(&format!("0, {:>10}, {:>10}, 21333, 4096, 0x00000000\n", (read * 1e6).round() as i64, (read * 1e6).round() as i64));
+        }
+        t
+    }
+
+    #[test]
+    fn the_packet_log_finds_the_first_sample_and_the_clock_rate() {
+        let c = parse_mic_timing(&timing_text(1.0, 8.0)).unwrap();
+        assert!((c.start_s - 1.002).abs() < 0.003, "{c:?}");
+        assert_eq!(c.ratio, 1.0, "a short take is not given a rate: {c:?}");
+        // A microphone clock 0.2% slow over two minutes is 240 ms by the end.
+        let c = parse_mic_timing(&timing_text(1.002, 120.0)).unwrap();
+        assert!((c.ratio - 1.0 / 1.002).abs() < 0.0002, "{c:?}");
+        assert!((c.start_s - 1.0).abs() < 0.02, "{c:?}");
+        assert!(parse_mic_timing("#tb 0: 1/1000000\n").is_none());
+        assert_eq!(pcm_bytes("pcm_f32le"), Some(4));
+        assert_eq!(pcm_bytes("pcm_s24le"), Some(3));
+        assert_eq!(layout_channels("mono"), Some(1));
+        assert_eq!(layout_channels("3 channels"), Some(3));
+    }
+
+    #[test]
+    fn a_drifting_microphone_clock_is_played_back_over_the_real_time() {
+        assert_eq!(clock_rate_filter(1.0002), None);
+        assert_eq!(clock_rate_filter(0.998).as_deref(), Some("asetrate=47904.000,aresample=48000"));
+        assert_eq!(clock_rate_filter(0.95).as_deref(), Some("atempo=0.950000"));
+        assert_eq!(clock_rate_filter(0.5), None);
+    }
+
+    /// The whole join with a packet log: the file says the voice starts at
+    /// 0.8 s, the log says its first sample was at 0.5 s, so a beep at 1.0 s
+    /// into the voice must sit at 1.5 s of the video.
+    #[test]
+    fn the_remux_places_the_voice_where_the_packet_log_says() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("miclog");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"], &mkv));
+        assert!(run(&["-f", "lavfi", "-i", "aevalsrc='0.6*sin(2*PI*1000*t)*between(t,1,1.1)':s=48000:d=3", "-output_ts_offset", "0.8", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        let mut log = String::from("#tb 0: 1/1000000\n#codec_id 0: pcm_f32le\n#sample_rate 0: 48000\n#channel_layout_name 0: mono\n");
+        for k in 1..=140u32 {
+            let read = 0.5 + k as f64 * 1024.0 / 48_000.0 + if k < 15 { 0.3 } else { 0.004 };
+            log.push_str(&format!("0, {0}, {0}, 21333, 4096, 0x0\n", (read * 1e6) as i64));
+        }
+        std::fs::write(mic_timing(&mic_sidecar(&mkv)), log).unwrap();
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        assert!(!mic_timing(&mic_sidecar(&mkv)).exists(), "the log goes with the microphone file");
+        let beeps = crate::syncprobe::beep_times(&r.path).unwrap();
+        assert_eq!(beeps.len(), 1, "{beeps:?}");
+        assert!((beeps[0] - 1.5).abs() < 0.03, "the beep belongs at 1.5 s, found {beeps:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
