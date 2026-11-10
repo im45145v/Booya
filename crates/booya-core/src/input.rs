@@ -170,14 +170,14 @@ impl InputLogger {
     }
 
     pub fn set_epoch(&self, t: Instant) {
-        self.shared.lock().unwrap().epoch = Some(t);
+        self.shared.lock().unwrap_or_else(|p| p.into_inner()).epoch = Some(t);
     }
 
     /// Pause or resume logging. Pausing also kills the keyboard hook.
     pub fn set_paused(&mut self, paused: bool) {
         let now = Instant::now();
         {
-            let mut s = self.shared.lock().unwrap();
+            let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
             match (paused, s.paused_at) {
                 (true, None) => s.paused_at = Some(now),
                 (false, Some(a)) => {
@@ -195,13 +195,13 @@ impl InputLogger {
     }
 
     pub fn is_paused(&self) -> bool {
-        self.shared.lock().unwrap().paused_at.is_some()
+        self.shared.lock().unwrap_or_else(|p| p.into_inner()).paused_at.is_some()
     }
 
     /// Drop a marker at the cursor's current position. Returns false (and
     /// records nothing) while paused or not recording.
     pub fn mark(&self) -> bool {
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         if !s.active || s.paused_at.is_some() {
             return false;
         }
@@ -212,14 +212,14 @@ impl InputLogger {
 
     /// Total time spent paused so far (finished pauses plus the current one).
     pub fn paused_total(&self) -> std::time::Duration {
-        let s = self.shared.lock().unwrap();
+        let s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         let done: std::time::Duration = s.pauses.iter().map(|(a, b)| b.saturating_duration_since(*a)).sum();
         done + s.paused_at.map(|a| a.elapsed()).unwrap_or_default()
     }
 
     pub fn stop(mut self) -> Logged {
         self.stop_hook();
-        let mut s = self.shared.lock().unwrap();
+        let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         s.active = false;
         let now = Instant::now();
         if let Some(a) = s.paused_at.take() {
@@ -252,7 +252,7 @@ fn start_touch(shared: Arc<Mutex<Shared>>, region: Region) -> Option<crate::touc
     crate::touch::start(Box::new(move |phase, x, y| {
         let now = Instant::now();
         let (x, y) = (x - region.x as f64, y - region.y as f64);
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
         s.last_pos = (x, y);
         match phase {
             Phase::Down => {
@@ -268,7 +268,7 @@ fn start_touch(shared: Arc<Mutex<Shared>>, region: Region) -> Option<crate::touc
 impl Drop for InputLogger {
     fn drop(&mut self) {
         self.stop_hook();
-        self.shared.lock().unwrap().active = false;
+        self.shared.lock().unwrap_or_else(|p| p.into_inner()).active = false;
     }
 }
 
@@ -324,13 +324,13 @@ mod keyhook {
                     // `M<TAB>mods`: the set of held modifiers changed.
                     "M" => {
                         let held = list(parts.next());
-                        shared.lock().unwrap().push(now, EventKind::Mods { held });
+                        shared.lock().unwrap_or_else(|p| p.into_inner()).push(now, EventKind::Mods { held });
                     }
                     // `S<TAB>dx<TAB>dy`: the wheel or trackpad scrolled.
                     "S" => {
                         let num = |s: Option<&str>| s.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
                         let (dx, dy) = (num(parts.next()), num(parts.next()));
-                        let mut g = shared.lock().unwrap();
+                        let mut g = shared.lock().unwrap_or_else(|p| p.into_inner());
                         let (x, y) = g.last_pos;
                         g.push(now, EventKind::Scroll { x, y, dx, dy });
                     }
@@ -344,7 +344,7 @@ mod keyhook {
                         // Classify again on this side: the helper is our own
                         // binary, but the log must never hold a character.
                         let key = classify(&key, &modifiers);
-                        shared.lock().unwrap().push(now, EventKind::Key { key, modifiers });
+                        shared.lock().unwrap_or_else(|p| p.into_inner()).push(now, EventKind::Key { key, modifiers });
                     }
                     _ => {}
                 }
@@ -534,7 +534,7 @@ mod poll {
             let mut last_change = Instant::now();
             let mut scrolls: Option<u32> = None;
             loop {
-                if !shared.lock().unwrap().active {
+                if !shared.lock().unwrap_or_else(|p| p.into_inner()).active {
                     break;
                 }
                 let now = Instant::now();
@@ -567,7 +567,7 @@ mod poll {
                 }
                 if !evs.is_empty() {
                     last_change = now;
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
                     s.last_pos = pos;
                     for k in evs {
                         s.push(now, k);
@@ -1045,7 +1045,7 @@ mod mac_keys {
             let mut prev_held: Vec<String> = Vec::new();
             let mut prev_caps = first & mackeys::CAPS_FLAG != 0;
             while !flag.load(Ordering::SeqCst) {
-                if !shared.lock().unwrap().active {
+                if !shared.lock().unwrap_or_else(|p| p.into_inner()).active {
                     break;
                 }
                 let now = Instant::now();
@@ -1056,20 +1056,20 @@ mod mac_keys {
                     mods.insert(0, "Fn".to_string());
                 }
                 if mods != prev_held {
-                    shared.lock().unwrap().push(now, crate::events::EventKind::Mods { held: mods.clone() });
+                    shared.lock().unwrap_or_else(|p| p.into_inner()).push(now, crate::events::EventKind::Mods { held: mods.clone() });
                     prev_held = mods.clone();
                 }
                 let caps = flags & mackeys::CAPS_FLAG != 0;
                 if caps != prev_caps {
                     prev_caps = caps;
-                    shared.lock().unwrap().push(now, crate::events::EventKind::Key { key: "CapsLock".into(), modifiers: Vec::new() });
+                    shared.lock().unwrap_or_else(|p| p.into_inner()).push(now, crate::events::EventKind::Key { key: "CapsLock".into(), modifiers: Vec::new() });
                 }
                 for &c in &codes {
                     let d = mac::key_down(c);
                     if d && down.insert(c) {
                         if let Some(n) = mackeys::name(c) {
                             let key = classify(n, &mods);
-                            shared.lock().unwrap().push(now, crate::events::EventKind::Key { key, modifiers: mods.clone() });
+                            shared.lock().unwrap_or_else(|p| p.into_inner()).push(now, crate::events::EventKind::Key { key, modifiers: mods.clone() });
                         }
                     } else if !d {
                         down.remove(&c);
@@ -1087,6 +1087,31 @@ mod tests {
     use super::{classify, KeyLogging};
     use crate::events::PRINTABLE;
 
+    /// A panic on a thread that held the event log (the pointer poller, the
+    /// touch watcher) used to poison it, and Stop then panicked too, losing
+    /// the whole take. Stop now keeps what was logged.
+    #[test]
+    fn stop_survives_a_thread_that_panicked_holding_the_log() {
+        let log = super::InputLogger::idle();
+        {
+            let mut s = log.shared.lock().unwrap();
+            s.active = true;
+            let now = std::time::Instant::now();
+            s.epoch = Some(now);
+            s.push(now, crate::events::EventKind::Move { x: 1.0, y: 2.0 });
+        }
+        let shared = log.shared.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = shared.lock().unwrap();
+            panic!("poller crashed");
+        })
+        .join();
+        assert!(log.shared.is_poisoned());
+        assert!(!log.is_paused());
+        let _ = log.paused_total();
+        let out = log.stop();
+        assert_eq!(out.events.len(), 1, "the event logged before the panic is kept");
+    }
     /// Key logging is off unless the user switches it on. On macOS that
     /// means no key event tap and no Input Monitoring prompt at all.
     #[test]
