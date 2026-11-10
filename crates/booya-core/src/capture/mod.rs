@@ -469,6 +469,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
     }
     let mut warnings = plan.warnings;
+    warnings.extend(crate::storage::low_space_warning(crate::storage::free_bytes(&opts.out_dir)));
     // The microphone and system audio each open their own recorder. Doing
     // that one after the other is most of the wait before a recording feels
     // started, so they open together, alongside the camera.
