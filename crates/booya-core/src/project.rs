@@ -499,6 +499,20 @@ pub enum WebcamShape {
 }
 
 impl Webcam {
+    /// Top left of a `w` by `h` bubble in an `ow` by `oh` picture with
+    /// margin `m`: at the dragged spot if there is one (kept fully inside
+    /// the picture), else in its corner.
+    pub fn bubble_origin(&self, ow: f64, oh: f64, w: f64, h: f64, m: f64) -> (f64, f64) {
+        match self.position {
+            Some([px, py]) if px.is_finite() && py.is_finite() => {
+                let x = (px.clamp(0.0, 1.0) * ow - w / 2.0).clamp(0.0, (ow - w).max(0.0));
+                let y = (py.clamp(0.0, 1.0) * oh - h / 2.0).clamp(0.0, (oh - h).max(0.0));
+                (x, y)
+            }
+            _ => self.corner.place(ow, oh, w, h, m),
+        }
+    }
+
     pub fn shape(&self) -> WebcamShape {
         self.shape.unwrap_or(if self.circle {
             WebcamShape::Circle
@@ -634,12 +648,17 @@ pub struct Webcam {
     /// Camera framing. Missing in older projects, which use `circle`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<WebcamShape>,
+    /// Where the bubble's centre is when it was dragged on the preview, as
+    /// a share of the picture's width and height (0 to 1). When set it
+    /// replaces `corner` for the bubble. Split layouts still use `corner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 2]>,
 }
 
 impl Webcam {
     pub fn new(path: PathBuf) -> Self {
         Self { path, visible: true, corner: Corner::BottomRight, size: 0.24, circle: true, offset_ms: 0.0, layout: WebcamLayout::Bubble, mirror: false,
-            shape: None,
+            shape: None, position: None,
         }
     }
 }

@@ -26,6 +26,7 @@ function shSetTool(t) {
   const layer = $('shape-layer'); layer.hidden = !t;
   $('sh-hint').textContent = t ? 'Drag on the preview to draw. Esc cancels.' : 'Pick a tool, then drag on the preview. It is added at the playhead.';
   if (t) positionLayer();
+  window.updateCamHandle && window.updateCamHandle();
 }
 function positionLayer() {
   const img = $('preview'), wrap = img.parentElement, layer = $('shape-layer');

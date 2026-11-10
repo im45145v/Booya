@@ -538,3 +538,17 @@ pre.diag { white-space: pre-wrap; word-break: break-all; font: 12px/1.5 ui-monos
 .perm-go:disabled { opacity: .4; cursor: default; }
 #perm-body .perm-rows { margin-top: 14px; }
 @media (max-width: 520px) { .perm-row { grid-template-columns: 1fr; gap: 10px; } }
+
+/* The camera bubble on the preview: drag to move, scroll or the grip to resize */
+.cam-handle { position: absolute; cursor: grab; touch-action: none; border-radius: 16%; outline: 0 solid transparent; transition: box-shadow .12s ease; }
+.cam-handle[data-shape="circle"] { border-radius: 50%; }
+.cam-handle[data-shape="square"] { border-radius: 0; }
+.cam-handle[data-shape="rectangle"] { border-radius: 6%; }
+.cam-handle:hover, .cam-handle:focus-visible, .cam-handle.dragging { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .9), 0 0 0 3px rgba(0, 0, 0, .35); }
+.cam-handle:focus-visible { outline: none; }
+.cam-handle.dragging { cursor: grabbing; }
+.cam-handle.snapped { box-shadow: 0 0 0 2px var(--focus, #FF5A1F), 0 0 0 4px rgba(0, 0, 0, .3); }
+.cam-grip { position: absolute; right: 2%; bottom: 2%; width: 12px; height: 12px; border-radius: 3px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .45); cursor: nwse-resize; opacity: 0; transition: opacity .12s ease; }
+.cam-handle[data-shape="circle"] .cam-grip { right: 12%; bottom: 12%; }
+.cam-handle:hover .cam-grip, .cam-handle:focus-visible .cam-grip, .cam-handle.dragging .cam-grip { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .cam-handle, .cam-grip { transition: none; } }

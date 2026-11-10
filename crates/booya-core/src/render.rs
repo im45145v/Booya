@@ -661,7 +661,10 @@ impl Renderer {
                 } else {
                     (d, d)
                 };
-                let (x, y) = corner.place(ow, oh, cw, ch, m);
+                let (x, y) = match cam_style {
+                    Some(w) => w.bubble_origin(ow, oh, cw, ch, m),
+                    None => corner.place(ow, oh, cw, ch, m),
+                };
                 cam = Some(CamPane { x, y, w: cw, h: ch, radius: cam_radius(cw, ch), floating: true,
                 });
             }
@@ -2601,6 +2604,50 @@ mod layout_scene_tests {
         let r = Renderer::new(with_camera(), None, 1920, 1080, None);
         let (w, h) = r.cam_decode_size((1920, 1080));
         assert!(w < 1920 && h < 1080 && w % 2 == 0 && h % 2 == 0);
+    }
+
+    #[test]
+    fn a_dragged_bubble_sits_where_it_was_dropped_and_stays_inside() {
+        let mut p = with_camera();
+        let bubble = |p: &Project, w: u32, h: u32| Renderer::new(p.clone(), None, w, h, None).scene(SceneKind::Bubble).cam.unwrap();
+        let corner = bubble(&p, 1280, 720);
+        assert!(corner.x > 640.0 && corner.y > 360.0, "no position: bottom right corner");
+        p.webcam.as_mut().unwrap().position = Some([0.3, 0.4]);
+        let c = bubble(&p, 1280, 720);
+        assert!((c.x + c.w / 2.0 - 384.0).abs() < 1.0 && (c.y + c.h / 2.0 - 288.0).abs() < 1.0, "centred on the drop point {c:?}");
+        assert_eq!((c.w, c.h), (corner.w, corner.h), "moving it does not resize it");
+        // The same spot in a tall picture, as a share of its size.
+        let t = bubble(&p, 720, 1280);
+        assert!((t.x + t.w / 2.0 - 216.0).abs() < 1.0 && (t.y + t.h / 2.0 - 512.0).abs() < 1.0, "{t:?}");
+        // Dropped past an edge, it stays fully in the picture.
+        for pos in [[0.0, 0.0], [1.0, 1.0], [-3.0, 0.5], [0.5, 9.0], [f64::NAN, 0.5]] {
+            p.webcam.as_mut().unwrap().position = Some(pos);
+            let c = bubble(&p, 1280, 720);
+            assert!(c.x >= 0.0 && c.y >= 0.0 && c.x + c.w <= 1280.0 && c.y + c.h <= 720.0, "{pos:?} {c:?}");
+        }
+        // And it is drawn there: the camera's colour shows at the spot.
+        p.webcam.as_mut().unwrap().position = Some([0.25, 0.25]);
+        let r = Renderer::new(p, None, 1280, 720, None);
+        let mut src = Frame::new(1920, 1080);
+        src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[0, 0, 0, 255]));
+        let mut cam = Frame::new(64, 64);
+        cam.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[250, 10, 10, 255]));
+        let f = r.render(&src, 5000.0, Some(&cam));
+        assert!(px(&f, 320, 180) > 200, "camera at the dragged spot");
+        assert!(px(&f, 1150, 640) < 50, "nothing left in the old corner");
+    }
+
+    #[test]
+    fn projects_without_a_bubble_position_still_load() {
+        let w = Webcam::new("c.mkv".into());
+        let s = serde_json::to_string(&w).unwrap();
+        assert!(!s.contains("position"), "an unset position is not written");
+        let back: Webcam = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.position, None);
+        let mut moved = w.clone();
+        moved.position = Some([0.2, 0.7]);
+        let back: Webcam = serde_json::from_str(&serde_json::to_string(&moved).unwrap()).unwrap();
+        assert_eq!(back.position, Some([0.2, 0.7]));
     }
 
     #[test]
