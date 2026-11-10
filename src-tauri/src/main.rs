@@ -53,6 +53,9 @@ struct AppState {
     /// Auto edit observes cancellation between steps, transcription windows,
     /// and OCR frames.
     cancel_auto_edit: std::sync::atomic::AtomicBool,
+    /// Exports running now. Installing an update restarts the app, which
+    /// would kill them halfway.
+    exports: std::sync::atomic::AtomicUsize,
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -408,9 +411,24 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
     .map_err(e)?
 }
 
+/// Counts an export as running for as long as it lives.
+struct ExportBusy(tauri::AppHandle);
+impl ExportBusy {
+    fn new(app: &tauri::AppHandle) -> Self {
+        app.state::<AppState>().exports.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(app.clone())
+    }
+}
+impl Drop for ExportBusy {
+    fn drop(&mut self) {
+        self.0.state::<AppState>().exports.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R<String> {
     check_write(&app, &out, &["mp4", "gif", "webm"])?;
+    let _busy = ExportBusy::new(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let st = export::export(&project, &PathBuf::from(&out), |p| {
             let _ = app.emit("export-progress", p);
@@ -1056,6 +1074,7 @@ fn list_recordings(app: tauri::AppHandle) -> R<Vec<RecordingInfo>> {
 /// inside the Booya recordings directory can be deleted.
 #[tauri::command]
 fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
+    not_while_recording(&app)?;
     let root = recordings_dir(&app)?.canonicalize().map_err(e)?;
     let p = PathBuf::from(&path);
     let p = if p.is_file() { p.parent().map(|x| x.to_path_buf()).unwrap_or(p) } else { p };
@@ -1066,11 +1085,21 @@ fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
     std::fs::remove_dir_all(&c).map_err(e)
 }
 
+/// Deleting recordings under a running take removed the folder ffmpeg was
+/// writing into, and the take was lost.
+fn not_while_recording(app: &tauri::AppHandle) -> R<()> {
+    if app.state::<AppState>().recording.lock().unwrap().is_some() {
+        return Err("Stop the recording first.".into());
+    }
+    Ok(())
+}
+
 /// "Delete my data": every recording, the transcript cache and the sample.
 /// With `include_keys`, also the saved API keys and cloud settings.
 /// Downloaded models and projects saved elsewhere are kept.
 #[tauri::command]
 fn delete_all_data(app: tauri::AppHandle, include_keys: bool) -> R<usize> {
+    not_while_recording(&app)?;
     let mut n = 0;
     for r in list_recordings(app.clone())? {
         if std::fs::remove_dir_all(&r.path).is_ok() {
@@ -2458,6 +2487,17 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     use tauri_plugin_updater::UpdaterExt;
     if !can_self_update() {
         return Err("This copy was installed from a .deb or .rpm package. Update it with your package manager or download the new release.".into());
+    }
+    // The install ends with a restart. Doing that in the middle of a take
+    // killed ffmpeg before it could finish the file, and the take was lost.
+    {
+        let state = app.state::<AppState>();
+        if state.recording.lock().unwrap().is_some() {
+            return Err("Stop the recording first. Installing the update restarts Booya.".into());
+        }
+        if state.exports.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return Err("Wait for the export to finish. Installing the update restarts Booya.".into());
+        }
     }
     let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into());
     };
