@@ -405,6 +405,19 @@ impl Drop for FrameWriter {
     }
 }
 
+/// Deletes `path`, trying again for up to two seconds. On Windows a file a
+/// process has just let go of can stay locked for a moment (a virus scanner
+/// often opens new files), and the delete fails until it is released.
+fn remove_soon(path: &Path) {
+    for _ in 0..20 {
+        match std::fs::remove_file(path) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
 /// Kills the encoder if export bails out early (decoder error, panic).
 struct KillOnDrop(Option<std::process::Child>);
 impl Drop for KillOnDrop {
@@ -644,7 +657,7 @@ fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, prog
         let _ = child.kill();
         drop(stdin);
         let _ = child.wait();
-        let _ = std::fs::remove_file(out);
+        remove_soon(out);
         if let Some(t) = tmp {
             let _ = std::fs::remove_dir_all(t);
         }
