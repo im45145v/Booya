@@ -358,7 +358,7 @@ mod keyhook {
         #[cfg(windows)]
         {
             // Windows virtual-key codes.
-            return Some(match code {
+            Some(match code {
                 0xAD => "Mute".into(),
                 0xAE => "VolumeDown".into(),
                 0xAF => "VolumeUp".into(),
@@ -368,7 +368,7 @@ mod keyhook {
                 0xB3 => "PlayPause".into(),
                 0x7C..=0x87 => format!("F{}", code - 0x7C + 13),
                 _ => return None,
-            });
+            })
         }
         #[cfg(not(windows))]
         {
@@ -936,7 +936,7 @@ mod mac_tap {
         let now_ms = st.start.elapsed().as_secs_f64() * 1000.0;
         let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) };
         let flags = unsafe { CGEventGetFlags(event) };
-        let mut push = |kind: crate::events::EventKind| {
+        let push = |kind: crate::events::EventKind| {
             if let Ok(mut g) = st.shared.lock() {
                 g.push(now, kind);
             }

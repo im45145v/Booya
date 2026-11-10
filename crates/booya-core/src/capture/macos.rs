@@ -48,9 +48,12 @@ pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
 /// The device list, reused for a few seconds. Opening a recording asks for it
 /// once for the microphone and again for the camera; each ask is its own
 /// ffmpeg process and can take several seconds.
-pub(crate) fn cached_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
+/// (video devices, audio devices)
+type DeviceLists = (Vec<AvDevice>, Vec<AvDevice>);
+
+pub(crate) fn cached_devices() -> DeviceLists {
     use std::sync::Mutex;
-    static CACHE: Mutex<Option<(Instant, (Vec<AvDevice>, Vec<AvDevice>))>> = Mutex::new(None);
+    static CACHE: Mutex<Option<(Instant, DeviceLists)>> = Mutex::new(None);
     let mut slot = CACHE.lock().unwrap();
     if let Some((at, devices)) = &*slot {
         if at.elapsed() < Duration::from_secs(8) {

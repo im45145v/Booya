@@ -13,7 +13,7 @@ fn bar(label: &str) -> impl FnMut(u64, u64) {
     let label = label.to_string();
     let mut last = u64::MAX;
     move |done, total| {
-        let pct = if total > 0 { done * 100 / total } else { 0 };
+        let pct = (done * 100).checked_div(total).unwrap_or(0);
         if pct != last {
             eprint!("\r{label} {pct:>3}%  {} / {}", models::human(done), models::human(total));
             last = pct;
