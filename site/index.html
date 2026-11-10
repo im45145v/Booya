@@ -3,51 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Booya · Record it. Booya.</title>
-<meta name="description" content="Booya is a free, open source screen recorder for product demos on Windows, macOS and Linux.">
-<link rel="icon" href="favicon.svg">
+<title>Booya, open source screen recorder</title>
+<meta name="description" content="Open source screen recorder with offline captions and auto zoom on clicks.">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Booya">
+<meta property="og:description" content="Open source screen recorder with offline captions and auto zoom on clicks.">
+<meta property="og:image" content="/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="/styles/tokens.css">
 <style>
-:root{--bg:#0a0710;--fg:#ece6f5;--mut:#9b8fb3;--acc:#ff7a1a;--pur:#8b3dff;--card:#151021}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#2a1245 0,transparent 60%),var(--bg);color:var(--fg);font:16px/1.6 system-ui,Segoe UI,sans-serif;overflow-x:hidden}
-.ghost{position:fixed;font-size:42px;opacity:.12;animation:float 9s ease-in-out infinite;pointer-events:none}
-@keyframes float{50%{transform:translateY(-40px) rotate(8deg)}}
-nav,main,footer{max-width:960px;margin:auto;padding:0 20px}
-nav{display:flex;align-items:center;justify-content:space-between;padding-top:20px}
-nav b{font-size:20px;display:flex;gap:10px;align-items:center}nav img{width:32px}
-a{color:var(--acc)}
-.hero{text-align:center;padding:80px 0 50px}
-h1{font-size:clamp(44px,9vw,88px);margin:0;letter-spacing:-2px;text-shadow:0 0 30px var(--pur)}
-h1 span{color:var(--acc);text-shadow:0 0 30px var(--acc)}
-.hero p{color:var(--mut);font-size:20px;max-width:560px;margin:16px auto 28px}
-.btn{display:inline-block;padding:12px 24px;border-radius:10px;background:var(--acc);color:#1a0b00;font-weight:700;text-decoration:none;box-shadow:0 0 24px #ff7a1a66;margin:4px}
-.btn.alt{background:transparent;color:var(--fg);border:1px solid var(--pur);box-shadow:none}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;padding:30px 0}
-.card{background:var(--card);border:1px solid #2a2040;border-radius:14px;padding:20px;transition:.2s}
-.card:hover{border-color:var(--pur);transform:translateY(-3px);box-shadow:0 8px 30px #8b3dff33}
-.card h3{margin:0 0 6px}.card p{margin:0;color:var(--mut)}
-footer{text-align:center;color:var(--mut);padding:40px 20px;font-size:14px}
+body{margin:0;background:var(--by-bg);color:var(--by-text);font:var(--by-weight-body) var(--by-text-body)/var(--by-leading-body) var(--by-font-sans);-webkit-font-smoothing:antialiased}
+nav,main,footer{max-width:960px;margin:auto;padding:0 var(--by-space-6)}
+nav{display:flex;align-items:center;justify-content:space-between;padding-top:var(--by-space-6)}
+nav b{display:flex;gap:var(--by-space-2);align-items:center;font-weight:600;font-size:var(--by-text-h3)}
+nav img{width:32px;height:32px}
+a{color:var(--by-text);text-underline-offset:3px}
+.hero{padding:var(--by-space-16) 0 var(--by-space-12)}
+h1{font-size:clamp(40px,8vw,var(--by-text-display));line-height:1.07;font-weight:var(--by-weight-display);letter-spacing:var(--by-tracking-display);margin:0}
+.hero p{color:var(--by-text-muted);font-size:18px;line-height:28px;max-width:560px;margin:var(--by-space-4) 0 var(--by-space-8)}
+.btn{display:inline-flex;align-items:center;gap:var(--by-space-2);padding:12px 20px;border-radius:var(--by-radius-md);background:var(--by-inverse);color:var(--by-on-inverse);font-weight:550;text-decoration:none;margin:0 var(--by-space-2) var(--by-space-2) 0;transition:opacity var(--by-duration-fast) var(--by-ease-standard)}
+.btn:hover{opacity:.85}
+.btn.alt{background:transparent;color:var(--by-text);border:1px solid var(--by-border-strong)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--by-recording)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--by-space-4);padding:var(--by-space-8) 0}
+.card{background:var(--by-surface);border:1px solid var(--by-rule);border-radius:var(--by-radius-lg);padding:var(--by-space-6)}
+.card h3{margin:0 0 var(--by-space-1);font-size:var(--by-text-body);font-weight:600}
+.card p{margin:0;color:var(--by-text-muted);font-size:var(--by-text-small);line-height:var(--by-leading-small)}
+footer{color:var(--by-text-muted);padding:var(--by-space-10) var(--by-space-6);font-size:var(--by-text-small)}
 </style>
 </head>
 <body>
-<div class="ghost" style="left:6%;top:20%">👻</div>
-<div class="ghost" style="right:8%;top:55%;animation-delay:-3s">🎃</div>
-<div class="ghost" style="left:12%;top:75%;animation-delay:-6s">🦇</div>
-<nav><b><img src="icon.svg" alt="">booya</b><a href="https://github.com/im45145v/Booya">GitHub</a></nav>
+<nav><b><img src="/favicon.svg" alt="">Booya</b><a href="https://github.com/im45145v/Booya">GitHub</a></nav>
 <main>
 <section class="hero">
-<h1>Record it. <span>Booya.</span></h1>
-<p>A free, open source screen recorder for product demos. Auto zoom, smooth cursor, styled backgrounds. No account, no telemetry.</p>
-<a class="btn" href="https://github.com/im45145v/Booya/releases">Download</a>
+<h1>Record it. Booya.</h1>
+<p>An open source screen recorder for product demos. It zooms in where you click and writes captions on your own machine. No account and no telemetry.</p>
+<a class="btn" href="https://github.com/im45145v/Booya/releases"><span class="dot" aria-hidden="true"></span>Download</a>
 <a class="btn alt" href="https://github.com/im45145v/Booya">Source</a>
 </section>
 <section class="grid">
-<div class="card"><h3>🔍 Auto zoom</h3><p>Zooms on clicks using the event log recorded alongside the video.</p></div>
-<div class="card"><h3>🎙 Locked sound</h3><p>Audio is laid back over the real recording time, so voice and picture stay together, even if a mic drops samples.</p></div>
-<div class="card"><h3>🕸 Runs locally</h3><p>Everything stays on your machine. Cloud features are off until you turn them on.</p></div>
-<div class="card"><h3>📦 Any format</h3><p>Export MP4, WebM or GIF up to 4K in 16:9, 9:16 or 1:1.</p></div>
+<div class="card"><h3>Auto zoom</h3><p>Zooms in on clicks and typing, from the event log recorded with the video.</p></div>
+<div class="card"><h3>Captions on this device</h3><p>Whisper runs locally. Your voice never leaves your computer.</p></div>
+<div class="card"><h3>Sound stays with picture</h3><p>Voice, camera and screen share one clock, from the first frame to the last.</p></div>
+<div class="card"><h3>Any format</h3><p>Export MP4, WebM or GIF up to 4K, in 16:9, 9:16 or 1:1.</p></div>
 </section>
 </main>
-<footer>Made with 💜 in the dark · <a href="https://github.com/im45145v/Booya/blob/main/LICENSE">License</a></footer>
+<footer>Booya is MIT licensed. <a href="https://github.com/im45145v/Booya/blob/main/LICENSE">License</a></footer>
 </body>
 </html>

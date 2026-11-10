@@ -2379,22 +2379,69 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
         .build()
 }
 
-/// Menu bar glyphs from brand/ (88x88 raw RGBA, made from the PNGs): the outline ghost when idle, the filled one while recording.
+// Tray glyphs from the brand kit (brand/assets/tray). Idle and recording
+// differ only by the ripple arc. macOS gets black template images that the
+// menu bar tints itself; Windows gets a 16 px glyph in ink for a light
+// taskbar and in paper for a dark one.
 #[cfg(target_os = "macos")]
-const TRAY_IDLE: &[u8] = include_bytes!("../../brand/tray-template@2x.rgba");
+const TRAY_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idleTemplate@2x.png");
 #[cfg(target_os = "macos")]
-const TRAY_REC: &[u8] = include_bytes!("../../brand/tray-recording@2x.rgba");
+const TRAY_REC: &[u8] = include_bytes!("../icons/tray/tray-recordingTemplate@2x.png");
+#[cfg(target_os = "windows")]
+const TRAY_IDLE_LIGHT: &[u8] = include_bytes!("../icons/tray/tray-idle-light.ico");
+#[cfg(target_os = "windows")]
+const TRAY_REC_LIGHT: &[u8] = include_bytes!("../icons/tray/tray-recording-light.ico");
+#[cfg(target_os = "windows")]
+const TRAY_IDLE_DARK: &[u8] = include_bytes!("../icons/tray/tray-idle-dark.ico");
+#[cfg(target_os = "windows")]
+const TRAY_REC_DARK: &[u8] = include_bytes!("../icons/tray/tray-recording-dark.ico");
 
-/// Swap the menu bar glyph between idle and recording (macOS only).
-fn tray_recording(app: &tauri::AppHandle, on: bool) {
+/// Whether the tray currently shows the recording glyph, so a taskbar theme
+/// change can redraw the right one.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static TRAY_REC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True when the Windows taskbar uses the light theme
+/// (`SystemUsesLightTheme` is 1). The Windows default is a dark taskbar.
+#[cfg(target_os = "windows")]
+fn taskbar_is_light() -> bool {
+    booya_core::proc::command("reg")
+        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "/v", "SystemUsesLightTheme"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().last().is_some_and(|v| v == "0x1"))
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_glyph(on: bool) -> Option<tauri::image::Image<'static>> {
     #[cfg(target_os = "macos")]
-    if let Some(t) = app.tray_by_id("main") {
-        let img = tauri::image::Image::new_owned((if on { TRAY_REC } else { TRAY_IDLE }).to_vec(), 88, 88,
-        );
-        let _ = t.set_icon(Some(img));
-        let _ = t.set_icon_as_template(true);
+    let bytes = if on { TRAY_REC } else { TRAY_IDLE };
+    #[cfg(target_os = "windows")]
+    let bytes = match (on, taskbar_is_light()) {
+        (false, true) => TRAY_IDLE_LIGHT,
+        (true, true) => TRAY_REC_LIGHT,
+        (false, false) => TRAY_IDLE_DARK,
+        (true, false) => TRAY_REC_DARK,
+    };
+    tauri::image::Image::from_bytes(bytes).ok()
+}
+
+/// Swap the tray glyph between idle and recording.
+fn tray_recording(app: &tauri::AppHandle, on: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        TRAY_REC_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = app.tray_by_id("main") {
+            if let Some(img) = tray_glyph(on) {
+                let _ = t.set_icon(Some(img));
+            }
+            #[cfg(target_os = "macos")]
+            let _ = t.set_icon_as_template(true);
+            let _ = t.set_tooltip(Some(if on { "Booya, recording" } else { "Booya" }));
+        }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (app, on);
 }
 
@@ -2403,14 +2450,10 @@ fn tray_recording(app: &tauri::AppHandle, on: bool) {
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::tray::TrayIconBuilder;
     let mut b = TrayIconBuilder::with_id("main").menu(&tray_menu(app)?).tooltip("Booya");
-    // The Mac menu bar gets the single colour ghost outline as a template image, so it
-    // follows the light or dark bar. Windows keeps the full colour app icon.
-    #[cfg(target_os = "macos")]
-    let template = Some(tauri::image::Image::new_owned(TRAY_IDLE.to_vec(), 88, 88));
-    #[cfg(not(target_os = "macos"))]
-    let template: Option<tauri::image::Image<'static>> = None;
-    if let Some(img) = template {
-        b = b.icon(img).icon_as_template(true);
+    // The idle glyph: a template image on macOS (it follows the light or
+    // dark menu bar), the taskbar theme's glyph on Windows.
+    if let Some(img) = tray_glyph(false) {
+        b = b.icon(img).icon_as_template(cfg!(target_os = "macos"));
     } else if let Some(icon) = app.default_window_icon() {
         b = b.icon(icon.clone());
     }
@@ -2583,6 +2626,11 @@ fn main() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 remember_main_window(window);
+            }
+            // The taskbar may have switched between light and dark.
+            #[cfg(target_os = "windows")]
+            if matches!(event, tauri::WindowEvent::ThemeChanged(_)) {
+                tray_recording(window.app_handle(), TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed));
             }
         })
         .setup(move |app| {
