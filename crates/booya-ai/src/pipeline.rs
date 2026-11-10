@@ -230,6 +230,36 @@ mod activity_tests {
         assert_eq!(protect_activity(&[(1.0, 2.0)], &[], 400.0, 900.0, 0.5), vec![(1.0, 2.0)]);
     }
 
+    proptest::proptest! {
+        /// Whatever the cuts and the activity, what is left to cut lies inside
+        /// the original cuts, misses every protected stretch, is long enough
+        /// to be worth it, and is in order.
+        #[test]
+        fn protected_stretches_are_never_cut(cuts in proptest::collection::vec((0.0f64..60_000.0, 0.0f64..8_000.0), 0..12), keep in proptest::collection::vec((0.0f64..60_000.0, 0.0f64..3_000.0), 0..12)) {
+            let mut cuts: Vec<(f64, f64)> = cuts.iter().map(|&(a, l)| (a, a + l)).collect();
+            cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut disjoint: Vec<(f64, f64)> = Vec::new();
+            for c in cuts {
+                match disjoint.last_mut() {
+                    Some(m) if c.0 <= m.1 => m.1 = m.1.max(c.1),
+                    _ => disjoint.push(c),
+                }
+            }
+            let keep: Vec<(f64, f64)> = keep.iter().map(|&(a, l)| (a, a + l)).collect();
+            let out = super::protect_ranges(&disjoint, &keep, 300.0);
+            for &(s, e) in &out {
+                proptest::prop_assert!(e - s >= 300.0);
+                proptest::prop_assert!(disjoint.iter().any(|&(a, b)| s >= a && e <= b), "{s}..{e} is outside the cuts");
+                for &(ks, ke) in &keep {
+                    proptest::prop_assert!(e <= ks || s >= ke, "{s}..{e} cuts into the kept {ks}..{ke}");
+                }
+            }
+            for w in out.windows(2) {
+                proptest::prop_assert!(w[0].1 <= w[1].0);
+            }
+        }
+    }
+
     #[test]
     fn cursor_travel_before_a_click_is_kept() {
         use booya_core::events::{Event, EventKind, EventLog, MouseButton};
