@@ -193,6 +193,8 @@ fn run() -> Result<()> {
             let dir = a.opt(&["--dir"]).map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("booya-syncprobe"));
             let json = a.0.iter().any(|v| v == "--json");
             let rows = booya_core::syncprobe::run_file_stages(&dir)?;
+            // Only the Linux capture check below can add to it.
+            #[allow(unused_mut)]
             let mut bad = rows.iter().any(|r| !r.ok);
             #[allow(unused_mut)]
             let mut cap = Vec::new();

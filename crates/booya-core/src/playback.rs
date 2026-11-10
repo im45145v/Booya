@@ -60,17 +60,14 @@ impl Pcm {
 /// Decodes `path` (any format ffmpeg reads) to 16 bit PCM at `rate` Hz with
 /// `channels` channels. `max_secs` keeps a huge file from filling memory.
 pub fn decode(path: &Path, channels: usize, rate: u32, max_secs: f64) -> Result<Pcm> {
-    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
-        .args(["-v", "error", "-nostdin", "-i"])
+    let mut c = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
+    c.args(["-v", "error", "-nostdin", "-i"])
         .arg(crate::ffmpeg::file_url(path))
-        .args(["-vn", "-t", &format!("{max_secs:.1}"), "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-f", "s16le", "-"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .context("could not start ffmpeg to read the sound")?;
-    if !out.status.success() {
-        bail!("could not read the sound file: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""));
+        .args(["-vn", "-t", &format!("{max_secs:.1}"), "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-f", "s16le", "-"]);
+    let (data, ok, err) = crate::audio::read_samples::<2, i16>(c, i16::from_le_bytes).context("could not start ffmpeg to read the sound")?;
+    if !ok {
+        bail!("could not read the sound file: {}", err.lines().last().unwrap_or(""));
     }
-    let data: Vec<i16> = out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
     if data.is_empty() {
         bail!("the sound file has no audio in it");
     }
