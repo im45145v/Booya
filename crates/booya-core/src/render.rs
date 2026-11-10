@@ -41,6 +41,22 @@ impl Frame {
         let fx = (x - x0) as f32;
         let fy = (y - y0) as f32;
         let (x0, y0) = (x0 as i64, y0 as i64);
+        let (w, h) = (self.w as i64, self.h as i64);
+        if x0 >= 0 && y0 >= 0 && x0 + 1 < w && y0 + 1 < h {
+            // Inside the frame (almost every sample): read the four pixels
+            // directly, without clamping each one.
+            let i = ((y0 * w + x0) * 4) as usize;
+            let j = i + (w * 4) as usize;
+            let d = &self.data;
+            let mut out = [0f32; 3];
+            for k in 0..3 {
+                let (a, b, c, e) = (d[i + k] as f32, d[i + 4 + k] as f32, d[j + k] as f32, d[j + 4 + k] as f32);
+                let top = a + (b - a) * fx;
+                let bot = c + (e - c) * fx;
+                out[k] = top + (bot - top) * fy;
+            }
+            return out;
+        }
         let a = self.px(x0, y0);
         let b = self.px(x0 + 1, y0);
         let c = self.px(x0, y0 + 1);
@@ -1162,24 +1178,44 @@ impl Renderer {
 
         // 2. Zoomed recording over the pre-baked background and shadow. Only the
         // rows and columns the card can touch are visited.
-        let mut out = sc.background.clone();
         let w = self.out_w as usize;
         let screen = sc.kind != SceneKind::Camera;
         let y0 = (l.y - 1.0).floor().max(0.0) as usize;
         let y1 = if screen { ((l.y + l.h + 1.0).ceil() as usize).min(self.out_h as usize) } else { y0 };
         let x0 = (l.x - 1.0).floor().max(0.0) as usize;
         let x1 = ((l.x + l.w + 1.0).ceil() as usize).min(w);
-        out.data[y0 * w * 4..y1 * w * 4].par_chunks_mut(w * 4).enumerate().for_each(|(i, row)| {
-            let fy = (y0 + i) as f64 + 0.5;
-            for x in x0..x1 {
+        // The source column for each output column is the same on every row,
+        // so it is worked out once per frame instead of once per pixel.
+        let src_x: Vec<f64> = (x0..x1).map(|x| (vx + (x as f64 + 0.5 - l.x) / l.w * vw) * sx_scale).collect();
+        // Columns well inside the straight part of the card have full
+        // coverage on rows well inside it, so the rounded corner distance is
+        // only needed near the edges. The margin keeps this exact.
+        let inner = (hw - l.radius - 1.0).max(0.0);
+        let inner_y = (hh - l.radius - 1.0).max(0.0);
+        // The background is copied row by row on all cores (a single
+        // threaded clone of a 4K frame alone took several ms), and each
+        // card row is drawn straight after its copy while it is hot in cache.
+        let mut out = Frame { w: sc.background.w, h: sc.background.h, data: vec![0; sc.background.data.len()] };
+        let bg = &sc.background.data;
+        out.data.par_chunks_mut(w * 4).enumerate().for_each(|(yy, row)| {
+            row.copy_from_slice(&bg[yy * w * 4..(yy + 1) * w * 4]);
+            if yy < y0 || yy >= y1 {
+                return;
+            }
+            let fy = yy as f64 + 0.5;
+            let sy = (vy + (fy - l.y) / l.h * vh) * sy_scale;
+            let row_inside = (fy - cy).abs() <= inner_y;
+            for (j, x) in (x0..x1).enumerate() {
                 let fx = x as f64 + 0.5;
-                let d = sd_round_rect(fx, fy, cx, cy, hw, hh, l.radius);
-                let cov = (0.5 - d).clamp(0.0, 1.0) as f32;
+                let cov = if row_inside && (fx - cx).abs() <= inner {
+                    1.0
+                } else {
+                    let d = sd_round_rect(fx, fy, cx, cy, hw, hh, l.radius);
+                    (0.5 - d).clamp(0.0, 1.0) as f32
+                };
                 if cov > 0.0 {
                     let px = &mut row[x * 4..x * 4 + 4];
-                    let u = (fx - l.x) / l.w;
-                    let v = (fy - l.y) / l.h;
-                    let s = sample_with_blurs(src, &patches, (vx + u * vw) * sx_scale, (vy + v * vh) * sy_scale);
+                    let s = sample_with_blurs(src, &patches, src_x[j], sy);
                     for k in 0..3 {
                         px[k] = (px[k] as f32 + (s[k] - px[k] as f32) * cov).round() as u8;
                     }
@@ -1527,6 +1563,62 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::events::{Event, EventKind};
+
+    /// The clamped four pixel read the fast path in `Frame::sample` replaces.
+    fn sample_clamped(f: &Frame, x: f64, y: f64) -> [f32; 3] {
+        let (x, y) = (x - 0.5, y - 0.5);
+        let (x0, y0) = (x.floor(), y.floor());
+        let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let (a, b, c, d) = (f.px(x0, y0), f.px(x0 + 1, y0), f.px(x0, y0 + 1), f.px(x0 + 1, y0 + 1));
+        let mut out = [0f32; 3];
+        for k in 0..3 {
+            let top = a[k] + (b[k] - a[k]) * fx;
+            let bot = c[k] + (d[k] - c[k]) * fx;
+            out[k] = top + (bot - top) * fy;
+        }
+        out
+    }
+
+    #[test]
+    fn fast_sampling_matches_the_clamped_read_everywhere() {
+        let mut f = Frame::new(23, 17);
+        for (i, v) in f.data.iter_mut().enumerate() {
+            *v = (i * 37 % 251) as u8;
+        }
+        // Inside, on the last row and column, and outside the frame.
+        let mut y = -2.3;
+        while y < 20.0 {
+            let mut x = -2.7;
+            while x < 26.0 {
+                assert_eq!(f.sample(x, y), sample_clamped(&f, x, y), "at {x},{y}");
+                x += 0.37;
+            }
+            y += 0.41;
+        }
+    }
+
+    #[test]
+    fn the_inner_card_shortcut_only_skips_fully_covered_pixels() {
+        // The render loop treats pixels within (half size - radius - 1) of the
+        // centre on both axes as fully covered. Check that against the exact
+        // rounded rectangle distance for a range of cards.
+        for &(hw, hh, r) in &[(300.0, 200.0, 24.0), (50.0, 80.0, 0.0), (10.0, 10.0, 9.5), (400.5, 225.25, 60.0)] {
+            let (inner, inner_y) = ((hw - r - 1.0f64).max(0.0), (hh - r - 1.0f64).max(0.0));
+            let mut dy = -hh;
+            while dy <= hh {
+                let mut dx = -hw;
+                while dx <= hw {
+                    if dx.abs() <= inner && dy.abs() <= inner_y {
+                        let d = sd_round_rect(dx, dy, 0.0, 0.0, hw, hh, r);
+                        assert_eq!((0.5 - d).clamp(0.0, 1.0), 1.0, "card {hw}x{hh} r {r} at {dx},{dy}");
+                    }
+                    dx += 1.7;
+                }
+                dy += 1.3;
+            }
+        }
+    }
 
     #[test]
     fn sparse_blur_patches_match_whole_frame_blurring() {
