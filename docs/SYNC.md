@@ -43,14 +43,14 @@ Measured on Linux (Xvfb, PulseAudio null sink, 60 s of flashes and beeps, one ru
 | | sound vs picture | drift over 60 s | jitter |
 |---|---|---|---|
 | before (main at f1d4910) | +53 ms | 0 ms | 0 ms |
-| after | -1 ms | 0 ms | 0 ms |
+| after (two runs) | -1 ms, +8 ms | 0 ms | 0 ms |
 
 Both numbers include the test's own start skew (the beep is a separate process), so the honest reading is "about 50 ms better", not "perfect". The test used to play the beep with PulseAudio's default buffer, which put it about a second late; with flashes every second that looked like a plausible offset. It now plays with a 20 ms buffer and the CLI holds the capture offset to 100 ms.
 
 What changed:
 
 - **Microphone start.** The microphone file is stamped with the moment its first packet was read. That packet was captured earlier, by at least its own length plus whatever the device buffered before the first read, and that amount changes from one recording to the next. This is the "sometimes early, sometimes on time" in issue #7. The microphone recorder now also writes a packet log (`recording.mic.timing`, read time and size of every packet). At the end, the start is worked out from all packets: read time minus samples so far, at its smallest. In the run above the voice started 69 ms before its first packet was read.
-- **Microphone clock.** The same log gives the microphone's real rate against the wall clock, over the whole take. Before, drift was only corrected when the voice came out 2.5% to 20% short of the video, and the video's length was the yardstick even though the microphone is stopped before the screen. Now a difference over 0.05% is corrected (up to 1% by relabelling the sample rate, which nobody can hear, beyond that with a tempo change). On this machine the clock was 0.023% slow, under the threshold.
+- **Microphone clock.** The same log gives the microphone's real rate against the wall clock, from the quickest read in each tenth of the take (takes of 30 s or more). Before, drift was only corrected when the voice came out 2.5% to 20% short of the video, and the video's length was the yardstick even though the microphone is stopped before the screen. Now a difference over 0.05% is corrected (up to 1% by relabelling the sample rate, which nobody can hear, beyond that with a tempo change). On this machine the clock was within 0.004%, under the threshold. A first version fitted all reads and let a busy CI runner's read delays look like a 0.1% clock error, which added 27 ms of drift in 20 s; the quickest-read version does not.
 - **Camera.** Camera frames were spaced at exactly 30 fps after the first one. A built-in camera that drops to 15 or 24 fps in a dim room then played up to twice as fast and ran ahead of the voice; a DirectShow camera opened in a non 30 fps default mode did the same. Every frame now keeps its wall-clock time, and only frames that arrive in a burst are spread out.
 - **Clicks and zoom.** The event log was moved to the first frame only when that frame came more than 150 ms after the clock started, and on Linux and Windows a recording without sound had no such time at all. Both now always use the real lead-in.
 

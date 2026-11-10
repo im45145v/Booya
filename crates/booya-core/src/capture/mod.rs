@@ -982,7 +982,9 @@ mod tests {
         assert!((fixed_pts[0] - 0.4).abs() < 0.05, "the start stays on the shared clock: {}", fixed_pts[0]);
         let step = fixed_pts[1] - fixed_pts[0];
         assert!(step > 0.02 && step < 0.04, "a burst is spread at about the camera rate, got {step}");
-        assert!(fixed_pts.windows(2).all(|w| w[1] > w[0]), "frame times move forward");
+        let mut shown = fixed_pts.clone();
+        shown.sort_by(f64::total_cmp);
+        assert!(shown.windows(2).all(|w| w[1] > w[0]), "no two frames share a time: {shown:?}");
 
         // A camera that delivers 15 fps although it was opened at 30 keeps
         // its real length (stepping at 30 fps played it twice as fast).

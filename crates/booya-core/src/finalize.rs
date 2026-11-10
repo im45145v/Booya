@@ -244,12 +244,31 @@ pub fn parse_mic_timing(text: &str) -> Option<MicClock> {
         (cum, p * tb)
     }).collect();
     let span = xy[xy.len() - 1].1 - xy[0].1;
-    let n = xy.len() as f64;
-    let (mx, my) = (xy.iter().map(|v| v.0).sum::<f64>() / n, xy.iter().map(|v| v.1).sum::<f64>() / n);
-    let sxx: f64 = xy.iter().map(|v| (v.0 - mx).powi(2)).sum();
-    // Wall seconds per second of samples. A short take cannot tell a rate
-    // apart from the read jitter, so it is taken as exact.
-    let mut slope = if span >= 20.0 && sxx > 0.0 { xy.iter().map(|v| (v.0 - mx) * (v.1 - my)).sum::<f64>() / sxx } else { 1.0 };
+    // Wall seconds per second of samples, from the lower edge of the delays:
+    // the quickest read in each tenth of the take. Read delays come and go
+    // (a busy machine adds tens of ms), the quickest read in a stretch does
+    // not, so a line through those is the clock and not the load. A take
+    // under 30 s cannot tell a rate apart from that noise and is taken as
+    // exact.
+    let mut slope = 1.0;
+    if span >= 30.0 {
+        let x_end = xy[xy.len() - 1].0;
+        let mut lows: Vec<(f64, f64)> = Vec::new();
+        for b in 0..10 {
+            let (lo, hi) = (x_end * b as f64 / 10.0, x_end * (b + 1) as f64 / 10.0);
+            if let Some(p) = xy.iter().filter(|v| v.0 > lo && v.0 <= hi).min_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0))) {
+                lows.push(*p);
+            }
+        }
+        let n = lows.len() as f64;
+        if n >= 6.0 {
+            let (mx, my) = (lows.iter().map(|v| v.0).sum::<f64>() / n, lows.iter().map(|v| v.1).sum::<f64>() / n);
+            let sxx: f64 = lows.iter().map(|v| (v.0 - mx).powi(2)).sum();
+            if sxx > 0.0 {
+                slope = lows.iter().map(|v| (v.0 - mx) * (v.1 - my)).sum::<f64>() / sxx;
+            }
+        }
+    }
     if !(0.8..=1.25).contains(&slope) {
         slope = 1.0;
     }
