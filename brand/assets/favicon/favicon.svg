@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<style>.t{fill:#F4F3EF}.b{fill:#111110;stroke:#111110}.r{stroke:#FF5A1F}
+@media (prefers-color-scheme: dark){.t{fill:#111110}.b{fill:#EDEBE5;stroke:#EDEBE5}.r{stroke:#FF6A33}}</style>
+<rect class="t" x="32" y="32" width="960" height="960" rx="216"/>
+<path class="b" d="M305.61 238.40 L305.61 797.87 C314.99 844.02 413.53 844.02 422.92 797.87 C432.30 844.02 530.84 844.02 540.22 797.87 C549.61 844.02 648.15 844.02 657.53 797.87 L576.32 689.58 L756.79 689.58 Z M446.60 574.53 A43.99 43.99 0 1 0 358.62 574.53 A43.99 43.99 0 1 0 446.60 574.53 Z M554.89 574.53 A43.99 43.99 0 1 0 466.91 574.53 A43.99 43.99 0 1 0 554.89 574.53 Z" fill-rule="evenodd" stroke-width="0"/>
+<path class="r" d="M170.34 233.68 A135.35 135.35 0 0 1 300.88 103.13" fill="none" stroke-width="49.6" stroke-linecap="round"/>
+</svg>
