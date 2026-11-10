@@ -2,6 +2,10 @@
 
 Thanks for helping. Booya is a small project, so a clear bug report is worth as much as a pull request.
 
+## Finding your way around
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the crates, how a recording becomes a finished video, and where to start for common changes. [docs/SYNC.md](docs/SYNC.md) covers sound and picture sync, [docs/EDITING.md](docs/EDITING.md#auto-zoom-when-it-zooms) the auto zoom rules, and [docs/RELEASING.md](docs/RELEASING.md) how a release is cut.
+
 ## Reporting a bug
 
 Open an [issue](https://github.com/im45145v/Booya/issues/new/choose) and pick **Bug report**. The form asks for:
