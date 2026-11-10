@@ -1,7 +1,7 @@
 //! Export: decode source -> render every output frame -> encode with ffmpeg.
 
 use crate::events::EventLog;
-use crate::ffmpeg::{self, FrameReader};
+use crate::ffmpeg::{self, FrameReader, PrefetchReader};
 use crate::project::{Background, Format, Project};
 use crate::render::{Frame, Renderer};
 use anyhow::{bail, Context, Result};
@@ -340,6 +340,51 @@ fn private_tmp() -> Result<std::path::PathBuf> {
     Ok(d)
 }
 
+/// Hands frames to the encoder's stdin on a separate thread, a few frames
+/// behind the renderer. `send` fails once ffmpeg stops reading (it exited or
+/// hit an error), the same moment a direct write would have failed.
+struct FrameWriter {
+    tx: Option<std::sync::mpsc::SyncSender<Frame>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FrameWriter {
+    fn new(mut stdin: std::process::ChildStdin) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Frame>(PrefetchReader::AHEAD);
+        let thread = std::thread::Builder::new()
+            .name("booya-encode".into())
+            .spawn(move || {
+                for f in rx {
+                    if stdin.write_all(&f.data).is_err() {
+                        break;
+                    }
+                }
+                // Dropping stdin here closes the pipe, which tells ffmpeg the
+                // video has ended.
+            })
+            .expect("failed to start the encode thread");
+        Self { tx: Some(tx), thread: Some(thread) }
+    }
+
+    fn send(&mut self, f: Frame) -> std::result::Result<(), ()> {
+        self.tx.as_ref().ok_or(())?.send(f).map_err(|_| ())
+    }
+
+    /// Waits until every queued frame is written and the pipe is closed.
+    fn finish(&mut self) {
+        drop(self.tx.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for FrameWriter {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 /// Kills the encoder if export bails out early (decoder error, panic).
 struct KillOnDrop(Option<std::process::Child>);
 impl Drop for KillOnDrop {
@@ -425,7 +470,7 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
     let dec_fps = (info.fps.max(fps)).min(fps * max_speed).max(fps);
     let first_src = project.clips[0].src_start_ms;
     let (dw, dh) = renderer.decode_size();
-    let mut reader = FrameReader::open(&project.source, first_src, dec_fps, dw, dh)?;
+    let mut reader = PrefetchReader::new(FrameReader::open(&project.source, first_src, dec_fps, dw, dh)?);
     let mut current: Option<Frame> = reader.next()?;
 
     // The camera, decoded at the size of the biggest place it is shown (and
@@ -435,7 +480,7 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
             Ok(i) => {
                 let (cw, ch) = renderer.cam_decode_size((i.width, i.height));
                 let start = (first_src - w.offset_ms).max(0.0);
-                FrameReader::open_filtered(&w.path, start, fps, &webcam_filter(cw, ch), cw, ch).ok().map(|r| (r, start, w.offset_ms, None::<Frame>))
+                FrameReader::open_filtered(&w.path, start, fps, &webcam_filter(cw, ch), cw, ch).ok().map(|r| (PrefetchReader::new(r), start, w.offset_ms, None::<Frame>))
             }
             Err(_) => None,
         },
@@ -511,7 +556,10 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
     }
     cmd.arg(ffmpeg::file_url(out));
     let mut guard = KillOnDrop(Some(cmd.stdin(Stdio::null()).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg encoder")?));
-    let mut stdin = guard.0.as_mut().and_then(|c| c.stdin.take()).context("could not talk to the ffmpeg encoder")?;
+    let stdin = guard.0.as_mut().and_then(|c| c.stdin.take()).context("could not talk to the ffmpeg encoder")?;
+    // Frames go to the encoder from their own thread, so the next frame is
+    // drawn while ffmpeg takes the last one.
+    let mut stdin = FrameWriter::new(stdin);
 
     // Cross-fade at cuts: the last frame before a cut fades into the next clip.
     let fade_ms = s.crossfade_ms.max(0.0);
@@ -523,14 +571,14 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
     let mut hold: Option<(f64, Frame)> = None;
 
     let mut written = 0u64;
-    let write_card = |card: &crate::project::Card, n: u64, stdin: &mut std::process::ChildStdin, written: &mut u64, progress: &mut dyn FnMut(f64)| -> bool {
+    let write_card = |card: &crate::project::Card, n: u64, stdin: &mut FrameWriter, written: &mut u64, progress: &mut dyn FnMut(f64)| -> bool {
         let fade = (fps * 0.45).max(1.0);
         for i in 0..n {
             let (a, b) = (i as f64, (n - 1 - i) as f64);
             let k = (a.min(b) / fade).clamp(0.0, 1.0) as f32;
             let k = k * k * (3.0 - 2.0 * k);
             let f = renderer.card_frame(card, k);
-            if stdin.write_all(&f.data).is_err() {
+            if stdin.send(f).is_err() {
                 return false;
             }
             *written += 1;
@@ -586,7 +634,7 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
             }
             last_frame = Some(frame.clone());
         }
-        if stdin.write_all(&frame.data).is_err() {
+        if stdin.send(frame).is_err() {
             break;
         }
         written += 1;
@@ -595,7 +643,7 @@ fn export_encoded(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, pr
     if let (Some(c), true) = (project.outro.as_ref(), outro_n > 0) {
         write_card(c, outro_n, &mut stdin, &mut written, progress);
     }
-    drop(stdin);
+    stdin.finish();
     let res = guard.0.take().context("the encoder is gone")?.wait_with_output()?;
     if !res.status.success() {
         bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&res.stderr));
