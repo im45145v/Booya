@@ -510,7 +510,10 @@ mod silent_demo_tests {
         assert_eq!(p, before);
     }
 
-    /// A 14 s 640x360 video with a silent audio track. A box changes at the
+    /// A 14 s 640x360 video with a silent audio track. Both inputs carry their
+    /// own length: with an endless `anullsrc` and `-shortest`, the ffmpeg 8 on
+    /// the macOS runners let the sound run on to about 15.6 s, and that frozen
+    /// tail was then (rightly) cut as a still, quiet stretch. A box changes at the
     /// given times (so the picture is "active" there); the pointer moves in
     /// the given ranges and clicks at the given times.
     fn demo(name: &str, flashes: &[f64], moving: &[(f64, f64)], clicks: &[f64]) -> Option<Project> {
@@ -520,7 +523,7 @@ mod silent_demo_tests {
         let enable = flashes.iter().map(|t| format!("between(t,{t},{})", t + 0.4)).collect::<Vec<_>>().join("+");
         let vf = if flashes.is_empty() { "null".to_string() } else { format!("drawbox=x=100:y=100:w=200:h=100:color=white:t=fill:enable='{enable}'") };
         let ok = std::process::Command::new(booya_core::ffmpeg::ffmpeg_bin()) // proc:allow
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=15:d=14", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-vf", &vf, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=15:d=14", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=14", "-vf", &vf, "-t", "14", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
             ])
             .arg(&video)
             .status()
@@ -547,7 +550,10 @@ mod silent_demo_tests {
         log.events.sort_by(|a, b| a.t.total_cmp(&b.t));
         let ev = dir.join("demo.events.jsonl");
         log.save(&ev).ok()?;
-        booya_core::new_project(&video, Some(&ev)).ok()
+        let p = booya_core::new_project(&video, Some(&ev)).ok()?;
+        // The fixture is exactly 14 s, or the cut assertions mean nothing.
+        assert!((p.duration_ms - 14_000.0).abs() < 100.0, "fixture length {} ms", p.duration_ms);
+        Some(p)
     }
 
     fn silences_only() -> AutoCutOptions {
