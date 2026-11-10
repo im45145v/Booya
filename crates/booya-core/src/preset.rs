@@ -69,7 +69,7 @@ pub fn save_preset(p: &Preset) -> Result<PathBuf> {
     let dir = presets_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(file_name(&p.name));
-    std::fs::write(&path, serde_json::to_string_pretty(p)?)?;
+    crate::fsutil::write_atomic(&path, serde_json::to_string_pretty(p)?.as_bytes())?;
     Ok(path)
 }
 
@@ -92,7 +92,12 @@ pub fn builtin_presets() -> Vec<Preset> {
         p.style.glass = crate::project::Glass { enabled: true, tint, tint_opacity, ..Default::default() };
         p
     };
+    // Just the recording, edge to edge: no wallpaper, padding, corners,
+    // shadow, glass or device frame. The camera still shows if there is one.
+    let mut plain = mk("No background", crate::project::Background::None, 0.0, 0.0, 0.0, 1.3, [255, 255, 255]);
+    plain.style.shadow_opacity = 0.0;
     vec![
+        plain,
         glass("Frosted", Gradient { from: [56, 189, 248], to: [192, 132, 252], angle_deg: 35.0 }, [255, 255, 255], 0.18, [255, 255, 255]),
         glass("Frosted dark", Gradient { from: [30, 27, 75], to: [190, 24, 93], angle_deg: 120.0 }, [20, 24, 40], 0.30, [165, 180, 252]),
         mk("Sunset", Gradient { from: [99, 102, 241], to: [236, 72, 153], angle_deg: 35.0 }, 0.07, 0.018, 0.035, 1.5, [255, 255, 255]),
@@ -158,6 +163,37 @@ mod tests {
         let mut p = Project::new("a.mp4".into(), None, 10, 10, 1000.0);
         load_preset("Midnight").unwrap().apply(&mut p);
         assert_eq!(p.cursor.ripple_color, [129, 140, 248]);
+    }
+}
+
+#[cfg(test)]
+mod no_background_tests {
+    use super::*;
+    use crate::project::Background;
+    use crate::render::{Frame, Renderer};
+
+    #[test]
+    fn no_background_shows_the_recording_edge_to_edge() {
+        let mut p = Project::new("a.mp4".into(), None, 64, 36, 1000.0);
+        p.style.glass.enabled = true;
+        load_preset("No background").unwrap().apply(&mut p);
+        assert_eq!(p.style.background, Background::None);
+        assert!(!p.style.glass.enabled);
+        assert_eq!(p.style.frame, crate::project::DeviceFrame::None);
+
+        let r = Renderer::new(p, None, 64, 36, None);
+        let mut src = Frame::new(64, 36);
+        for (i, c) in src.data.chunks_mut(4).enumerate() {
+            let (x, y) = ((i % 64) as u8, (i / 64) as u8);
+            c.copy_from_slice(&[x * 3, y * 5, 120, 255]);
+        }
+        let out = r.render(&src, 0.0, None);
+        assert_eq!((out.w, out.h), (64, 36));
+        // Corners and middle are the recording itself, not a canvas or a rounded edge.
+        for (x, y) in [(0, 0), (63, 0), (0, 35), (63, 35), (32, 18)] {
+            let i = (y * 64 + x) * 4;
+            assert_eq!(&out.data[i..i + 3], &src.data[i..i + 3], "pixel {x},{y}");
+        }
     }
 }
 

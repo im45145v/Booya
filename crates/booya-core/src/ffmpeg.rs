@@ -455,6 +455,75 @@ impl Drop for FrameReader {
     }
 }
 
+/// A [`FrameReader`] that decodes on its own thread, a few frames ahead of
+/// whoever reads it. Export uses it so decoding, drawing and encoding run at
+/// the same time instead of taking turns. Same `index` and `next` as the
+/// plain reader. Dropping it stops the thread and the ffmpeg process.
+pub struct PrefetchReader {
+    rx: Option<std::sync::mpsc::Receiver<Result<Option<Frame>>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    pub fps: f64,
+    pub index: u64,
+    done: bool,
+}
+
+impl PrefetchReader {
+    /// How many decoded frames may wait in the queue. A 4K RGBA frame is
+    /// 33 MB, so this stays small.
+    pub const AHEAD: usize = 3;
+
+    pub fn new(mut reader: FrameReader) -> Self {
+        let fps = reader.fps;
+        let index = reader.index;
+        let (tx, rx) = std::sync::mpsc::sync_channel(Self::AHEAD);
+        let thread = std::thread::Builder::new()
+            .name("booya-decode".into())
+            .spawn(move || loop {
+                let r = reader.next();
+                let end = !matches!(r, Ok(Some(_)));
+                if tx.send(r).is_err() || end {
+                    break;
+                }
+            })
+            .expect("failed to start the decode thread");
+        Self { rx: Some(rx), thread: Some(thread), fps, index, done: false }
+    }
+
+    // Mirrors FrameReader::next.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Result<Option<Frame>> {
+        if self.done {
+            return Ok(None);
+        }
+        let got = self.rx.as_ref().and_then(|rx| rx.recv().ok());
+        match got {
+            Some(Ok(Some(f))) => {
+                self.index += 1;
+                Ok(Some(f))
+            }
+            Some(Err(e)) => {
+                self.done = true;
+                Err(e)
+            }
+            Some(Ok(None)) | None => {
+                self.done = true;
+                Ok(None)
+            }
+        }
+    }
+}
+
+impl Drop for PrefetchReader {
+    fn drop(&mut self) {
+        // Closing the queue makes the thread's next send fail, so it ends and
+        // drops the reader, which kills ffmpeg.
+        drop(self.rx.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 /// Which H.264 encoder to use. Hardware encoders (VideoToolbox on macOS,
 /// NVENC on NVIDIA) move the work off the CPU, which matters most for
 /// battery life on laptops. Software x264 is the fallback everywhere.
@@ -635,6 +704,44 @@ mod probe_tests {
         assert!(d.frame(500.0, false).is_ok());
         assert!(d.frame(info.duration_ms + 5000.0, false).is_ok());
         assert!(d.frame(info.duration_ms, true).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_prefetching_reader_gives_the_same_frames_in_order() {
+        if !ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("booya-prefetch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("p.mkv");
+        let ok = crate::proc::command(ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=96x54:r=10:d=2", "-pix_fmt", "yuv420p"])
+            .arg(&f)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let mut plain = FrameReader::open(&f, 0.0, 10.0, 96, 54).unwrap();
+        let mut ahead = PrefetchReader::new(FrameReader::open(&f, 0.0, 10.0, 96, 54).unwrap());
+        let mut n = 0;
+        loop {
+            let (a, b) = (plain.next().unwrap(), ahead.next().unwrap());
+            assert_eq!(plain.index, ahead.index);
+            match (a, b) {
+                (Some(a), Some(b)) => assert_eq!(a.data, b.data, "frame {n}"),
+                (None, None) => break,
+                _ => panic!("the readers ended at different frames"),
+            }
+            n += 1;
+        }
+        assert!(n >= 19, "{n} frames");
+        // Reading past the end stays at the end.
+        assert!(ahead.next().unwrap().is_none());
+        // Dropping a reader that is still mid file does not hang.
+        let mut early = PrefetchReader::new(FrameReader::open(&f, 0.0, 10.0, 96, 54).unwrap());
+        assert!(early.next().unwrap().is_some());
+        drop(early);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

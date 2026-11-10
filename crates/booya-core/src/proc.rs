@@ -25,6 +25,19 @@ pub fn command<S: AsRef<OsStr>>(program: S) -> Command {
     c
 }
 
+/// The argument for `explorer /select,<file>`, which highlights the file in
+/// its folder. Explorer parses its own command line: it wants the path in
+/// quotes right after the comma, with backslashes, and it does not know the
+/// `\\?\` prefix `canonicalize` adds. The standard library quotes the whole
+/// argument instead (`"/select,C:\Users\A B\x.mp4"`) as soon as there is a
+/// space, which explorer reads as no path and opens Documents. Pass this
+/// with `CommandExt::raw_arg` on Windows.
+pub fn explorer_select_arg(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\UNC\").map(|r| format!(r"\\{r}")).unwrap_or_else(|| s.strip_prefix(r"\\?\").unwrap_or(&s).to_string());
+    format!("/select,\"{}\"", s.replace('/', "\\"))
+}
+
 /// Stop a child and reap it, so no ffmpeg is left running or as a zombie.
 pub fn reap(child: &mut std::process::Child) {
     let _ = child.kill();
@@ -34,6 +47,15 @@ pub fn reap(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn explorer_gets_a_quoted_plain_windows_path() {
+        let a = |p: &str| super::explorer_select_arg(Path::new(p));
+        assert_eq!(a(r"C:\Users\Ashish Malla\Videos\take 1.mp4"), r#"/select,"C:\Users\Ashish Malla\Videos\take 1.mp4""#);
+        assert_eq!(a(r"\\?\C:\Users\a\x.mp4"), r#"/select,"C:\Users\a\x.mp4""#);
+        assert_eq!(a(r"\\?\UNC\nas\share\x.mp4"), r#"/select,"\\nas\share\x.mp4""#);
+        assert_eq!(a("C:/Users/a/x.mp4"), r#"/select,"C:\Users\a\x.mp4""#);
+    }
 
     fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };

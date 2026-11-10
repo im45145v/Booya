@@ -1,0 +1,21 @@
+name: Feature request
+description: An idea for something Booya should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: Describe the video you're making and where Booya gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working. Rough is fine.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+      description: Another tool, a workaround, or editing by hand.

@@ -7,21 +7,65 @@ use std::path::Path;
 
 /// Decode the first audio stream to mono f32 samples at `rate` Hz.
 pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
-    let out = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
-        .args(["-v", "error", "-i"])
+    let mut c = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
+    c.args(["-v", "error", "-nostdin", "-i"])
         .arg(crate::ffmpeg::file_url(path))
-        .args(["-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "f32le", "-"])
-        .output()
-        .context("failed to run ffmpeg")?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
+        .args(["-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "f32le", "-"]);
+    let (samples, ok, err) = read_samples::<4, f32>(c, f32::from_le_bytes).context("failed to run ffmpeg")?;
+    if !ok {
         // A recording with no sound track is not an error: it has no samples.
         if err.contains("does not contain any stream") || err.contains("matches no streams") {
             return Ok(Vec::new());
         }
         bail!("audio decode failed: {err}");
     }
-    Ok(out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    Ok(samples)
+}
+
+/// Runs `cmd` and turns its stdout into samples as it arrives, so a long
+/// recording is held in memory once instead of twice (raw bytes and samples
+/// at the same time, which for an hour of 48 kHz audio was an extra 700 MB).
+/// Returns the samples, whether the process succeeded, and its stderr.
+pub(crate) fn read_samples<const N: usize, T>(mut cmd: std::process::Command, conv: fn([u8; N]) -> T) -> std::io::Result<(Vec<T>, bool, String)> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    // stderr is drained on its own thread so a chatty ffmpeg never blocks
+    // on a full pipe while we wait on stdout.
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let err_thread = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = stderr.read_to_end(&mut s);
+        s
+    });
+    let mut out = child.stdout.take().expect("stdout is piped");
+    let mut samples = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut carry = 0usize;
+    let read = loop {
+        match out.read(&mut buf[carry..]) {
+            Ok(0) => break Ok(()),
+            Ok(n) => {
+                let have = carry + n;
+                let (chunks, rest) = buf[..have].as_chunks::<N>();
+                samples.extend(chunks.iter().map(|b| conv(*b)));
+                let r = rest.len();
+                buf.copy_within(have - r..have, 0);
+                carry = r;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => break Err(e),
+        }
+    };
+    drop(out);
+    if let Err(e) = read {
+        crate::proc::reap(&mut child);
+        let _ = err_thread.join();
+        return Err(e);
+    }
+    let status = child.wait()?;
+    let err = err_thread.join().unwrap_or_default();
+    Ok((samples, status.success(), String::from_utf8_lossy(&err).into_owned()))
 }
 
 /// Target loudness for exports and the editor preview (online video).
@@ -336,6 +380,24 @@ mod loudness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sample split across two reads of the pipe is put back together, and
+    /// a process that writes a lot to stderr does not stall the read.
+    #[cfg(unix)]
+    #[test]
+    fn samples_split_across_reads_and_loud_stderr_are_handled() {
+        let mut c = crate::proc::command("sh");
+        c.args(["-c", "head -c 300000 /dev/zero >&2; printf '\\001'; sleep 0.2; printf '\\000\\002\\000\\003'"]);
+        let (v, ok, err) = read_samples::<2, i16>(c, i16::from_le_bytes).unwrap();
+        assert!(ok);
+        assert_eq!(err.len(), 300000);
+        assert_eq!(v, vec![1, 2], "the trailing odd byte is dropped like the old decoder did");
+
+        let mut c = crate::proc::command("sh");
+        c.args(["-c", "printf 'oops' >&2; exit 3"]);
+        let (v, ok, err) = read_samples::<4, f32>(c, f32::from_le_bytes).unwrap();
+        assert!(!ok && v.is_empty() && err == "oops");
+    }
 
     fn tone(ms: usize, rate: u32, amp: f32) -> Vec<f32> {
         (0..ms * rate as usize / 1000).map(|i| amp * (i as f32 * 0.05).sin()).collect()

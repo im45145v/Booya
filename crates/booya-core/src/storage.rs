@@ -133,8 +133,64 @@ pub fn delete_recording(root: &Path, dir: &Path) -> Result<u64> {
     Ok(bytes)
 }
 
+/// Free space on the disk that holds `dir`, in bytes. None when it cannot be
+/// told (the folder is missing, or `df` is not there).
+pub fn free_bytes(dir: &Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let w: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut free = 0u64;
+        let ok = unsafe { GetDiskFreeSpaceExW(w.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+        (ok != 0).then_some(free)
+    }
+    #[cfg(not(windows))]
+    {
+        // POSIX df: one header line, then "fs blocks used available ...", in KiB.
+        let out = crate::proc::command("df").args(["-Pk"]).arg(dir).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_df_available(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn parse_df_available(text: &str) -> Option<u64> {
+    let line = text.lines().nth(1)?;
+    // The device name can contain spaces, so count from the end:
+    // ... blocks used available capacity mountpoint
+    let f: Vec<&str> = line.split_whitespace().collect();
+    let cap = f.iter().rposition(|x| x.ends_with('%'))?;
+    let kib: u64 = f.get(cap.checked_sub(1)?)?.parse().ok()?;
+    Some(kib * 1024)
+}
+
+/// A warning for the start of a recording when the disk is nearly full.
+/// Screen recordings use roughly 1 to 4 GB an hour.
+pub fn low_space_warning(free: Option<u64>) -> Option<String> {
+    const GB: u64 = 1 << 30;
+    let free = free?;
+    (free < 2 * GB).then(|| format!("Only {:.1} GB is free on the disk this records to, so a long recording may fill it.", free as f64 / GB as f64))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn free_space_is_read_and_a_nearly_full_disk_is_flagged() {
+        let df = "Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/disk3s1s1  482797652  10432140  98765432      10% /\n";
+        assert_eq!(super::parse_df_available(df), Some(98765432 * 1024));
+        let spaced = "Filesystem 1024-blocks Used Available Capacity Mounted on\nmy share 100 90 10 90% /Volumes/my share\n";
+        assert_eq!(super::parse_df_available(spaced), Some(10 * 1024));
+        assert_eq!(super::parse_df_available("garbage"), None);
+        assert!(super::low_space_warning(Some(500 << 20)).unwrap().contains("0.5 GB"));
+        assert!(super::low_space_warning(Some(50 << 30)).is_none());
+        assert!(super::low_space_warning(None).is_none());
+        let here = super::free_bytes(&std::env::temp_dir());
+        assert!(here.is_some_and(|b| b > 0), "free space of the temp folder: {here:?}");
+    }
+
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {

@@ -54,8 +54,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico",
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/linux/16x16.png",
+      "icons/linux/22x22.png",
+      "icons/linux/24x24.png",
+      "icons/linux/48x48.png",
+      "icons/linux/64x64.png",
+      "icons/linux/256x256.png",
+      "icons/linux/512x512.png"
     ],
+    "linux": {
+      "deb": { "files": { "/usr/share/icons/hicolor/scalable/apps/booya-app.svg": "icons/linux/booya.svg" } },
+      "rpm": { "files": { "/usr/share/icons/hicolor/scalable/apps/booya-app.svg": "icons/linux/booya.svg" } }
+    },
     "license": "MIT",
     "macOS": {
       "signingIdentity": "-",

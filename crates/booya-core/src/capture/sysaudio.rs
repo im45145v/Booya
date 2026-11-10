@@ -38,27 +38,29 @@ impl SysAudio {
         #[cfg(windows)]
         {
             let wav = out.with_extension("wav");
-            return match super::wasapi::start(super::wasapi::Source::Loopback, epoch, &wav) {
+            match super::wasapi::start(super::wasapi::Source::Loopback, epoch, &wav) {
                 Ok(r) => {
                     super::mic::log_line(log, &format!("system audio: WASAPI loopback of \"{}\"", r.device));
                     Ok(SysAudio { inner: Some(Inner::Wasapi(r)), out: out.to_path_buf(), log: log.to_path_buf() })
                 }
                 Err(e) => Err(format!("{e:#}")),
-            };
+            }
         }
         #[cfg(target_os = "macos")]
         {
             let wav = out.with_extension("wav");
-            return match super::macos_sck::AudioRec::start(epoch, &wav) {
+            match super::macos_sck::AudioRec::start(epoch, &wav) {
                 Ok(r) => {
                     super::mic::log_line(log, "system audio: ScreenCaptureKit audio stream");
                     Ok(SysAudio { inner: Some(Inner::Sck(r)), out: out.to_path_buf(), log: log.to_path_buf() })
                 }
                 Err(e) => Err(e),
-            };
+            }
         }
         #[cfg(not(any(windows, target_os = "macos")))]
-        Err("system audio is recorded together with the screen on this system".to_string())
+        {
+            Err("system audio is recorded together with the screen on this system".to_string())
+        }
     }
 
     /// Stops and writes the sidecar. Nothing playing during the recording is

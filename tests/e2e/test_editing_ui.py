@@ -1,5 +1,5 @@
-"""The 0.7.0 editing controls reach the project: device frame, motion blur,
-music (pick, tune, remove), and muting one clip.
+"""The editing controls reach the project: device frame, motion blur, music
+(pick, tune, remove), muting one clip, and the caption look, position and capitals.
 
 Run: python3 tests/e2e/test_editing_ui.py <fixture dir>
 """
@@ -84,6 +84,28 @@ def test_one_clip_can_be_muted_and_a_split_keeps_it(pw, fx):
     finally:
         s.close()
 
+
+
+def test_caption_look_position_and_capitals_reach_the_renderer(pw, fx):
+    s = Studio(pw, fx)
+    try:
+        s.open(); s.load_sample()
+        p = s.page
+        # An older project has none of these, and the panel shows the defaults.
+        assert p.evaluate("[$('cap-look').value, $('cap-pos').value, $('cap-upper').checked]") == ["box", "bottom", False]
+        p.evaluate(SET, ["cap-look", "pop"]); p.evaluate(SET, ["cap-pos", "middle"]); p.evaluate(SET, ["cap-upper", True])
+        st = p.evaluate("project.caption_style")
+        assert (st["look"], st["position"], st["uppercase"]) == ("pop", "middle", True), st
+        p.wait_for_timeout(700)
+        last = [a for c, a in s.calls if c == "preview"][-1]["project"]["caption_style"]
+        assert (last["look"], last["position"], last["uppercase"]) == ("pop", "middle", True), last
+        assert [o for o in p.evaluate("[...document.getElementById('cap-look').options].map(o => o.value)")] == ["box", "outline", "pop"]
+        # Undo brings the old look back into the panel.
+        p.keyboard.press("Control+z"); p.wait_for_timeout(200)
+        assert p.evaluate("$('cap-look').value") == p.evaluate("project.caption_style.look || 'box'")
+        assert not s.errors, s.errors
+    finally:
+        s.close()
 
 if __name__ == "__main__":
     fx = Path(sys.argv[1])

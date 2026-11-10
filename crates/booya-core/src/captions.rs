@@ -23,7 +23,9 @@ pub fn words_to_captions(words: &[CaptionWord], max_chars: usize, max_gap_ms: f6
         }
         let w = CaptionWord { start_ms: w.start_ms, end_ms: w.end_ms, text: t.split_whitespace().collect::<Vec<_>>().join("") };
         if let Some(last) = cur.last() {
-            let len: usize = cur.iter().map(|w| w.text.len() + 1).sum::<usize>() + w.text.len();
+            // Characters, not bytes: Telugu or Hindi letters are three bytes
+            // each, and their lines used to break at a third of the length.
+            let len: usize = cur.iter().map(|w| w.text.chars().count() + 1).sum::<usize>() + w.text.chars().count();
             let ends_sentence = last.text.ends_with(['.', '?', '!']);
             if len > max_chars || w.start_ms - last.end_ms > max_gap_ms || ends_sentence {
                 flush(&mut cur, &mut out);
