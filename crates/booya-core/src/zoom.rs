@@ -516,24 +516,32 @@ fn field_presses(log: &EventLog, duration_ms: f64) -> Vec<Click> {
 /// Where typing should be framed. The pointer is the last resort: while a
 /// URL is typed the mouse is usually somewhere else, and following it hides
 /// the text.
-fn typing_anchor(log: &EventLog, presses: &[Click], held: &Held, start: f64, fw: f64, fh: f64) -> (f64, f64) {
+/// None when the typing is not on the recorded screen at all: the field was
+/// clicked on another monitor (or outside the recorded area).
+fn typing_anchor(log: &EventLog, presses: &[Click], held: &Held, start: f64, fw: f64, fh: f64) -> Option<(f64, f64)> {
     let switched = log.keys().filter(|(t, k, m)| *t <= start && is_window_switch(k, m)).map(|(t, _, _)| t).fold(f64::MIN, f64::max);
-    if address_shortcut_before(log, start) {
-        return (fw * 0.5, fh * 0.11);
-    }
     // The latest click or tap in the last 10 s, including one on the address
     // bar. A mouse that then wanders is not the caret.
-    if let Some(c) = presses.iter().rev().find(|c| c.t <= start && start - c.t <= 10_000.0 && c.t > switched) {
-        return (c.x, c.y);
+    let press = presses.iter().rev().find(|c| c.t <= start && start - c.t <= 10_000.0 && c.t > switched);
+    // Typing into a window on the other monitor used to zoom into the edge
+    // of the recorded screen nearest to it.
+    if press.is_some_and(|c| c.x < 0.0 || c.y < 0.0 || c.x > fw || c.y > fh) {
+        return None;
+    }
+    if address_shortcut_before(log, start) {
+        return Some((fw * 0.5, fh * 0.11));
+    }
+    if let Some(c) = press {
+        return Some((c.x, c.y));
     }
     if let Some((x, y)) = held.at(start) {
         if x > fw * 0.08 && x < fw * 0.92 && y > fh * 0.08 && y < fh * 0.88 {
-            return (x, y);
+            return Some((x, y));
         }
     }
     // Pointer parked in a corner: frame the upper page, where an address bar
     // and the content under it both sit, instead of the corner.
-    (fw * 0.5, fh * 0.30)
+    Some((fw * 0.5, fh * 0.30))
 }
 
 fn submit_time(log: &EventLog, last_key: f64) -> Option<f64> {
@@ -591,7 +599,7 @@ fn address_bar_entries(log: &EventLog, held: &Held, presses: &[Click], cfg: &Zoo
         if last != t && (moment_covers(already, last) || moment_covers(&out, last)) {
             continue;
         }
-        let at = typing_anchor(log, presses, held, t, fw, fh);
+        let Some(at) = typing_anchor(log, presses, held, t, fw, fh) else { continue };
         out.push(Moment {
             first: t,
             last,
@@ -625,7 +633,10 @@ fn typing_moments(log: &EventLog, held: &Held, presses: &[Click], cfg: &ZoomConf
         let fast_url = count >= 8;
         if steady || fast_url {
             let start = keys[i];
-            let at = typing_anchor(log, presses, held, start, fw, fh);
+            let Some(at) = typing_anchor(log, presses, held, start, fw, fh) else {
+                i = j + 1;
+                continue;
+            };
             let submitted = submit_time(log, keys[j]);
             let last = submitted.unwrap_or(keys[j]);
             let on_bar = url_field(log, at, start, fh);
@@ -727,6 +738,9 @@ pub fn generate_zoom_segments(log: &EventLog, duration_ms: f64, cfg: &ZoomConfig
         }
         let n = m.pts.len() as f64;
         let focus = (m.pts.iter().map(|p| p.0).sum::<f64>() / n, m.pts.iter().map(|p| p.1).sum::<f64>() / n);
+        // A marker dropped with the pointer on another monitor still aims
+        // inside the recorded frame.
+        let focus = (focus.0.clamp(0.0, fw.max(0.0)), focus.1.clamp(0.0, fh.max(0.0)));
         let mut base = if m.reason == "typing" { cfg.typing_scale } else { cfg.click_scale }.min(cfg.max_scale);
         // The address bar: show the URL and the page under it, not a tight crop.
         if m.reason == "typing" && focus.1 < fh * ADDRESS_BAR_BAND {
