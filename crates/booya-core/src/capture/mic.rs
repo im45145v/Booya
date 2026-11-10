@@ -332,6 +332,7 @@ pub fn check_audio(device: Option<&str>, secs: f64) -> AudioCheck {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

@@ -124,7 +124,7 @@ pub fn beep_times(path: &Path) -> Result<Vec<f64>> {
     if !o.status.success() {
         bail!("beep scan failed: {}", String::from_utf8_lossy(&o.stderr));
     }
-    let x: Vec<f32> = o.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let x: Vec<f32> = o.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     Ok(find_beeps(&x, RATE))
 }
 

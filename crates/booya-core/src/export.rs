@@ -20,7 +20,7 @@ pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Render
             // Darken the photo so the recording stands out.
             let k = 1.0 - project.style.bg_dim.clamp(0.0, 0.8);
             if k < 1.0 {
-                for px in f.data.chunks_exact_mut(4) {
+                for px in f.data.as_chunks_mut::<4>().0 {
                     for c in &mut px[..3] {
                         *c = (*c as f64 * k) as u8;
                     }

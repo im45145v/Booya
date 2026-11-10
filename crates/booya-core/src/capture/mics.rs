@@ -260,7 +260,7 @@ impl MicMeter {
                     if out.read_exact(&mut buf).is_err() {
                         break;
                     }
-                    let samples: Vec<i16> = buf.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+                    let samples: Vec<i16> = buf.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
                     let (rms, peak) = levels_db(&samples);
                     on_level(rms, peak);
                 }

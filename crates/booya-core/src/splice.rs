@@ -245,7 +245,7 @@ pub fn join_media(src: &Path, take: &Path, sp: &Splice, out: &Path, w: u32, h: u
         parts.push((0, sp.until_ms, src_len));
     }
     let any_audio = si.has_audio || ti.has_audio;
-    let fps = if fps >= 5.0 && fps <= 120.0 { fps } else { 30.0 };
+    let fps = if (5.0..=120.0).contains(&fps) { fps } else { 30.0 };
     let mut f = String::new();
     for (n, (inp, s, e)) in parts.iter().enumerate() {
         let (ss, ee, len) = (s / 1000.0, e / 1000.0, (e - s) / 1000.0);

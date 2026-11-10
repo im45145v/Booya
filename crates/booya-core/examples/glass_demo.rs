@@ -15,7 +15,7 @@ fn read_png(path: &str) -> Frame {
     let info = r.next_frame(&mut buf).expect("frame");
     let ch = info.color_type.samples();
     let mut f = Frame::new(info.width, info.height);
-    for (i, px) in f.data.chunks_exact_mut(4).enumerate() {
+    for (i, px) in f.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let s = &buf[i * ch..i * ch + ch];
         px.copy_from_slice(&[s[0], if ch > 2 { s[1] } else { s[0] }, if ch > 2 { s[2] } else { s[0] }, 255]);
     }
