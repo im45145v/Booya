@@ -6,7 +6,7 @@ const $ = id => document.getElementById(id);
 const invoke = (c, a) => T.core.invoke(c, a);
 if (/Mac/i.test(navigator.platform)) document.body.classList.add('mac');
 
-let micBad = '', paused = false, baseMs = 0, baseAt = performance.now(), pausedMs = 0, quietSince = null, lastLevel = 0;
+let micBad = '', failed = '', paused = false, baseMs = 0, baseAt = performance.now(), pausedMs = 0, quietSince = null, lastLevel = 0;
 const fmt = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
 // Key hints come from the user's own bindings (Settings > Shortcuts).
@@ -25,8 +25,9 @@ loadKeys();
 
 function render() {
   $('pill').classList.toggle('paused', paused);
-  $('state').textContent = paused ? 'Paused' : micBad ? 'No mic' : '';
-  $('state').title = micBad || '';
+  $('pill').classList.toggle('failed', !!failed);
+  $('state').textContent = failed ? 'Stopped' : paused ? 'Paused' : micBad ? 'No mic' : '';
+  $('state').title = failed || micBad || '';
   $('pause').innerHTML = paused
     ? '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>'
     : '<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>';
@@ -38,7 +39,11 @@ async function poll() {
   try {
     const s = await invoke('rec_status');
     if (s.recording) {
-      baseMs = s.elapsed_ms; pausedMs = s.paused_ms; baseAt = performance.now(); paused = s.paused; render();
+      baseMs = s.elapsed_ms; pausedMs = s.paused_ms; baseAt = performance.now(); paused = s.paused;
+      // The recorder died (disk full, display unplugged): say so, and bring
+      // the editor back once so what was recorded is saved, not left running.
+      if (s.failed && !failed) { failed = s.failed; invoke('request_stop').catch(() => { }); }
+      render();
     }
   } catch { }
 }
