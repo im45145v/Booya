@@ -1572,7 +1572,11 @@ fn reveal(app: tauri::AppHandle, path: String) -> R<()> {
     #[cfg(target_os = "macos")]
     let r = booya_core::proc::command("open").arg("-R").arg(&p).spawn();
     #[cfg(target_os = "windows")]
-    let r = booya_core::proc::command("explorer").arg(format!("/select,{}", p.display())).spawn();
+    let r = {
+        use std::os::windows::process::CommandExt;
+        // Explorer parses its own command line; see explorer_select_arg.
+        booya_core::proc::command("explorer").raw_arg(booya_core::proc::explorer_select_arg(&p)).spawn()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let r = booya_core::proc::command("xdg-open").arg(p.parent().unwrap_or(&p)).spawn();
     r.map(|_| ()).map_err(e)
