@@ -114,6 +114,19 @@ fn sd_round_rect(px: f64, py: f64, cx: f64, cy: f64, hw: f64, hh: f64, r: f64) -
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+/// Words on screen at once in the pop caption look.
+const POP_WORDS: usize = 3;
+
+/// The words shown together in the pop look at `t`: the group of `n` that
+/// holds the latest word to have started (the first group before any has).
+/// Groups are fixed, so the words do not shuffle as speech goes on.
+fn pop_chunk(words: &[&crate::project::CaptionWord], t: f64, n: usize) -> std::ops::Range<usize> {
+    let n = n.max(1);
+    let cur = words.iter().rposition(|w| w.start_ms <= t).unwrap_or(0);
+    let start = cur / n * n;
+    start..(start + n).min(words.len())
+}
+
 /// A soft wallpaper: bilinear blend of four corner colours through a gentle
 /// sine warp, so the colours swirl instead of forming a flat quad.
 fn paint_mesh(mut f: Frame, c: &[[u8; 3]; 4]) -> Frame {
@@ -957,38 +970,74 @@ impl Renderer {
     }
 
     fn draw_caption(&self, out: &mut Frame, c: &crate::project::Caption, src_t: f64) {
+        use crate::project::{CaptionLook, CaptionPosition};
         let st = &self.project.caption_style;
         let short = self.out_w.min(self.out_h) as f64;
-        let px = (st.size * short).max(12.0) as f32;
+        let base_px = (st.size * short).max(12.0) as f32;
         let max_w = self.out_w as f32 * 0.84;
         // Words removed by cuts (fillers) are not shown.
         let words: Vec<&crate::project::CaptionWord> = c.words.iter().filter(|w| crate::captions::word_visible(&self.project, w)).collect();
-        let body = if c.words.is_empty() { c.text.clone() } else { words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") };
+        let case = |t: &str| if st.uppercase { t.to_uppercase() } else { t.to_string() };
+        // Which word is being spoken now (by index into the caption's words).
+        let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
+        // The words to show, and which of them is being spoken.
+        let pop = st.look == CaptionLook::Pop && !words.is_empty();
+        let (shown, active, px): (Vec<String>, Option<usize>, f32) = if pop {
+            let r = pop_chunk(&words, src_t, POP_WORDS);
+            let a = active.filter(|i| r.contains(i)).map(|i| i - r.start);
+            (words[r].iter().map(|w| case(&w.text)).collect(), a, base_px * 1.35)
+        } else if c.words.is_empty() {
+            (c.text.split_whitespace().map(case).collect(), None, base_px)
+        } else {
+            (words.iter().map(|w| case(&w.text)).collect(), active, base_px)
+        };
+        let body = shown.join(" ");
         if body.trim().is_empty() {
             return;
         }
+        // The spoken word in the pop look grows a little as it starts.
+        let grow = match (pop, active) {
+            (true, Some(_)) => {
+                let w = words.iter().find(|w| src_t >= w.start_ms && src_t < w.end_ms).expect("active word");
+                let k = ((src_t - w.start_ms) / 90.0).clamp(0.0, 1.0) as f32;
+                1.0 + 0.14 * k * k * (3.0 - 2.0 * k)
+            }
+            _ => 1.0,
+        };
+        let word_px = |i: usize| if pop && Some(i) == active { px * grow } else { px };
         let lines = text::wrap(&body, px, max_w);
-        let lh = text::line_height(px) * 1.15;
+        let lh = text::line_height(px) * if pop { 1.08 } else { 1.15 };
         let pad = px * 0.5;
         let block_h = lh * lines.len() as f32 + pad * 2.0;
-        let block_w = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.4;
-        let bx = (self.out_w as f32 - block_w) / 2.0;
-        let by = self.out_h as f32 - block_h - (short as f32 * 0.05);
-        self.plate(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32, 1.0,
-        );
-        // Which word is being spoken now (by index into the caption's words).
-        let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
+        let margin = short as f32 * 0.05;
+        let by = match st.position {
+            CaptionPosition::Bottom => self.out_h as f32 - block_h - margin,
+            CaptionPosition::Top => margin,
+            CaptionPosition::Middle => (self.out_h as f32 - block_h) / 2.0,
+        };
+        if st.look == CaptionLook::Box {
+            let block_w = lines.iter().map(|l| text::measure(l, px)).fold(0.0, f32::max) + pad * 2.4;
+            let bx = (self.out_w as f32 - block_w) / 2.0;
+            self.plate(out, bx as f64, by as f64, block_w as f64, block_h as f64, (px * 0.35) as f64, [10.0, 10.0, 12.0], st.background_opacity as f32, 1.0,
+            );
+        }
+        // Without a plate, a dark edge keeps the letters readable on any picture.
+        let edge = match st.look { CaptionLook::Box => 0.0, CaptionLook::Outline => (px * 0.07).max(1.0), CaptionLook::Pop => (px * 0.085).max(1.0) };
         let col = st.color.map(|v| v as f32);
         let hi = st.highlight.map(|v| v as f32);
+        let space = text::measure(" ", px);
         let mut word_idx = 0usize;
         for (li, line) in lines.iter().enumerate() {
-            let lw = text::measure(line, px);
+            let parts: Vec<&str> = line.split(' ').collect();
+            let lw: f32 = parts.iter().enumerate().map(|(k, w)| text::measure(w, word_px(word_idx + k))).sum::<f32>() + space * parts.len().saturating_sub(1) as f32;
             let mut x = (self.out_w as f32 - lw) / 2.0;
             let y = by + pad + li as f32 * lh;
-            for (wi, word) in line.split(' ').enumerate() {
-                let piece = if wi == 0 { word.to_string() } else { format!(" {word}") };
+            for word in parts {
+                let wpx = word_px(word_idx);
+                // Same baseline as the rest of the line when this word is bigger.
+                let wy = y + text::ascent(px) - text::ascent(wpx);
                 let color = if Some(word_idx) == active { hi } else { col };
-                x = text::draw(out, x, y, px, &piece, color, 1.0);
+                x = text::draw_outlined(out, x, wy, wpx, word, color, edge, 1.0) + space;
                 word_idx += 1;
             }
         }
@@ -1627,6 +1676,121 @@ mod tests {
         assert!(three.contains(&3), "Ctrl, Shift and S are three pills: {three:?}");
         let one = rows_with_runs(vec![("Esc", vec![])]);
         assert!(one.contains(&1), "{one:?}");
+    }
+
+    /// A project with one 6 word caption over a plain mid grey picture.
+    fn caption_project(look: crate::project::CaptionLook, pos: crate::project::CaptionPosition) -> (Project, Frame) {
+        use crate::project::{Caption, CaptionWord};
+        let texts = ["open", "the", "settings", "and", "click", "save"];
+        let words: Vec<CaptionWord> = texts.iter().enumerate().map(|(i, t)| CaptionWord { start_ms: 1000.0 + i as f64 * 400.0, end_ms: 1350.0 + i as f64 * 400.0, text: (*t).into() }).collect();
+        let mut p = Project::new("x".into(), None, 640, 360, 10_000.0);
+        p.style.background = Background::Solid { color: [128, 128, 128] };
+        p.style.padding = 0.0;
+        p.style.corner_radius = 0.0;
+        p.style.shadow = 0.0;
+        p.cursor.visible = false;
+        p.captions = vec![Caption { start_ms: 1000.0, end_ms: 3800.0, text: texts.join(" "), words }];
+        p.caption_style.burn_in = true;
+        p.caption_style.look = look;
+        p.caption_style.position = pos;
+        let mut src = Frame::new(640, 360);
+        src.data.chunks_mut(4).for_each(|c| c.copy_from_slice(&[128, 128, 128, 255]));
+        (p, src)
+    }
+
+    /// Rows where something other than the grey picture was drawn.
+    fn inked_rows(f: &Frame) -> Vec<usize> {
+        (0..f.h as usize).filter(|&y| (0..f.w as usize).any(|x| {
+            let i = (y * f.w as usize + x) * 4;
+            f.data[i..i + 3].iter().any(|&v| (v as i32 - 128).abs() > 24)
+        })).collect()
+    }
+
+    #[test]
+    fn caption_position_moves_the_words() {
+        use crate::project::{CaptionLook, CaptionPosition};
+        let mut seen = Vec::new();
+        for pos in [CaptionPosition::Top, CaptionPosition::Middle, CaptionPosition::Bottom] {
+            let (p, src) = caption_project(CaptionLook::Box, pos);
+            let f = Renderer::new(p, None, 640, 360, None).render(&src, 1500.0, None);
+            let rows = inked_rows(&f);
+            assert!(!rows.is_empty(), "{pos:?} drew nothing");
+            seen.push((rows[0] + rows[rows.len() - 1]) / 2);
+        }
+        assert!(seen[0] < 120 && (140..220).contains(&seen[1]) && seen[2] > 240, "top, middle, bottom centres {seen:?}");
+    }
+
+    #[test]
+    fn the_outline_look_has_no_plate_and_the_box_look_does() {
+        use crate::project::{CaptionLook, CaptionPosition};
+        let draw = |look| {
+            let (p, src) = caption_project(look, CaptionPosition::Bottom);
+            Renderer::new(p, None, 640, 360, None).render(&src, 1500.0, None)
+        };
+        let (boxed, outlined) = (draw(CaptionLook::Box), draw(CaptionLook::Outline));
+        // The middle row of the box look's caption, and where its plate starts.
+        let rows = inked_rows(&boxed);
+        let y = rows[rows.len() / 2];
+        let r = |f: &Frame, x: usize| f.data[(y * 640 + x) * 4];
+        let left = (0..640).find(|&x| (r(&boxed, x) as i32 - 128).abs() > 24).unwrap();
+        // Just inside the plate, before the first letter: dark with the box,
+        // the plain picture with the outline.
+        assert!(r(&boxed, left + 3) < 70, "plate {}", r(&boxed, left + 3));
+        assert!((r(&outlined, left + 3) as i32 - 128).abs() < 4, "no plate {}", r(&outlined, left + 3));
+        // And the outline does draw dark edges round its letters.
+        assert!((0..640).any(|x| r(&outlined, x) < 60), "the outline adds a dark edge");
+    }
+
+    #[test]
+    fn the_pop_look_shows_a_few_words_at_a_time_in_fixed_groups() {
+        use crate::project::CaptionWord;
+        let ws: Vec<CaptionWord> = (0..7).map(|i| CaptionWord { start_ms: i as f64 * 100.0, end_ms: i as f64 * 100.0 + 80.0, text: format!("w{i}") }).collect();
+        let refs: Vec<&CaptionWord> = ws.iter().collect();
+        assert_eq!(pop_chunk(&refs, -50.0, 3), 0..3, "before any word: the first group");
+        assert_eq!(pop_chunk(&refs, 150.0, 3), 0..3);
+        assert_eq!(pop_chunk(&refs, 290.0, 3), 0..3, "in the gap after a word, it stays");
+        assert_eq!(pop_chunk(&refs, 300.0, 3), 3..6);
+        assert_eq!(pop_chunk(&refs, 650.0, 3), 6..7, "the last group can be short");
+        assert_eq!(pop_chunk(&refs, 99_999.0, 3), 6..7);
+    }
+
+    #[test]
+    fn the_pop_look_draws_fewer_bigger_words_than_the_box_look() {
+        use crate::project::{CaptionLook, CaptionPosition};
+        let width_and_height = |look| {
+            let (p, src) = caption_project(look, CaptionPosition::Bottom);
+            let f = Renderer::new(p, None, 640, 360, None).render(&src, 1100.0, None);
+            let rows = inked_rows(&f);
+            let cols: Vec<usize> = (0..640).filter(|&x| rows.iter().any(|&y| (f.data[(y * 640 + x) * 4] as i32 - 128).abs() > 24)).collect();
+            (cols[cols.len() - 1] - cols[0], rows[rows.len() - 1] - rows[0])
+        };
+        let (bw, bh) = width_and_height(CaptionLook::Box);
+        let (pw, ph) = width_and_height(CaptionLook::Pop);
+        assert!(pw < bw, "three words are narrower than six ({pw} vs {bw})");
+        assert!(ph > bh / 2, "and drawn big ({ph} vs {bh})");
+    }
+
+    #[test]
+    fn uppercase_captions_change_the_letters_only() {
+        use crate::project::{CaptionLook, CaptionPosition};
+        let (mut p, src) = caption_project(CaptionLook::Outline, CaptionPosition::Bottom);
+        let plain = Renderer::new(p.clone(), None, 640, 360, None).render(&src, 1500.0, None);
+        p.caption_style.uppercase = true;
+        let caps = Renderer::new(p, None, 640, 360, None).render(&src, 1500.0, None);
+        assert_ne!(plain.data, caps.data);
+        let (a, b) = (inked_rows(&plain), inked_rows(&caps));
+        assert!((a[0] as i64 - b[0] as i64).abs() < 12, "same place {} vs {}", a[0], b[0]);
+    }
+
+    #[test]
+    fn older_caption_styles_load_with_the_box_look_at_the_bottom() {
+        use crate::project::{CaptionLook, CaptionPosition, CaptionStyle};
+        let old = r#"{"burn_in":true,"size":0.05,"color":[255,255,255],"highlight":[250,204,21],"background_opacity":0.6}"#;
+        let st: CaptionStyle = serde_json::from_str(old).unwrap();
+        assert_eq!((st.look, st.position, st.uppercase), (CaptionLook::Box, CaptionPosition::Bottom, false));
+        assert_eq!(st.size, 0.05);
+        let s = serde_json::to_string(&CaptionStyle { look: CaptionLook::Pop, position: CaptionPosition::Middle, ..CaptionStyle::default() }).unwrap();
+        assert!(s.contains(r#""look":"pop""#) && s.contains(r#""position":"middle""#), "{s}");
     }
 
     /// What is burned into the picture and what the SRT says must be the same
