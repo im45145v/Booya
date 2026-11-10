@@ -72,7 +72,7 @@ If verification keeps failing after an hour, look for leftover AAAA records or f
 ## 6. Finish up
 
 - On GitHub, open the repo, click the gear next to **About** and set **Website** to `https://YOUR-DOMAIN.tech`.
-- In the README, the website link near the top points at the same domain. Update it if it still shows the placeholder.
+- Optional: add a Website link to the row of links under the README header.
 - Check the share preview: paste the URL into https://www.opengraph.xyz. It should show `og-image.png`.
 - Optional: add the domain to Google Search Console and submit `https://YOUR-DOMAIN.tech/sitemap.xml`.
 
@@ -84,7 +84,7 @@ Every push to `main` that changes `site/` or `render.yaml` redeploys the site wi
 
 - **Build**: `sh site/build.sh` copies `site/` to `site/dist`, fills in `SITE_URL` and adds a content hash to the CSS and JS file names. No Node or npm.
 - **Security headers** on every page: a strict Content Security Policy (only the site itself, plus `api.github.com` for the download buttons), HSTS, `X-Frame-Options: DENY`, `nosniff`, a referrer policy, and a permissions policy that turns off camera, microphone and location.
-- **Caching**: CSS, JS and fonts are cached for a year (their names change when they change). Images for a week. HTML uses Render's default, and every deploy clears the CDN.
+- **Caching**: CSS, JS and fonts are cached for a year (their names change when they change). Images (including `/img/`) for a week. HTML uses Render's default, and every deploy clears the CDN.
 - **Short links**: `/download` jumps to the download section, `/github` goes to the repo, `/releases` to the latest release.
 
 If you change the page to load something from another site (a font, an analytics script, an embedded video), add that host to the `Content-Security-Policy` header in `render.yaml`, or the browser will block it.

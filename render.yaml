@@ -63,6 +63,9 @@ services:
       - path: /fonts/*
         name: Cache-Control
         value: public, max-age=31536000, immutable
+      - path: /img/*
+        name: Cache-Control
+        value: public, max-age=604800
       - path: /*.png
         name: Cache-Control
         value: public, max-age=604800

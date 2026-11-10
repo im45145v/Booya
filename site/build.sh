@@ -17,7 +17,7 @@ rm -rf dist
 mkdir -p dist
 cp -R index.html 404.html robots.txt sitemap.xml site.webmanifest \
   favicon.ico favicon.svg apple-touch-icon.png icon-192.png icon-512.png og-image.png \
-  fonts styles scripts dist/
+  fonts styles scripts img dist/
 
 hash() { sha256sum "$1" | cut -c1-10; }
 for f in styles/tokens.css styles/site.css scripts/site.js; do

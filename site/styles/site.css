@@ -190,3 +190,7 @@ footer a:hover{color:var(--by-text);text-decoration:underline}
 .cam{position:absolute;right:4%;top:6%;width:16%;aspect-ratio:1;border-radius:50%;background:var(--by-surface);border:2px solid var(--by-surface);box-shadow:var(--by-shadow-md);overflow:hidden;z-index:2}
 .cam svg{width:100%;height:100%;color:var(--by-border-strong)}
 @media (max-width:520px){.stage-label{display:none}}
+.gallery{padding-top:0}
+.shots{display:flex;gap:var(--by-space-4);overflow-x:auto;scroll-snap-type:x mandatory;padding:0 max(var(--by-space-6),calc((100vw - 1120px)/2 + var(--by-space-6))) var(--by-space-4);scroll-padding:0 max(var(--by-space-6),calc((100vw - 1120px)/2 + var(--by-space-6)));scrollbar-width:thin}
+.shot{margin:0;flex:0 0 min(540px,86vw);scroll-snap-align:start;border:1px solid var(--by-rule);border-radius:var(--by-radius-lg);overflow:hidden;background:var(--by-surface)}
+.shot img{width:100%;height:auto}
