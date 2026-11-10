@@ -69,7 +69,7 @@ pub fn save_preset(p: &Preset) -> Result<PathBuf> {
     let dir = presets_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(file_name(&p.name));
-    std::fs::write(&path, serde_json::to_string_pretty(p)?)?;
+    crate::fsutil::write_atomic(&path, serde_json::to_string_pretty(p)?.as_bytes())?;
     Ok(path)
 }
 
