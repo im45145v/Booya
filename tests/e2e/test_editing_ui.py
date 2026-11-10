@@ -86,6 +86,38 @@ def test_one_clip_can_be_muted_and_a_split_keeps_it(pw, fx):
 
 
 
+def test_an_export_shows_time_left_and_can_be_cancelled(pw, fx):
+    out = str(fx / "cancel-test.mp4")
+    s = Studio(pw, fx, extra={"pick_save": lambda self, a: out})
+    try:
+        s.open(); s.load_sample()
+        p = s.page
+        # A stand in export that runs until it is cancelled, like the real one.
+        p.evaluate("""() => {
+          const real = window.__TAURI__.core.invoke;
+          window.__TAURI__.core.invoke = (cmd, args) => {
+            if (cmd === 'export_video') return new Promise((_, reject) => { window.__rejectExport = reject; });
+            if (cmd === 'cancel_export') { window.__cancelAsked = true; setTimeout(() => window.__rejectExport('Export cancelled'), 50); return Promise.resolve(null); }
+            return real(cmd, args);
+          };
+        }""")
+        p.evaluate("project.blur = []; $('ex-btn').click()")
+        p.wait_for_function("typeof window.__rejectExport === 'function'")
+        assert p.is_visible("#ex-cancel"), "Cancel shows while exporting"
+        p.wait_for_timeout(1700)
+        p.evaluate("window.__emit('export-progress', 0.25)")
+        text = p.text_content("#ex-text")
+        assert text.startswith("Rendering 25%") and "left" in text, text
+        p.click("#ex-cancel")
+        p.wait_for_function("document.getElementById('ex-text').textContent === 'Export cancelled'")
+        assert p.evaluate("window.__cancelAsked") is True
+        assert p.evaluate("document.getElementById('ex-cancel').hidden") is True
+        assert p.evaluate("busy") is False and p.evaluate("$('ex-btn').disabled") is False, "the editor is usable again"
+        assert not s.errors, s.errors
+    finally:
+        s.close()
+
+
 def test_caption_look_position_and_capitals_reach_the_renderer(pw, fx):
     s = Studio(pw, fx)
     try:

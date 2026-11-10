@@ -58,6 +58,8 @@ struct AppState {
     /// Auto edit observes cancellation between steps, transcription windows,
     /// and OCR frames.
     cancel_auto_edit: std::sync::atomic::AtomicBool,
+    /// Set by the Cancel button while a video export runs.
+    cancel_export: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Exports running now. Installing an update restarts the app, which
     /// would kill them halfway.
     exports: std::sync::atomic::AtomicUsize,
@@ -433,10 +435,12 @@ impl Drop for ExportBusy {
 async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R<String> {
     check_write(&app, &out, &["mp4", "gif", "webm"])?;
     let _busy = ExportBusy::new(&app);
+    let cancel = app.state::<AppState>().cancel_export.clone();
+    cancel.store(false, std::sync::atomic::Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
-        let st = export::export(&project, &PathBuf::from(&out), |p| {
+        let st = export::export_cancellable(&project, &PathBuf::from(&out), |p| {
             let _ = app.emit("export-progress", p);
-        })
+        }, &cancel)
         .map_err(e)?;
         Ok(format!("{out} ({}x{}, {:.1}s)", st.width, st.height, st.seconds))
     })
@@ -1592,6 +1596,14 @@ async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, 
         Ok(AiResult { project, report })
     })
     .await
+}
+
+/// Stops a running export within a frame. The half written file is removed.
+#[tauri::command]
+fn cancel_export(app: tauri::AppHandle) {
+    app.state::<AppState>()
+        .cancel_export
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -2808,6 +2820,7 @@ fn main() {
             make_sample,
             ai_demo_ready,
             cancel_auto_edit,
+            cancel_export,
             reveal,
             ffmpeg_status,
             pick_save,

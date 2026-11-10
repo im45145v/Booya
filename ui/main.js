@@ -599,15 +599,32 @@ async function doExport() {
   $('ex-state').hidden = false; $('ex-reveal').hidden = true; $('ex-bar').style.width = '0%'; $('ex-text').textContent = 'Starting...';
   status('Exporting ' + baseName(out) + '...', 'busy');
   const t0 = performance.now();
+  exportStart = t0; $('ex-cancel').hidden = false; $('ex-cancel').disabled = false;
   try {
     const r = await invoke('export_video', { project, out });
     lastExport = out; $('ex-bar').style.width = '100%';
     $('ex-text').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${baseName(out)}`; $('ex-reveal').hidden = false; $('ex-upload').hidden = !storageReady;
     markDone(3); status('Exported ' + r, 'success');
-  } catch (e) { $('ex-text').textContent = 'Export failed'; fail(e); }
+  } catch (e) {
+    if (/Export cancelled/i.test(String(e))) { $('ex-bar').style.width = '0%'; $('ex-text').textContent = 'Export cancelled'; status('Export cancelled. Nothing was saved.', 'info'); }
+    else { $('ex-text').textContent = 'Export failed'; fail(e); }
+  }
+  exportStart = 0; $('ex-cancel').hidden = true;
   busy = false; enableControls();
 }
-window.__TAURI__.event.listen('export-progress', e => { $('ex-bar').style.width = (e.payload * 100).toFixed(1) + '%'; $('ex-text').textContent = `Rendering ${(e.payload * 100).toFixed(0)}%`; });
+let exportStart = 0;
+// "about 20 s left" once there is enough progress to judge the pace.
+function exportEta(p, elapsedMs) {
+  if (!(p > 0.03) || p >= 1 || !(elapsedMs > 1500)) return '';
+  const left = elapsedMs * (1 - p) / p / 1000;
+  return left < 60 ? `, about ${Math.max(1, Math.round(left))} s left` : `, about ${Math.round(left / 60)} min left`;
+}
+window.__TAURI__.event.listen('export-progress', e => {
+  const p = e.payload;
+  $('ex-bar').style.width = (p * 100).toFixed(1) + '%';
+  $('ex-text').textContent = `Rendering ${(p * 100).toFixed(0)}%` + (exportStart ? exportEta(p, performance.now() - exportStart) : '');
+});
+$('ex-cancel').onclick = () => { $('ex-cancel').disabled = true; $('ex-text').textContent = 'Cancelling...'; invoke('cancel_export').catch(fail); };
 $('ex-btn').onclick = doExport;
 $('ex-top').onclick = () => { selectTab('export'); $('ex-btn').focus(); };
 $('ex-reveal').onclick = () => lastExport && invoke('reveal', { path: lastExport }).catch(fail);
