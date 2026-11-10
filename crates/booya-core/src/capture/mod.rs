@@ -519,7 +519,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
         warnings.push("Key capture is on, but macOS has not allowed Booya to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch Booya on, then quit and reopen Booya.".into());
     }
-    let logger = InputLogger::start(plan.region, opts.keys)?;
+    let logger = InputLogger::start_for(plan.region, opts.keys, matches!(opts.target, CaptureTarget::Screen { .. }))?;
     logger.set_epoch(started);
     let (webcam, webcam_epoch) = match webcam {
         Some((c, e)) => (Some(c), e),
