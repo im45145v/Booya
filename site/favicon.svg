@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="32" height="32">
-  <title>Booya</title>
-  <rect width="1024" height="1024" rx="232" fill="#E9E4FB"/>
-  <path d="M 323 258 Q 318 238 340 246 L 708 460 Q 728 473 706 483 L 646 508 Q 626 518 640 537 L 700 618 Q 724 650 712 672 Q 700 695 668 688 C 640 681 622 656 602 658 C 584 660 580 702 556 707 C 530 710 508 670 486 665 C 462 661 442 715 422 720 Q 402 723 399 704 Z" fill="#FFFFFF" stroke="#1E1B2E" stroke-width="34" stroke-linejoin="round"/>
-  <circle cx="447" cy="463" r="30" fill="#1E1B2E"/><circle cx="545" cy="462" r="30" fill="#1E1B2E"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<style>.t{fill:#F4F3EF}.b{fill:#111110;stroke:#111110}.r{stroke:#FF5A1F}
+@media (prefers-color-scheme: dark){.t{fill:#111110}.b{fill:#EDEBE5;stroke:#EDEBE5}.r{stroke:#FF6A33}}</style>
+<rect class="t" x="32" y="32" width="960" height="960" rx="216"/>
+<path class="b" d="M305.61 238.40 L305.61 797.87 C314.99 844.02 413.53 844.02 422.92 797.87 C432.30 844.02 530.84 844.02 540.22 797.87 C549.61 844.02 648.15 844.02 657.53 797.87 L576.32 689.58 L756.79 689.58 Z M446.60 574.53 A43.99 43.99 0 1 0 358.62 574.53 A43.99 43.99 0 1 0 446.60 574.53 Z M554.89 574.53 A43.99 43.99 0 1 0 466.91 574.53 A43.99 43.99 0 1 0 554.89 574.53 Z" fill-rule="evenodd" stroke-width="0"/>
+<path class="r" d="M170.34 233.68 A135.35 135.35 0 0 1 300.88 103.13" fill="none" stroke-width="49.6" stroke-linecap="round"/>
 </svg>
