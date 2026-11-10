@@ -32,7 +32,7 @@ def build():
       <p class="sub" style="position:absolute;left:80px;top:470px;width:470px">Open source screen recorder. Offline captions. Auto zoom on clicks.</p>
       {fake_screen(640, 92, 580, 400)}
       <div style="position:absolute;left:712px;top:466px">{toolbar()}</div>
-      <div class="over" style="position:absolute;left:80px;bottom:56px">Open source on GitHub</div>''', 1280, 640)
+      <div class="over" style="position:absolute;left:80px;bottom:56px;text-transform:none;letter-spacing:.02em">Open source · github.com/im45145v/Booya</div>''', 1280, 640)
     w(f'{S}/src/github-social-preview.html', gh); jobs.append((f'{S}/src/github-social-preview.html', f'{S}/github-social-preview.png', 1280, 640))
     # og image 1200x630
     og = page(f'''<div style="position:absolute;left:84px;top:88px">{mark_svg(150)}</div>
@@ -52,7 +52,7 @@ def build():
       <h1 style="position:absolute;left:80px;top:128px;font-size:68px;width:620px" data-slot="headline">Captions now run fully offline.</h1>
       <p class="sub" style="position:absolute;left:80px;top:360px;width:560px" data-slot="body">The speech model runs on your machine. Nothing leaves it, and it works on a plane.</p>
       <div style="position:absolute;left:80px;bottom:72px">{lockup(30)}</div>
-      <div class="mono" style="position:absolute;left:330px;bottom:76px;color:var(--by-muted);font-size:15px" data-slot="link">Open source on GitHub</div>
+      <div class="mono" style="position:absolute;left:330px;bottom:76px;color:var(--by-muted);font-size:15px" data-slot="link">github.com/im45145v/Booya</div>
       <div style="position:absolute;right:70px;top:120px;width:420px;height:420px;border-radius:28px;background:var(--by-surface);border:1px solid var(--by-rule);display:grid;place-items:center">
         <img src="../../mascot/svg/booya-zooming-light.svg" width="340" height="340" data-slot="pose"></div>''', 1200, 675)
     w(f'{S}/src/post-template.html', post); jobs.append((f'{S}/src/post-template.html', f'{S}/post-template-x-linkedin.png', 1200, 675))

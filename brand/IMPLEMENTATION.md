@@ -1,8 +1,8 @@
-# Booya rebrand: implementation notes
+# Booya brand kit: implementation notes
 
 How to land brand kit v1.0 (direction E, Ghost x Ink mono) in the Tauri app in a single PR.
 
-**The v1 branding must go completely.** v0.7.0 shipped the DemoLens / lavender v1 identity (lavender #E9E4FB, violet #7C5CFA, pink #F7B6C8, sticker style ghost). Every icon, colour, screenshot and line of copy from it gets replaced. Nothing from v1 is kept or mixed in.
+**The v1 branding must go completely.** v0.7.0 shipped the lavender v1 identity (lavender #E9E4FB, violet #7C5CFA, pink #F7B6C8, sticker style ghost). Every icon, colour, screenshot and line of copy from it gets replaced. Nothing from v1 is kept or mixed in.
 
 Paths below are relative to this kit (`booya-brand/`) and to the app repo root.
 
@@ -108,9 +108,10 @@ Put `assets/social/readme-header-light.png` and `readme-header-dark.png` in `doc
 </picture>
 ```
 
+- Repository: https://github.com/im45145v/Booya
 - Repo settings, then Social preview: upload `assets/social/github-social-preview.png` (1280x640).
 - Change the repo description to: `Open source screen recorder with offline captions and auto zoom on clicks.`
-- Replace every v1 screenshot and GIF in the README and docs with captures of the rebranded UI.
+- Replace every v1 screenshot and GIF in the README and docs with captures of the new UI.
 - `assets/social/post-template-x-linkedin.png` is the launch post image. Its editable HTML is in `assets/social/src/`.
 
 ## 5. Design tokens in the frontend
@@ -137,7 +138,7 @@ Rules that matter in code:
 - The name is always `Booya`, with a capital B, in UI copy. The wordmark is lowercase artwork.
 - Short, plain sentences. No exclamation marks, no emoji in UI, no em dashes.
 - Examples: `Saved. 48 MB in Movies/Booya.`, `Captions are written on this device.`, `Couldn't save. The disk is full.`
-- Rename DemoLens everywhere: the window title, `productName` and `identifier` in tauri.conf.json (bump the identifier only if you accept that it resets user settings), menu items, About box, installer text, the updater feed name and the docs.
+- Use `Booya` consistently in the window title, `productName` in tauri.conf.json, menu items, About box, installer text, the updater feed name and the docs. Keep the existing `identifier` unless you accept that changing it resets user settings.
 
 ## 7. PR checklist
 
@@ -153,8 +154,8 @@ Rules that matter in code:
 - [ ] Keyboard focus visible on every control; reduced motion respected
 - [ ] Favicon, apple touch icon, manifest and og image on the website and docs
 - [ ] README header `<picture>` added; GitHub social preview uploaded; repo description updated
-- [ ] **All v0.7.0 lavender v1 branding removed:** old icons, tray PNGs, colours (#E9E4FB, #7C5CFA, #F7B6C8), sticker mascot art, screenshots, GIFs and DemoLens copy. `git grep -i -E "demolens|7c5cfa|e9e4fb|f7b6c8|lavender"` returns nothing
-- [ ] CHANGELOG entry: "New name and look: DemoLens is now Booya."
+- [ ] **All v0.7.0 lavender v1 branding removed:** old icons, tray PNGs, colours (#E9E4FB, #7C5CFA, #F7B6C8), sticker mascot art, screenshots, GIFs and v1 copy. `git grep -i -E "7c5cfa|e9e4fb|f7b6c8|lavender"` returns nothing
+- [ ] CHANGELOG entry: "New look: brand kit v1.0."
 - [ ] Release notes screenshots retaken
 
 ## Kit map

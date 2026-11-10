@@ -50,7 +50,7 @@ page('01', 'Brand story', f'''{head('01', 'Brand story')}
  <div>
   <div class="over mono">What Booya is</div>
   <h2 class="h" style="margin-top:18px">A screen recorder that<br>knows where to look.</h2>
-  <p class="lead" style="margin-top:26px">Booya records your screen, writes captions on your own machine and zooms in when your clicks bunch up. It used to be called DemoLens. It is free, open source and built with Tauri, so it stays small and fast.</p>
+  <p class="lead" style="margin-top:26px">Booya records your screen, writes captions on your own machine and zooms in when your clicks bunch up. It is free, open source and built with Tauri, so it stays small and fast.</p>
   <p class="lead" style="margin-top:18px">The brand should feel like the app: calm, quick, a little bit funny, and out of the way until you need it.</p>
  </div>
  <div class="principles">
@@ -405,11 +405,11 @@ page('17', 'In the wild: desktop', f'''{head('17', 'In the wild: desktop')}
 </div>''')
 
 def gh():
-    return f'''<div class="ghp"><div class="ghh"><span style="display:flex;align-items:center;gap:8px">{icon('folder',18)}<span>im45145v / <b>booya</b></span><span class="pill">Public</span></span>
+    return f'''<div class="ghp"><div class="ghh"><span style="display:flex;align-items:center;gap:8px">{icon('folder',18)}<span>im45145v / <b>Booya</b></span><span class="pill">Public</span></span>
      <span style="margin-left:auto;display:flex;gap:8px"><span class="btn secondary sm">Watch</span><span class="btn secondary sm">Star</span></span></div>
      <div style="padding:18px 22px"><img src="{AS}/social/readme-header-light.png" style="width:100%;border-radius:8px;border:1px solid #DCDAD3"><div style="margin-top:14px;font-size:14px;color:#6B6963">Open source screen recorder with offline captions and auto zoom on clicks.</div>
      <div style="display:flex;gap:8px;margin-top:10px">{''.join(f'<span class="pill">{t}</span>' for t in ('tauri', 'screen-recorder', 'captions', 'rust'))}</div>
-     <div style="margin-top:16px;border:1px solid #DCDAD3;border-radius:8px;font-size:13px">{''.join(f'<div style="display:flex;gap:10px;padding:8px 12px;border-top:{"0" if i == 0 else "1px solid #DCDAD3"}"><span style="color:#6B6963">{icon("folder" if d else "captions", 16)}</span><span>{n}</span><span style="margin-left:auto;color:#6B6963">{m}</span></div>' for i, (n, d, m) in enumerate((("src-tauri", 1, "Rebrand to Booya"), ("src", 1, "New tokens"), ("brand", 1, "Brand kit v1.0"), ("README.md", 0, "New header"))))}</div></div></div>'''
+     <div style="margin-top:16px;border:1px solid #DCDAD3;border-radius:8px;font-size:13px">{''.join(f'<div style="display:flex;gap:10px;padding:8px 12px;border-top:{"0" if i == 0 else "1px solid #DCDAD3"}"><span style="color:#6B6963">{icon("folder" if d else "captions", 16)}</span><span>{n}</span><span style="margin-left:auto;color:#6B6963">{m}</span></div>' for i, (n, d, m) in enumerate((("src-tauri", 1, "Brand kit v1.0 icons"), ("src", 1, "New tokens"), ("brand", 1, "Brand kit v1.0"), ("README.md", 0, "New header"))))}</div></div></div>'''
 def hero():
     return f'''<div class="hero by-l"><div class="nav">{lockup(14)}<span style="margin-left:auto">Features</span><span>Docs</span><span>GitHub</span><span class="btn primary sm">Download</span></div>
      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.9fr);gap:30px;padding:40px 44px">
@@ -421,7 +421,7 @@ def hero():
      </div></div>'''
 page('18', 'In the wild: web', f'''{head('18', 'In the wild: web')}
 <div style="display:grid;grid-template-columns:690px 1fr;gap:34px;margin-top:34px">{gh()}{hero()}</div>
-<p class="note" style="margin-top:16px">Repository header with the README banner, and a website hero. Repo owner shown as a placeholder.</p>''')
+<p class="note" style="margin-top:16px">Repository header for github.com/im45145v/Booya with the README banner, and a website hero.</p>''')
 
 idx = [('assets/logo', 'Mark, wordmark, horizontal and stacked lockups in color, on-paper, on-ink, mono-black, mono-white. SVG plus PNG 1x and 2x.'),
        ('assets/app-icon', '1024 master SVG, Apple-grid macOS SVG, tuned 32 and 16 px SVGs, PNG 16 to 1024, booya.icns, booya.ico.'),
@@ -434,7 +434,7 @@ idx = [('assets/logo', 'Mark, wordmark, horizontal and stacked lockups in color,
        ('tokens', 'tokens.json, tokens.css, tailwind.preset.js, CONTRAST.md and contrast-report.json.'),
        ('fonts', 'Geist and Geist Mono variable TTFs with their OFL licences.'),
        ('guideline', 'This document as HTML and PDF, plus page PNGs.'),
-       ('IMPLEMENTATION.md', 'Step by step notes for the rebrand PR in the Tauri app.')]
+       ('IMPLEMENTATION.md', 'Step by step notes for the brand kit PR in the Tauri app.')]
 page('19', 'Asset index', f'''{head('19', 'Asset index')}
 <table class="ai" style="margin-top:36px">{''.join(f'<tr><td class="mono">{a}</td><td>{b}</td></tr>' for a, b in idx)}</table>
 <div style="position:absolute;right:96px;bottom:96px;display:flex;align-items:center;gap:20px">{mark_svg(64)}<span class="note" style="margin:0">Questions about the brand go in the repo as an issue with the <span class="mono">brand</span> label.</span></div>''')
