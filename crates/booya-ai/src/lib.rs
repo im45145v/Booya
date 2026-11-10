@@ -5,7 +5,7 @@
 //! * `transcribe` speech to text with whisper.cpp, word level timestamps
 //! * `redact`     find emails, keys, card and phone numbers on screen (OCR)
 //! * `llm`        talk to a local LLM (Ollama, llama.cpp server, or a managed
-//!                llama.cpp runtime) to write titles, chapters, guides, posts
+//!   llama.cpp runtime) to write titles, chapters, guides, posts
 //! * `docs`       the "demo to docs" pipeline with a no-model fallback
 
 pub mod docs;

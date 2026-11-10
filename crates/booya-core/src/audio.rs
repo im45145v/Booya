@@ -21,7 +21,7 @@ pub fn decode_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
         }
         bail!("audio decode failed: {err}");
     }
-    Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    Ok(out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
 }
 
 /// Target loudness for exports and the editor preview (online video).
@@ -154,7 +154,7 @@ pub fn denoise(samples: &[f32]) -> Vec<f32> {
             out.extend(outb.iter().map(|v| (v / 32768.0).clamp(-1.0, 1.0)));
         } else {
             // The first frame contains a fade-in artifact; keep it silent.
-            out.extend(std::iter::repeat(0.0).take(N));
+            out.extend(std::iter::repeat_n(0.0, N));
             first = false;
         }
     }

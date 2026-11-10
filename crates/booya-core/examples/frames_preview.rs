@@ -7,7 +7,7 @@ fn main() -> anyhow::Result<()> {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
     std::fs::create_dir_all(&dir)?;
     let mut src = Frame::new(1920, 1080);
-    for (i, px) in src.data.chunks_exact_mut(4).enumerate() {
+    for (i, px) in src.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = ((i % 1920) as f32 / 1920.0, (i / 1920) as f32 / 1080.0);
         px.copy_from_slice(&[(40.0 + 160.0 * x) as u8, (60.0 + 120.0 * y) as u8, 200, 255]);
     }

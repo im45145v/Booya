@@ -111,7 +111,7 @@ fn luhn(digits: &str) -> bool {
             if i % 2 == 1 { let y = x * 2; if y > 9 { y - 9 } else { y } } else { x
             }
         }).sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Find sensitive spans in a line of text. Returns (kind, byte range).
@@ -249,7 +249,7 @@ pub fn scan_cancellable(
         }
         last_sig = Some(sig);
         let first_new = hits.len();
-        let rgb: Vec<u8> = frame.data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let rgb: Vec<u8> = frame.data.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
         let img = ImageSource::from_bytes(&rgb, (w, h))?;
         let input = engine.prepare_input(img)?;
         let words = engine.detect_words(&input)?;
@@ -342,10 +342,10 @@ pub fn read_text(frame: &booya_core::render::Frame) -> Result<String> {
     let det = Model::load_file(require("ocr-detection")?)?;
     let rec = Model::load_file(require("ocr-recognition")?)?;
     let engine = OcrEngine::new(OcrEngineParams { detection_model: Some(det), recognition_model: Some(rec), ..Default::default() })?;
-    let rgb: Vec<u8> = frame.data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let rgb: Vec<u8> = frame.data.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     let img = ImageSource::from_bytes(&rgb, (frame.w, frame.h))?;
     let input = engine.prepare_input(img)?;
-    Ok(engine.get_text(&input)?)
+    engine.get_text(&input)
 }
 
 #[cfg(not(feature = "ocr"))]
@@ -358,7 +358,7 @@ pub fn read_text(_frame: &booya_core::render::Frame) -> Result<String> {
 pub fn self_test() -> Result<String> {
     let t0 = std::time::Instant::now();
     let mut f = booya_core::render::Frame::new(900, 160);
-    for px in f.data.chunks_exact_mut(4) {
+    for px in f.data.as_chunks_mut::<4>().0.iter_mut() {
         px.copy_from_slice(&[255, 255, 255, 255]);
     }
     booya_core::text::draw(&mut f, 30.0, 50.0, 44.0, "contact test@example.com", [0.0, 0.0, 0.0], 1.0);

@@ -336,6 +336,7 @@ impl FrameReader {
         Ok(Self { child, stdout, w, h, fps, index: 0 })
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<Frame>> {
         let mut f = Frame::new(self.w, self.h);
         match self.stdout.read_exact(&mut f.data) {

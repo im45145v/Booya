@@ -276,7 +276,13 @@ fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
     cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}"),
     ]);
     cmd.args(&input);
-    cmd.args(["-af", super::mic_timeline_filter(), "-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
+    cmd.args(["-map", "0:a:0", "-af", super::mic_timeline_filter(), "-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
+    // A second, tiny output lists every packet as it was read: its wall-clock
+    // time and its size. The audio file above is laid out by sample count,
+    // so this is what tells, at the end, where the first sample really was
+    // and whether the microphone's clock ran fast or slow against the screen
+    // (see `finalize::mic_clock`).
+    cmd.args(["-map", "0:a:0", "-c:a", "copy", "-f", "framecrc"]).arg(crate::finalize::mic_timing(out));
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut c = cmd.spawn().map_err(|e| format!("could not start ffmpeg for the microphone: {e}"))?;
     let err = drain_stderr(&mut c);
@@ -332,6 +338,7 @@ pub fn check_audio(device: Option<&str>, secs: f64) -> AudioCheck {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

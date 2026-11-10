@@ -94,6 +94,7 @@ impl Frame {
         }
         let i = ((y as usize) * self.w as usize + x as usize) * 4;
         let a = a.min(1.0);
+        #[allow(clippy::needless_range_loop)]
         for k in 0..3 {
             let d = self.data[i + k] as f32;
             self.data[i + k] = (d + (rgb[k] - d) * a).round() as u8;
@@ -395,6 +396,7 @@ pub(crate) fn fill_circle(f: &mut Frame, cx: f64, cy: f64, r: f64, rgb: [f32; 3]
     fill_round_rect(f, cx - r, cy - r, 2.0 * r, 2.0 * r, r, rgb, alpha);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn fill_round_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, r: f64, rgb: [f32; 3], alpha: f32,
 ) {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
@@ -461,7 +463,7 @@ pub fn frost_rect(f: &mut Frame, x: f64, y: f64, w: f64, h: f64, radius: f64, bl
                 let nx = sd_round_rect(fx + 1.0, fy, cx, cy, hw, hh, radius) - sd_round_rect(fx - 1.0, fy, cx, cy, hw, hh, radius);
                 let ny = sd_round_rect(fx, fy + 1.0, cx, cy, hw, hh, radius) - sd_round_rect(fx, fy - 1.0, cx, cy, hw, hh, radius);
                 let n = (nx * nx + ny * ny).sqrt().max(1e-9);
-                let toward = ((-nx / n) * 0.7071 + (-ny / n) * 0.7071) as f32;
+                let toward = ((-nx / n) * std::f64::consts::FRAC_1_SQRT_2 + (-ny / n) * std::f64::consts::FRAC_1_SQRT_2) as f32;
                 let wgt = 0.30 + 0.70 * toward.max(0.0) + 0.35 * (-toward).max(0.0);
                 f.blend(px, py, [255.0; 3], (highlight * wgt * rim * alpha).min(1.0));
             }
@@ -1620,11 +1622,11 @@ mod tests {
             counts
         };
         let combo = rows_with_runs(vec![("W", vec!["Meta"])]);
-        assert!(combo.iter().any(|&n| n == 2), "Super and W are two pills: {combo:?}");
+        assert!(combo.contains(&2), "Super and W are two pills: {combo:?}");
         let three = rows_with_runs(vec![("S", vec!["Ctrl", "Shift"])]);
-        assert!(three.iter().any(|&n| n == 3), "Ctrl, Shift and S are three pills: {three:?}");
+        assert!(three.contains(&3), "Ctrl, Shift and S are three pills: {three:?}");
         let one = rows_with_runs(vec![("Esc", vec![])]);
-        assert!(one.iter().any(|&n| n == 1), "{one:?}");
+        assert!(one.contains(&1), "{one:?}");
     }
 
     /// What is burned into the picture and what the SRT says must be the same
@@ -1708,7 +1710,7 @@ mod tests {
         let a = r.render(&src, 0.0, None);
         let b = r.render(&src, 500.0, None);
         assert_eq!(a.data, b.data, "frames are deterministic");
-        let below = ((((r.layout.y + r.layout.h) as usize + 2) * 320 + 160) * 4) as usize;
+        let below = (((r.layout.y + r.layout.h) as usize + 2) * 320 + 160) * 4;
         assert!(a.data[below] < 200, "shadow under the card");
         assert_eq!(&a.data[0..3], &[200, 200, 200]);
     }
@@ -1718,8 +1720,7 @@ mod tests {
         let mut p = Project::new("x".into(), None, 200, 100, 1000.0);
         p.style.shadow = 0.0;
         p.style.padding = 0.0;
-        p.blur.push(BlurBox { x: 0.0, y: 0.0, w: 100.0, h: 100.0, start_ms: 0.0, end_ms: 1000.0, radius: 20, ..serde_json::from_str::<BlurBox>(r#"{"x":0,"y":0,"w":1,"h":1,"start_ms":0,"end_ms":1}"#,
-            ).unwrap() });
+        p.blur.push(BlurBox { x: 0.0, y: 0.0, w: 100.0, h: 100.0, start_ms: 0.0, end_ms: 1000.0, radius: 20 });
         let r = Renderer::new(p, None, 200, 100, None);
         // Half-size source with a sharp stripe pattern in the blurred half.
         let mut src = Frame::new(100, 50);
@@ -1960,7 +1961,7 @@ mod glass_tests {
     #[test]
     fn the_rim_light_is_stronger_at_the_top_left_than_the_bottom_right() {
         let mut f = Frame::new(200, 120);
-        for px in f.data.chunks_exact_mut(4) {
+        for px in f.data.as_chunks_mut::<4>().0.iter_mut() {
             px.copy_from_slice(&[40, 40, 40, 255]);
         }
         frost_rect(&mut f, 20.0, 20.0, 160.0, 80.0, 16.0, 0.0, [40.0; 3], 0.0, 1.0, 1.0,
@@ -1981,7 +1982,7 @@ mod glass_tests {
         let plain = Renderer::new(base.clone(), None, 1280, 720, None);
         let grey = |w: u32, h: u32| {
             let mut f = Frame::new(w, h);
-            for px in f.data.chunks_exact_mut(4) {
+            for px in f.data.as_chunks_mut::<4>().0.iter_mut() {
                 px.copy_from_slice(&[120, 120, 120, 255]);
             }
             f
@@ -2038,7 +2039,7 @@ mod glass_tests {
         p.style.corner_radius = 0.0;
         // A picture with sharp vertical stripes, so a zoom in the middle of the ease smears them.
         let mut src = Frame::new(640, 360);
-        for (i, px) in src.data.chunks_exact_mut(4).enumerate() {
+        for (i, px) in src.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let v = if (i % 640) / 4 % 2 == 0 { 255 } else { 0 };
             px.copy_from_slice(&[v, v, v, 255]);
         }
@@ -2260,7 +2261,7 @@ mod layout_scene_tests {
         let (x2, _, w2, _) = r.view_rect(sc, &r.camera(9500.0), 9500.0);
         assert!(w1 < 1920.0 * 0.4, "a narrow window, not the whole screen: {w1}");
         assert!((w1 - w2).abs() < 1e-6);
-        assert!(x1 <= 100.0 && x1 >= 0.0, "left at first: {x1}");
+        assert!((0.0..=100.0).contains(&x1), "left at first: {x1}");
         assert!(x2 + w2 > 1500.0, "right at the end: {}", x2 + w2);
         // The window never leaves the screen and never jumps between frames.
         let mut last = x1;
@@ -2373,6 +2374,6 @@ mod layout_scene_tests {
     #[test]
     fn no_background_is_a_plain_black_canvas() {
         let f = Renderer::paint_background(&crate::project::Background::None, 8, 8, None);
-        assert!(f.data.chunks_exact(4).all(|px| px == [0, 0, 0, 255]));
+        assert!(f.data.as_chunks::<4>().0.iter().all(|px| px == &[0, 0, 0, 255]));
     }
 }

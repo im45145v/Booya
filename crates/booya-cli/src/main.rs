@@ -201,10 +201,11 @@ fn run() -> Result<()> {
                 let secs: u32 = a.opt(&["--seconds"]).and_then(|v| v.parse().ok()).unwrap_or(20);
                 cap = booya_core::syncprobe::run_capture_linux(&dir.join("capture"), secs)?;
                 // Only the new method is held to the budget. The previous method is shown
-                // for comparison, and its numbers vary from run to run.
+                // for comparison, and its numbers vary from run to run. The beep plays
+                // with a 20 ms buffer, so the offset is held to a budget too.
                 for r in cap.iter().filter(|r| r.method.contains("new")) {
                     match &r.result {
-                        Some(x) => bad |= x.drift_total_ms.abs() > booya_core::syncprobe::BUDGET_DRIFT_TOTAL_MS || x.jitter_ms > booya_core::syncprobe::BUDGET_JITTER_MS,
+                        Some(x) => bad |= x.offset_ms.abs() > booya_core::syncprobe::BUDGET_CAPTURE_OFFSET_MS || x.drift_total_ms.abs() > booya_core::syncprobe::BUDGET_DRIFT_TOTAL_MS || x.jitter_ms > booya_core::syncprobe::BUDGET_JITTER_MS,
                         None => bad |= r.method.contains("new"),
                     }
                 }

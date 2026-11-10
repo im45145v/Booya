@@ -81,10 +81,12 @@ pub(crate) fn plan(o: &RecordOptions) -> Result<CapturePlan> {
     if audio_inputs == 0 {
         warnings.push("recording without audio".into());
     }
-    if mic_sidecar.is_some() {
+    if mic_sidecar.is_some() || audio_inputs == 0 {
         // Keep the screen's own (wall clock) timestamps, relative to the start
         // of the recording, so the sound recorded on the side lands where it
-        // really happened relative to the first frame.
+        // really happened relative to the first frame. Without sound this
+        // still says how long after the event log started the first frame
+        // came, which is what lines clicks and zoom up with the picture.
         args.splice(0..0, [s("-copyts"), s("-itsoffset"), s(super::CLOCK_START)]);
     }
     Ok(CapturePlan { region, args, out_args: Vec::new(), warnings, feed: None, mic_sidecar })

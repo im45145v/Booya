@@ -142,7 +142,6 @@ impl InputLogger {
             self.hook = keyhook::spawn(self.shared.clone(), self.keys != KeyLogging::Off);
         }
         if self.keys == KeyLogging::Off {
-            return;
         }
         #[cfg(target_os = "macos")]
         {
