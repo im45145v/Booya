@@ -207,7 +207,7 @@
 
       <h3 class="section">Background</h3>
       <div class="seg" role="radiogroup" aria-label="Background type">
-        <button data-bg="none" role="radio" title="Plain black canvas, no wallpaper">None</button><button data-bg="gradient" role="radio">Gradient</button><button data-bg="solid" role="radio">Solid</button><button data-bg="image" role="radio">Image</button>
+        <button data-bg="none" role="radio" title="No wallpaper, padding, corners or shadow: just the recording and the camera">None</button><button data-bg="gradient" role="radio">Gradient</button><button data-bg="solid" role="radio">Solid</button><button data-bg="image" role="radio">Image</button>
       </div>
       <input type="hidden" id="bg-type" value="gradient" />
       <div class="walls" id="walls" role="group" aria-label="Wallpapers"></div>
@@ -384,7 +384,7 @@
       <p class="hint warn-note">Auto blur may miss text. Watch the export before sharing.</p>
       <div id="ex-state" class="ex-state" hidden>
         <div class="bar"><div id="ex-bar"></div></div>
-        <div class="row between"><span id="ex-text" class="small"></span><button id="ex-reveal" class="btn ghost sm" hidden><svg class="ico"><use href="#i-folder"/></svg><span>Show in folder</span></button></div>
+        <div class="row between"><span id="ex-text" class="small" aria-live="polite"></span><button id="ex-cancel" class="btn ghost sm" hidden title="Stop the export. The half written file is removed.">Cancel</button><button id="ex-reveal" class="btn ghost sm" hidden><svg class="ico"><use href="#i-folder"/></svg><span>Show in folder</span></button></div>
         <div class="row"><button id="ex-upload" class="btn sm" hidden><svg class="ico"><use href="#i-export"/></svg><span>Upload and copy a private link</span></button></div>
       </div>
     </div>

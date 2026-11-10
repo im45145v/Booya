@@ -25,3 +25,16 @@ panic = "unwind"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Used by CI for test, build and clippy, so all three share one compile of the
+# dependencies (and of whisper.cpp) instead of three. Release speed for the
+# bench and sync probes, but with debug assertions and overflow checks kept on
+# so tests still catch what they catch in a dev build. Installers still use
+# `release` (fat LTO), built by release.yml.
+[profile.ci]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+incremental = false
+debug-assertions = true
+overflow-checks = true

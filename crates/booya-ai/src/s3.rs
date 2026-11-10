@@ -283,7 +283,7 @@ mod tests {
         let c = S3Config { endpoint: base, bucket: "b".into(), access_key_id: "AK".into(), prefix: "demos/".into(), ..Default::default() };
         let up = upload(&c, "secret", &f).unwrap();
         assert!(up.url.contains("X-Amz-Expires=86400") && up.url.contains("X-Amz-Signature="));
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         let h = s[0].1.to_ascii_lowercase();
         assert!(s[0].0.starts_with("PUT /b/demos/"));
         assert!(h.contains("x-amz-server-side-encryption: aes256"));

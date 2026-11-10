@@ -495,7 +495,7 @@ pub(crate) mod tests {
                 }
                 let mut b = vec![0; len];
                 r.read_exact(&mut b).unwrap();
-                s2.lock().unwrap().push((line.trim().to_string(), headers, b));
+                s2.lock().unwrap_or_else(|p| p.into_inner()).push((line.trim().to_string(), headers, b));
                 let _ = write!(c, "HTTP/1.1 {status} OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                 let _ = c.write_all(&body);
             }
@@ -537,7 +537,7 @@ pub(crate) mod tests {
         let w = transcribe(&cfg(&base, Provider::Groq, Task::Stt), Provider::Groq, "gsk_secret", &wav_bytes(&[0.0; 160], 16000), Some("en")).unwrap();
         assert_eq!(w.len(), 2);
         assert_eq!(w[0].start_ms, 500.0);
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         assert!(s[0].0.starts_with("POST /audio/transcriptions"));
         assert!(s[0].1.contains("authorization: Bearer gsk_secret") || s[0].1.to_ascii_lowercase().contains("authorization: bearer gsk_secret"));
         assert!(String::from_utf8_lossy(&s[0].2).contains("whisper-large-v3-turbo"));
@@ -548,7 +548,7 @@ pub(crate) mod tests {
         let (base, seen) = mock(vec![(200, "application/json", br#"{"results":{"channels":[{"alternatives":[{"words":[{"word":"um","punctuated_word":"Um,","start":0.1,"end":0.3}]}]}]}}"#.to_vec())]);
         let w = transcribe(&cfg(&base, Provider::Deepgram, Task::Stt), Provider::Deepgram, "dg", b"RIFF", None).unwrap();
         assert_eq!(w[0].text, "Um,");
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         assert!(s[0].0.contains("/listen?model=nova-2") && s[0].0.contains("filler_words=true"));
         assert!(s[0].1.to_ascii_lowercase().contains("authorization: token dg"));
     }
@@ -565,7 +565,7 @@ pub(crate) mod tests {
         let w = transcribe(&cfg(&base, Provider::AssemblyAi, Task::Stt), Provider::AssemblyAi, "aai", b"RIFF", None).unwrap();
         assert_eq!((w[0].text.as_str(), w[0].start_ms, w[0].end_ms), ("Hello", 100.0, 400.0));
         std::thread::sleep(Duration::from_millis(100));
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         assert!(s[1].0.starts_with("POST /transcript"));
         assert!(String::from_utf8_lossy(&s[1].2).replace([' ', '\n'], "").contains("\"disfluencies\":true"));
         assert!(s.last().unwrap().0.starts_with("DELETE /transcript/t1"));
@@ -582,7 +582,7 @@ pub(crate) mod tests {
         let w = transcribe(&c, Provider::ElevenLabs, "xi", b"RIFF", None).unwrap();
         assert_eq!(w.len(), 1);
         assert_eq!(speak(&c, Provider::ElevenLabs, "xi", "Hello").unwrap(), b"ID3fake");
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         assert!(s[0].1.to_ascii_lowercase().contains("xi-api-key: xi"));
         assert!(s[1].0.contains("/text-to-speech/"));
     }
@@ -592,7 +592,7 @@ pub(crate) mod tests {
         let (base, seen) = mock(vec![(200, "application/json", br#"{"choices":[{"message":{"content":"A guide"}}]}"#.to_vec())]);
         let l = llm(&cfg(&base, Provider::Anthropic, Task::Llm), Provider::Anthropic, "sk-ant-x").unwrap();
         assert_eq!(l.chat("s", "u", 50).unwrap(), "A guide");
-        let s = seen.lock().unwrap();
+        let s = seen.lock().unwrap_or_else(|p| p.into_inner());
         assert!(s[0].0.starts_with("POST /chat/completions"));
         assert!(String::from_utf8_lossy(&s[0].2).contains("claude"));
     }
