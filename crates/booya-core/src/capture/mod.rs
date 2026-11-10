@@ -352,19 +352,22 @@ pub(crate) fn macos_camera_index() -> Option<u32> {
 
 /// How a wall-clock stamped camera is written.
 ///
-/// The same read-time stamp makes a steady camera look like a burst: many
-/// frames share one timestamp and the encoder keeps one of them. The picture
-/// then freezes, jumps, and drifts against the screen and the voice. The
-/// first frame keeps the wall-clock time that lines the camera up with the
-/// screen. Later frames step at `fps`, the rate the camera was opened at.
+/// Each frame keeps the wall-clock time it was read at, so the camera stays
+/// on the same clock as the screen and the voice for the whole recording,
+/// whatever rate it really delivers. A built-in camera opened at 30 fps
+/// drops to 15 or 24 fps in a dim room, and a DirectShow camera opens at
+/// whatever its default mode is; stepping every frame at a fixed 30 fps
+/// played such a camera fast and pulled it seconds ahead of the voice.
 ///
-/// The rate ffmpeg reports on the stream (`FR`) is not that rate. A camera
-/// opened at 30 fps often claims 26 or 31, and stepping at the claimed rate
-/// stretches or squeezes the picture against the screen (about two seconds
-/// by the end of a minute when 31 is reported for a 30 fps camera).
+/// The read-time stamp alone has one weakness: a camera that hands over
+/// several frames at once gives them one timestamp, and the encoder keeps
+/// only one of them. So a frame is never placed closer than `1/(fps * 1.25)`
+/// after the one before it. A burst is spread out at about the camera's
+/// rate, and the frames after it land on their real time again, so nothing
+/// accumulates.
 pub(crate) fn camera_timeline_filter(fps: u32) -> String {
-    let fps = fps.clamp(1, 60);
-    format!("setpts=STARTPTS+N/({fps}*TB)")
+    let fps = fps.clamp(1, 60) as f64 * 1.25;
+    format!("settb=AVTB,setpts='if(eq(N,0),PTS,max(PTS,PREV_OUTPTS+1/({fps}*TB)))'")
 }
 
 /// Source time, in ms, at which the real take begins.
@@ -589,9 +592,9 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     };
     let out = dir.join("webcam.mkv");
     let mut cmd = crate::proc::command(crate::ffmpeg::ffmpeg_bin());
-    // The first frame is stamped with the wall clock since `epoch`, which is
-    // what lines the camera up with the screen. Later frames step at the
-    // camera's own rate so a burst of packets cannot freeze or warp it.
+    // Every frame is stamped with the wall clock since `epoch`, which is what
+    // lines the camera up with the screen and the voice. See
+    // `camera_timeline_filter` for how a burst of packets is kept.
     let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
     cmd.args(["-hide_banner", "-nostats", "-v", "error", "-y"]);
     cmd.args(["-copyts", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}")]);
@@ -599,7 +602,9 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     // passthrough keeps the timestamps the filter just wrote. The default
     // constant-frame-rate mode would drop the burst back down to one frame
     // and start the file at zero, which is the drift this is here to stop.
-    let timeline = camera_timeline_filter(30);
+    // 60, not the 30 asked for: a camera that really runs at 60 fps (or a
+    // DirectShow default mode) must never be held back by the burst spacing.
+    let timeline = camera_timeline_filter(60);
     cmd.args(["-vf", &timeline, "-fps_mode", "passthrough"]);
     cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -734,7 +739,7 @@ impl RecordingSession {
         if self.created {
             std::fs::remove_dir_all(&self.dir)?;
         } else {
-            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv"), &self.video.with_extension("sys.mkv"),
+            for f in [&self.video, &self.events, &self.video.with_extension("mic.mkv"), &self.video.with_extension("mic.timing"), &self.video.with_extension("sys.mkv"),
             ] {
                 let _ = std::fs::remove_file(f);
             }
@@ -790,6 +795,12 @@ impl RecordingSession {
             },
             None => {}
         }
+        // Written down for `booya verify` and bug reports: where the voice
+        // really started against where its file says, and how its clock ran.
+        let side = crate::finalize::mic_sidecar(&self.video);
+        if let (Some(c), Some((file_start, _))) = (crate::finalize::mic_clock(&side), crate::finalize::stream_times(&side, "a:0")) {
+            mic::log_line(&audio_log, &format!("microphone clock: first sample at {:.3}s (first packet read at {file_start:.3}s), {:.5} s of samples per second over {:.1}s", c.start_s, c.ratio, c.span_s));
+        }
         let remuxed = crate::finalize::remux_to_mp4_info(&self.video);
         let (video, video_start_s) = match remuxed {
             Ok(r) => {
@@ -811,7 +822,10 @@ impl RecordingSession {
         // Every frame is stamped with the wall clock since ffmpeg
         // started (when the microphone is recorded on the side), and the MP4 starts its video at 0. Input events were logged
         // on that same clock, so they move earlier by the video's lead-in.
-        let shift_ms = if video_start_s > 0.15 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
+        // Every lead-in counts: the first frame of a screen recorder usually
+        // comes 50 to 300 ms after the clock started, and zoom that lands
+        // that late is visible.
+        let shift_ms = if video_start_s > 0.0 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
         let mut log = EventLog::new(self.region.w, self.region.h);
         log.header.origin_x = self.region.x;
         log.header.origin_y = self.region.y;
@@ -967,7 +981,16 @@ mod tests {
         assert!(fixed_pts.len() >= 28, "the camera keeps its frames, got {}", fixed_pts.len());
         assert!((fixed_pts[0] - 0.4).abs() < 0.05, "the start stays on the shared clock: {}", fixed_pts[0]);
         let step = fixed_pts[1] - fixed_pts[0];
-        assert!((step - 1.0 / 30.0).abs() < 0.004, "frames step at the camera rate, got {step}");
+        assert!(step > 0.02 && step < 0.04, "a burst is spread at about the camera rate, got {step}");
+        assert!(fixed_pts.windows(2).all(|w| w[1] > w[0]), "frame times move forward");
+
+        // A camera that delivers 15 fps although it was opened at 30 keeps
+        // its real length (stepping at 30 fps played it twice as fast).
+        let slow = dir.join("slow.mkv");
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=15:d=4", "-vf", &camera_timeline_filter(30), "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &slow);
+        let slow_pts = pts(&slow, "v");
+        let span = slow_pts[slow_pts.len() - 1] - slow_pts[0];
+        assert!(slow_pts.len() >= 58 && (span - 59.0 / 15.0).abs() < 0.05, "a 15 fps camera stays 4 s long: {} frames over {span}", slow_pts.len());
 
         let voice = dir.join("voice.mkv");
         let mic = format!("asetpts=0.5/TB,{}", mic_timeline_filter());
@@ -994,10 +1017,10 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_steps_at_the_rate_it_was_opened_at_not_the_rate_ffmpeg_reports() {
+    fn the_camera_follows_the_wall_clock_and_only_spreads_bursts() {
         let f = camera_timeline_filter(30);
-        assert_eq!(f, "setpts=STARTPTS+N/(30*TB)");
-        assert!(!f.contains("FR"), "{f}");
+        assert!(f.contains("max(PTS,PREV_OUTPTS+1/(37.5*TB))"), "{f}");
+        assert!(!f.contains("FR") && !f.contains("N/("), "{f}");
     }
 
     #[test]
