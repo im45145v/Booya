@@ -124,7 +124,7 @@ pub fn beep_times(path: &Path) -> Result<Vec<f64>> {
     if !o.status.success() {
         bail!("beep scan failed: {}", String::from_utf8_lossy(&o.stderr));
     }
-    let x: Vec<f32> = o.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let x: Vec<f32> = o.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     Ok(find_beeps(&x, RATE))
 }
 
@@ -213,6 +213,10 @@ pub const BUDGET_MOVE_MS: f64 = 50.0;
 pub const BUDGET_DRIFT_TOTAL_MS: f64 = 25.0;
 /// Allowed spread of the offset between beeps, ms.
 pub const BUDGET_JITTER_MS: f64 = 35.0;
+/// Sound against picture in a real Linux capture, ms. It includes the test
+/// signal's own start skew (a separate process plays the beep), so it is
+/// looser than the file stages.
+pub const BUDGET_CAPTURE_OFFSET_MS: f64 = 100.0;
 
 fn row(stage: &str, input: &SyncResult, out: Result<SyncResult>) -> StageRow {
     match out {
@@ -323,6 +327,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Real capture on an X display with a PulseAudio sink (see
+    /// `run_capture_linux`). Run with `cargo test -p booya-core capture_on_x -- --ignored`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn capture_on_x_keeps_sound_with_picture() {
+        let secs = std::env::var("BOOYA_PROBE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+        let d = std::env::temp_dir().join(format!("booya-capture-sync-{}", std::process::id()));
+        let rows = run_capture_linux(&d, secs).unwrap();
+        eprintln!("{}", format_capture(&rows));
+    }
+
     #[test]
     fn the_reference_signal_measures_as_in_sync() {
         if !ffmpeg::ffmpeg_found() {
@@ -362,8 +378,10 @@ pub struct CaptureRow {
 /// The flash is the X root window turning white (`xsetroot`), the beep plays
 /// into a PulseAudio null sink whose monitor is the "microphone". The two
 /// start from separate processes, so the absolute offset has a skew of a few
-/// tens of ms that is the same for both methods; what matters is the drift
-/// and the gap between the methods.
+/// tens of ms that is the same for both methods. The beep is played with a
+/// 20 ms buffer: with PulseAudio's default it came out about a second late,
+/// and a second late is indistinguishable from on time when the flashes
+/// repeat every second.
 ///
 /// Needs `DISPLAY` (for example Xvfb), `xsetroot` and a PulseAudio sink named
 /// `probe_sink` (`pactl load-module module-null-sink sink_name=probe_sink`).
@@ -382,7 +400,7 @@ pub fn run_capture_linux(dir: &Path, secs: u32) -> Result<Vec<CaptureRow>> {
         let mut beep = crate::proc::command(ffmpeg_bin());
         beep.args(["-v", "error", "-nostdin", "-re", "-f", "lavfi", "-i"])
             .arg(format!("aevalsrc='0.6*sin(2*PI*1000*t)*gte(t,1)*lt(mod(t,1),0.1)':s=48000:d={}", secs + 1))
-            .args(["-f", "pulse", "-device", &sink, "probe_beep"])
+            .args(["-f", "pulse", "-buffer_duration", "20", "-device", &sink, "probe_beep"])
             .stdout(Stdio::null()).stderr(Stdio::null());
         let mut child = beep.spawn().context("start the beep source")?;
         let disp = display.clone();

@@ -292,11 +292,7 @@ pub fn build_key_labels(log: &EventLog, o: &LabelOptions) -> Vec<KeyLabel> {
         log.events.iter().any(|e| {
             e.t >= a
                 && e.t <= b
-                && match &e.kind {
-                    EventKind::Key { .. } => true,
-                    EventKind::Click { .. } => true,
-                    _ => false,
-                }
+                && matches!(&e.kind, EventKind::Key { .. } | EventKind::Click { .. })
         })
     };
 

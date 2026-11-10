@@ -1012,6 +1012,7 @@ fn segment_aim(s: &ZoomSegment, t: f64, track: Option<&CursorTrack>, w: f64, tim
 
 /// A pan from one zoomed view to the next. Scale stays up: the picture moves
 /// from the first focus to the second instead of widening out and back in.
+#[allow(clippy::too_many_arguments)]
 fn pan_camera(from: &ZoomSegment, to: &ZoomSegment, t: f64, track: Option<&CursorTrack>, w: f64, h: f64, timing: &CameraTiming, to_track: &dyn Fn(f64) -> f64) -> Camera {
     let a = to.start_ms.max(from.start_ms);
     let b = to.end_ms.min(from.end_ms);
@@ -1240,7 +1241,7 @@ mod tests {
         ev.sort_by(|a, b| a.t.total_cmp(&b.t));
         let log = log_with(ev);
         let segs = generate_zoom_segments(&log, 60_000.0, &cfg);
-        let typing = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        let typing = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("{segs:?}"));
         assert!(!typing.follow_cursor, "{typing:?}");
         assert!((typing.focus.0 - 700.0).abs() < 30.0 && typing.focus.1 < 200.0, "framed on the address bar: {typing:?}");
         assert!(typing.start_ms <= 9000.0 && typing.end_ms >= 9800.0, "{typing:?}");
@@ -1266,8 +1267,8 @@ mod tests {
         }
         ev.sort_by(|a, b| a.t.total_cmp(&b.t));
         let segs = gen(ev);
-        let page = segs.iter().find(|s| s.reason == "click").expect(&format!("page zoom missing: {segs:?}"));
-        let typing = segs.iter().find(|s| s.reason == "typing").expect(&format!("typing zoom missing: {segs:?}"));
+        let page = segs.iter().find(|s| s.reason == "click").unwrap_or_else(|| panic!("page zoom missing: {segs:?}"));
+        let typing = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("typing zoom missing: {segs:?}"));
         assert!(page.end_ms > typing.start_ms + 200.0, "the page zoom runs into the typing zoom: {segs:?}");
         let timing = CameraTiming { ease_in_ms: cfg.ease_in_ms, ease_out_ms: cfg.ease_out_ms, follow_smoothing_ms: 0.0, deadzone: 0.4 };
         let at = |t: f64| camera_at(t, &segs, None, 1920.0, 1080.0, timing);
@@ -1288,7 +1289,7 @@ mod tests {
             ev.push(key(8200.0 + i as f64 * 60.0, "printable", &[]));
         }
         let segs = gen(ev);
-        let t = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        let t = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("{segs:?}"));
         assert!(!t.follow_cursor);
         assert!((t.focus.0 - 960.0).abs() < 40.0 && t.focus.1 < 200.0, "{t:?}");
         assert!(t.scale <= ADDRESS_BAR_SCALE + 0.01, "{t:?}");
@@ -1302,7 +1303,7 @@ mod tests {
         }
         ev.push(key(6100.0, "Enter", &[]));
         let segs = gen(ev);
-        let t = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        let t = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("{segs:?}"));
         assert!(!t.follow_cursor);
         assert!(t.focus.1 < 200.0, "not the mouse at y=700: {t:?}");
     }
@@ -1436,7 +1437,7 @@ mod tests {
         // Last key at 5020, Enter at 5500.
         ev.push(key(5500.0, "Enter", &[]));
         let segs = gen(ev);
-        let s = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        let s = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("{segs:?}"));
         assert!(!s.follow_cursor, "{s:?}");
         assert!(s.focus.1 < 200.0, "{s:?}");
         assert!((s.end_ms - (5500.0 + SUBMIT_HOLD_MS + cfg.ease_out_ms)).abs() < 1.0, "{s:?}");
@@ -1462,7 +1463,7 @@ mod tests {
         }
         ev.push(mv(6000.0, 1500.0, 920.0));
         let segs = gen(ev);
-        let t = segs.iter().find(|s| s.reason == "typing").expect(&format!("{segs:?}"));
+        let t = segs.iter().find(|s| s.reason == "typing").unwrap_or_else(|| panic!("{segs:?}"));
         assert!(!t.follow_cursor, "{t:?}");
         assert!((t.focus.0 - 400.0).abs() < 5.0 && (t.focus.1 - 300.0).abs() < 5.0, "{t:?}");
     }
@@ -1795,7 +1796,7 @@ mod tests {
         let log = log_with(vec![mv(0.0, 600.0, 400.0), mv(2000.0, 1200.0, 600.0)]);
         let track = CursorTrack::new(&log);
         let seg = ZoomSegment { start_ms: 0.0, end_ms: 4000.0, scale: 2.0, follow_cursor: true, focus: (0.0, 0.0), reason: "click".into() };
-        let a = camera_at(800.0, &[seg.clone()], Some(&track), 1920.0, 1080.0, T);
+        let a = camera_at(800.0, std::slice::from_ref(&seg), Some(&track), 1920.0, 1080.0, T);
         let b = camera_at(1600.0, &[seg], Some(&track), 1920.0, 1080.0, T);
         assert!(b.cx > a.cx);
     }
