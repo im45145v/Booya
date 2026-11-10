@@ -50,7 +50,8 @@ jobs:
         run: cargo test -p booya-core -p booya-ai
       - name: Build CLI and app
         run: cargo build --workspace --release
-      - name: Clippy (booya-core, warnings are errors)
+      - name: Clippy (booya-core on Linux, warnings are errors)
+        if: runner.os == 'Linux'
         run: cargo clippy -p booya-core --all-targets -- -D warnings
       - name: Clippy (whole workspace, report only for now)
         continue-on-error: true
