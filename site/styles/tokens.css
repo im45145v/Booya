@@ -1,0 +1,184 @@
+/* Booya tokens, copied from brand/tokens/tokens.css. The only change for the site: the fonts are Latin subset WOFF2 files.
+   Booya tokens. Light by default, dark via prefers-color-scheme, and [data-theme] wins over both. */
+@font-face { font-family: 'Geist'; src: url('../fonts/Geist-latin.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'Geist Mono'; src: url('../fonts/GeistMono-latin.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+
+:root {
+  --by-font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --by-font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --by-text-display: 56px;
+  --by-leading-display: 60px;
+  --by-weight-display: 600;
+  --by-tracking-display: -0.03em;
+  --by-text-h1: 40px;
+  --by-leading-h1: 44px;
+  --by-weight-h1: 600;
+  --by-tracking-h1: -0.025em;
+  --by-text-h2: 28px;
+  --by-leading-h2: 34px;
+  --by-weight-h2: 600;
+  --by-tracking-h2: -0.02em;
+  --by-text-h3: 20px;
+  --by-leading-h3: 28px;
+  --by-weight-h3: 600;
+  --by-tracking-h3: -0.01em;
+  --by-text-body: 15px;
+  --by-leading-body: 24px;
+  --by-weight-body: 400;
+  --by-tracking-body: 0;
+  --by-text-body-strong: 15px;
+  --by-leading-body-strong: 24px;
+  --by-weight-body-strong: 550;
+  --by-tracking-body-strong: 0;
+  --by-text-small: 13px;
+  --by-leading-small: 20px;
+  --by-weight-small: 400;
+  --by-tracking-small: 0;
+  --by-text-caption: 12px;
+  --by-leading-caption: 16px;
+  --by-weight-caption: 500;
+  --by-tracking-caption: 0.01em;
+  --by-text-overline: 11px;
+  --by-leading-overline: 14px;
+  --by-weight-overline: 500;
+  --by-tracking-overline: 0.08em;
+  --by-text-timer: 15px;
+  --by-leading-timer: 20px;
+  --by-weight-timer: 500;
+  --by-tracking-timer: 0;
+  --by-text-caption-overlay: 22px;
+  --by-leading-caption-overlay: 30px;
+  --by-weight-caption-overlay: 500;
+  --by-tracking-caption-overlay: -0.005em;
+  --by-space-0: 0px;
+  --by-space-0_5: 2px;
+  --by-space-1: 4px;
+  --by-space-2: 8px;
+  --by-space-3: 12px;
+  --by-space-4: 16px;
+  --by-space-5: 20px;
+  --by-space-6: 24px;
+  --by-space-8: 32px;
+  --by-space-10: 40px;
+  --by-space-12: 48px;
+  --by-space-16: 64px;
+  --by-radius-xs: 4px;
+  --by-radius-sm: 6px;
+  --by-radius-md: 10px;
+  --by-radius-lg: 14px;
+  --by-radius-xl: 20px;
+  --by-radius-pill: 999px;
+  --by-duration-instant: 0ms;
+  --by-duration-blink: 120ms;
+  --by-duration-fast: 150ms;
+  --by-duration-base: 200ms;
+  --by-duration-ripple: 400ms;
+  --by-duration-trail: 240ms;
+  --by-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --by-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --by-ease-linear: linear;
+  --by-bg: #F4F3EF;
+  --by-surface: #FFFFFF;
+  --by-surface-raised: #FFFFFF;
+  --by-text: #111110;
+  --by-text-muted: #6B6963;
+  --by-rule: #DCDAD3;
+  --by-border-strong: #8C8A83;
+  --by-signal: #FF5A1F;
+  --by-signal-text: #BF4317;
+  --by-on-signal: #111110;
+  --by-success: #1D7A45;
+  --by-warning: #975A00;
+  --by-danger: #C2301F;
+  --by-recording: #FF5A1F;
+  --by-focus: #111110;
+  --by-inverse: #111110;
+  --by-on-inverse: #F4F3EF;
+  --by-overlay-caption-bg: rgba(17,17,16,0.82);
+  --by-overlay-caption-text: #F4F3EF;
+  --by-shadow-sm: 0 1px 2px rgba(17,17,16,0.08);
+  --by-shadow-md: 0 1px 2px rgba(17,17,16,0.06), 0 8px 24px rgba(17,17,16,0.10);
+  --by-shadow-lg: 0 2px 4px rgba(17,17,16,0.06), 0 18px 48px rgba(17,17,16,0.16);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --by-bg: #111110;
+    --by-surface: #1C1B19;
+    --by-surface-raised: #24231F;
+    --by-text: #EDEBE5;
+    --by-text-muted: #8D8A82;
+    --by-rule: #2C2B28;
+    --by-border-strong: #76736C;
+    --by-signal: #FF6A33;
+    --by-signal-text: #FF6A33;
+    --by-on-signal: #111110;
+    --by-success: #4CC385;
+    --by-warning: #F0B24E;
+    --by-danger: #FF6B5B;
+    --by-recording: #FF6A33;
+    --by-focus: #EDEBE5;
+    --by-inverse: #EDEBE5;
+    --by-on-inverse: #111110;
+    --by-overlay-caption-bg: rgba(17,17,16,0.82);
+    --by-overlay-caption-text: #F4F3EF;
+    --by-shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+    --by-shadow-md: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.45);
+    --by-shadow-lg: 0 2px 4px rgba(0,0,0,0.4), 0 18px 48px rgba(0,0,0,0.55);
+    color-scheme: dark;
+  }
+}
+[data-theme="light"] {
+  --by-bg: #F4F3EF;
+  --by-surface: #FFFFFF;
+  --by-surface-raised: #FFFFFF;
+  --by-text: #111110;
+  --by-text-muted: #6B6963;
+  --by-rule: #DCDAD3;
+  --by-border-strong: #8C8A83;
+  --by-signal: #FF5A1F;
+  --by-signal-text: #BF4317;
+  --by-on-signal: #111110;
+  --by-success: #1D7A45;
+  --by-warning: #975A00;
+  --by-danger: #C2301F;
+  --by-recording: #FF5A1F;
+  --by-focus: #111110;
+  --by-inverse: #111110;
+  --by-on-inverse: #F4F3EF;
+  --by-overlay-caption-bg: rgba(17,17,16,0.82);
+  --by-overlay-caption-text: #F4F3EF;
+  --by-shadow-sm: 0 1px 2px rgba(17,17,16,0.08);
+  --by-shadow-md: 0 1px 2px rgba(17,17,16,0.06), 0 8px 24px rgba(17,17,16,0.10);
+  --by-shadow-lg: 0 2px 4px rgba(17,17,16,0.06), 0 18px 48px rgba(17,17,16,0.16);
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --by-bg: #111110;
+  --by-surface: #1C1B19;
+  --by-surface-raised: #24231F;
+  --by-text: #EDEBE5;
+  --by-text-muted: #8D8A82;
+  --by-rule: #2C2B28;
+  --by-border-strong: #76736C;
+  --by-signal: #FF6A33;
+  --by-signal-text: #FF6A33;
+  --by-on-signal: #111110;
+  --by-success: #4CC385;
+  --by-warning: #F0B24E;
+  --by-danger: #FF6B5B;
+  --by-recording: #FF6A33;
+  --by-focus: #EDEBE5;
+  --by-inverse: #EDEBE5;
+  --by-on-inverse: #111110;
+  --by-overlay-caption-bg: rgba(17,17,16,0.82);
+  --by-overlay-caption-text: #F4F3EF;
+  --by-shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --by-shadow-md: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.45);
+  --by-shadow-lg: 0 2px 4px rgba(0,0,0,0.4), 0 18px 48px rgba(0,0,0,0.55);
+  color-scheme: dark;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --by-duration-ripple: 0ms; --by-duration-trail: 0ms; --by-duration-blink: 0ms; --by-duration-fast: 0ms; --by-duration-base: 0ms; }
+}
+:focus-visible { outline: 2px solid var(--by-focus); outline-offset: 2px; }

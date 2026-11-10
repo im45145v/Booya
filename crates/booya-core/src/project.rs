@@ -254,12 +254,44 @@ pub struct CaptionStyle {
     /// Colour of the word being spoken right now.
     pub highlight: [u8; 3],
     pub background_opacity: f64,
+    /// How the words are drawn. Missing in older projects (a boxed line).
+    pub look: CaptionLook,
+    /// Where the captions sit. Missing in older projects (the bottom).
+    pub position: CaptionPosition,
+    /// Show the words in capitals.
+    pub uppercase: bool,
 }
 
 impl Default for CaptionStyle {
     fn default() -> Self {
-        Self { burn_in: true, size: 0.042, color: [255, 255, 255], highlight: [250, 204, 21], background_opacity: 0.72 }
+        Self { burn_in: true, size: 0.042, color: [255, 255, 255], highlight: [250, 204, 21], background_opacity: 0.72,
+            look: CaptionLook::Box, position: CaptionPosition::Bottom, uppercase: false,
+        }
     }
+}
+
+/// How burned in captions look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptionLook {
+    /// The whole line on a dark plate.
+    #[default]
+    Box,
+    /// The whole line with a dark edge round each letter, no plate.
+    Outline,
+    /// A few words at a time, large, with the spoken word bigger and in the
+    /// highlight colour. The short form video look.
+    Pop,
+}
+
+/// Where burned in captions sit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptionPosition {
+    #[default]
+    Bottom,
+    Middle,
+    Top,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -857,7 +889,8 @@ impl Project {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+        // Never truncate the old project before the new one is safely written.
+        crate::fsutil::write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
 

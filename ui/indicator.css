@@ -1,10 +1,11 @@
-/* Recording pill. Brand tokens from docs/BRAND.md. */
-:root { --rec: #FF6369; --amber: #f5b042; --indigo: #9B82FF; --ink: 20, 18, 31; }
+/* Recording pill. Brand tokens from styles/tokens.css. The pill is always Night
+   (#111110) with Paper text; the record dot and Stop are Signal, and the glyph
+   on Stop is Ink. */
+@import url("styles/tokens.css");
+:root { --rec: #FF6A33; --amber: #F0B24E; --flash: #EDEBE5; --ink: 17, 17, 16; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-@font-face { font-family: "Inter"; src: url("fonts/Inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono.woff2") format("woff2"); font-weight: 400 600; font-display: swap; }
-body { font: 600 13px/1 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", system-ui, sans-serif; color: #f4f4f7; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+body { font: 600 13px/1 "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", system-ui, sans-serif; color: #EDEBE5; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
 .pill {
   position: absolute; inset: 4px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px;
   border-radius: 999px; background: rgba(var(--ink), .86); border: 1px solid rgba(255,255,255,.10);
@@ -15,13 +16,14 @@ body.mac .pill { background: rgba(var(--ink), .52); }
 /* Glass: a soft sheen and a bright rim, like the exported glass frame. */
 .pill { background-image: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,0) 60%); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); border-color: rgba(255,255,255,.16); box-shadow: 0 8px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 .5px rgba(255,255,255,.08); }
 @media (prefers-reduced-transparency: reduce) { .pill, body.mac .pill { background: rgb(var(--ink)); background-image: none; -webkit-backdrop-filter: none; backdrop-filter: none; } }
-.ib.flash { background: var(--indigo); transform: scale(1.08); }
+.ib.flash { background: var(--flash); color: #111110; transform: scale(1.08); }
 .pill.dim { opacity: .5; }
 .pill:hover { opacity: 1; }
-.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 0 rgba(255,99,105,.6); animation: pulse 1.6s ease-out infinite; flex: none; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 0 rgba(255,106,51,.6); animation: pulse 1.6s ease-out infinite; flex: none; }
 .pill.paused .dot { background: var(--amber); animation: none; box-shadow: none; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,99,105,.55); } 70% { box-shadow: 0 0 0 9px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
-.time { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: .01em; min-width: 38px; }
+.pill.failed .dot { background: #8a8a8a; animation: none; box-shadow: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,106,51,.55); } 70% { box-shadow: 0 0 0 9px rgba(255,106,51,0); } 100% { box-shadow: 0 0 0 0 rgba(255,106,51,0); } }
+.time { font-family: "Geist Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: .01em; min-width: 38px; }
 .state { font-size: 11px; font-weight: 600; color: var(--amber); letter-spacing: .04em; text-transform: uppercase; }
 .gap { flex: 1; align-self: stretch; }
 .sep { width: 1px; height: 18px; background: rgba(255,255,255,.14); margin: 0 2px; }
@@ -33,16 +35,16 @@ body.mac .pill { background: rgba(var(--ink), .52); }
 .ib svg { width: 16px; height: 16px; fill: currentColor; }
 .ib:hover { background: rgba(255,255,255,.2); }
 .ib:active { transform: scale(.94); }
-.ib.stop { background: var(--rec); }
-.ib.stop:hover { background: #f26a6a; }
+.ib.stop { background: var(--rec); color: #111110; }
+.ib.stop:hover { background: #FF8A5C; }
 .ib.ghost { background: transparent; color: rgba(255,255,255,.65); }
-.ib.ghost:hover { background: rgba(255,99,105,.22); color: #fff; }
-.ib:focus-visible, .txt:focus-visible { outline: 2px solid rgba(155,130,255,.4); outline-offset: 1px; }
+.ib.ghost:hover { background: rgba(255,106,51,.22); color: #fff; }
+.ib:focus-visible, .txt:focus-visible { outline: 2px solid var(--rec); outline-offset: 1px; }
 .confirm { position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 18px; border-radius: 999px; background: rgb(var(--ink)); }
 .confirm[hidden] { display: none; }
 .confirm span { flex: 1; font-weight: 600; }
 .txt { border: 0; border-radius: 999px; padding: 8px 12px; font: inherit; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
 .txt:hover { background: rgba(255,255,255,.22); }
-.txt.danger { background: var(--rec); }
-.txt.danger:hover { background: #f26a6a; }
+.txt.danger { background: var(--rec); color: #111110; }
+.txt.danger:hover { background: #FF8A5C; }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } .pill { transition: none; } }

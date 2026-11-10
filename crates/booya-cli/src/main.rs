@@ -45,7 +45,8 @@ USAGE:
 LOCAL AI (offline, models download once on first use):
   booya models [list | download ID | verify | delete ID]
   booya transcribe <project.json> [--model whisper-base.en] [--lang en]
-  booya captions <project.json> [--burn on|off] [--size PX] [-o subs.srt|subs.vtt]
+  booya captions <project.json> [--burn on|off] [--size PX] [--look box|outline|pop]
+                 [--position bottom|middle|top] [--caps on|off] [-o subs.srt|subs.vtt]
   booya autocut <project.json> [--fillers] [--silences] [--min-silence MS] [--dry-run]
                   --silences only cuts quiet stretches where the screen, pointer and keys are still too
   booya redact <project.json> [--every MS] [--dry-run]
@@ -193,6 +194,8 @@ fn run() -> Result<()> {
             let dir = a.opt(&["--dir"]).map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("booya-syncprobe"));
             let json = a.0.iter().any(|v| v == "--json");
             let rows = booya_core::syncprobe::run_file_stages(&dir)?;
+            // Only the Linux capture check below can add to it.
+            #[allow(unused_mut)]
             let mut bad = rows.iter().any(|r| !r.ok);
             #[allow(unused_mut)]
             let mut cap = Vec::new();

@@ -22,17 +22,22 @@ use tauri::{Emitter, Manager};
 mod keys;
 use tauri_plugin_dialog::DialogExt;
 
+// Only one slot exists, for the whole app, so the size difference costs nothing.
+#[allow(clippy::large_enum_variant)]
 enum RecSlot {
     Starting,
     Running(RecordingSession),
 }
+
+/// (project key, width, height, renderer)
+type CachedRenderer = (String, u32, u32, std::sync::Arc<Renderer>);
 
 #[derive(Default)]
 struct AppState {
     recording: Mutex<Option<RecSlot>>,
     /// The renderer for the last previewed project and size. Building one
     /// loads the event log and background image, so scrubbing reuses it.
-    renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
+    renderer: Mutex<Option<CachedRenderer>>,
     /// One ffmpeg decoder kept open while the preview plays.
     decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
     /// The camera's decoder, kept open for the same reason. Opening it per
@@ -53,6 +58,9 @@ struct AppState {
     /// Auto edit observes cancellation between steps, transcription windows,
     /// and OCR frames.
     cancel_auto_edit: std::sync::atomic::AtomicBool,
+    /// Exports running now. Installing an update restarts the app, which
+    /// would kill them halfway.
+    exports: std::sync::atomic::AtomicUsize,
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -199,7 +207,7 @@ fn touch_recent(app: &tauri::AppHandle, path: &str) {
     if let Some(d) = f.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let _ = std::fs::write(f, serde_json::to_string(&list).unwrap_or_default());
+    let _ = booya_core::fsutil::write_atomic(&f, serde_json::to_string(&list).unwrap_or_default().as_bytes());
 }
 
 /// The recent projects that are still there, newest first.
@@ -221,8 +229,7 @@ fn recent_projects(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 fn forget_recent(app: tauri::AppHandle, path: String) {
     let mut list = read_recent(&app);
     list.retain(|r| r.path != path);
-    let _ = std::fs::write(recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default(),
-    );
+    let _ = booya_core::fsutil::write_atomic(&recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default().as_bytes());
 }
 
 /// Open a project folder, its project.json, or an older loose project file.
@@ -408,9 +415,24 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
     .map_err(e)?
 }
 
+/// Counts an export as running for as long as it lives.
+struct ExportBusy(tauri::AppHandle);
+impl ExportBusy {
+    fn new(app: &tauri::AppHandle) -> Self {
+        app.state::<AppState>().exports.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(app.clone())
+    }
+}
+impl Drop for ExportBusy {
+    fn drop(&mut self) {
+        self.0.state::<AppState>().exports.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R<String> {
     check_write(&app, &out, &["mp4", "gif", "webm"])?;
+    let _busy = ExportBusy::new(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let st = export::export(&project, &PathBuf::from(&out), |p| {
             let _ = app.emit("export-progress", p);
@@ -458,6 +480,8 @@ fn apply_preset(name: String, mut project: Project) -> R<Project> {
 
 // Recording commands are async and do their work on a blocking thread, so a
 // slow or stuck ffmpeg can never freeze the window.
+// A Tauri command's arguments are the names the window sends, so they stay flat.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn start_recording(
     app: tauri::AppHandle,
@@ -644,11 +668,12 @@ fn cancel_countdown(app: tauri::AppHandle) {
 #[tauri::command]
 fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
     let state = app.state::<AppState>();
-    let slot = state.recording.lock().unwrap();
-    match &*slot {
+    let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
+    match &mut *slot {
         Some(RecSlot::Running(s)) => serde_json::json!({
             "recording": true, "paused": s.is_paused(),
             "elapsed_ms": s.elapsed().as_millis() as u64, "paused_ms": s.paused().as_millis() as u64,
+            "failed": s.failure(),
         }),
         Some(RecSlot::Starting) => serde_json::json!({ "recording": false, "starting": true }),
         None => serde_json::json!({ "recording": false }),
@@ -793,7 +818,7 @@ async fn raw_frame(project: Project, src_ms: f64) -> R<serde_json::Value> {
 /// Displays and windows the picker can show (names and sizes only, fast).
 #[tauri::command]
 async fn capture_sources() -> R<serde_json::Value> {
-    blocking(|| Ok(serde_json::to_value(capture::sources::list_sources().map_err(e)?).map_err(e)?)).await
+    blocking(|| serde_json::to_value(capture::sources::list_sources().map_err(e)?).map_err(e)).await
 }
 
 /// Preview image and app icon for one source, as data URLs. Fetched one at a
@@ -926,7 +951,9 @@ fn save_settings(st: &Settings) -> R<()> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(e)?;
     }
-    std::fs::write(&p, serde_json::to_string_pretty(st).map_err(e)?).map_err(e)?;
+    // A full disk must not wipe every setting: replace the file only once
+    // the new one is written.
+    booya_core::fsutil::write_atomic(&p, serde_json::to_string_pretty(st).map_err(e)?.as_bytes()).map_err(e)?;
     Ok(())
 }
 
@@ -1056,6 +1083,7 @@ fn list_recordings(app: tauri::AppHandle) -> R<Vec<RecordingInfo>> {
 /// inside the Booya recordings directory can be deleted.
 #[tauri::command]
 fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
+    not_while_recording(&app)?;
     let root = recordings_dir(&app)?.canonicalize().map_err(e)?;
     let p = PathBuf::from(&path);
     let p = if p.is_file() { p.parent().map(|x| x.to_path_buf()).unwrap_or(p) } else { p };
@@ -1066,11 +1094,21 @@ fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
     std::fs::remove_dir_all(&c).map_err(e)
 }
 
+/// Deleting recordings under a running take removed the folder ffmpeg was
+/// writing into, and the take was lost.
+fn not_while_recording(app: &tauri::AppHandle) -> R<()> {
+    if app.state::<AppState>().recording.lock().unwrap().is_some() {
+        return Err("Stop the recording first.".into());
+    }
+    Ok(())
+}
+
 /// "Delete my data": every recording, the transcript cache and the sample.
 /// With `include_keys`, also the saved API keys and cloud settings.
 /// Downloaded models and projects saved elsewhere are kept.
 #[tauri::command]
 fn delete_all_data(app: tauri::AppHandle, include_keys: bool) -> R<usize> {
+    not_while_recording(&app)?;
     let mut n = 0;
     for r in list_recordings(app.clone())? {
         if std::fs::remove_dir_all(&r.path).is_ok() {
@@ -1262,7 +1300,7 @@ fn s3_get() -> serde_json::Value {
 #[tauri::command]
 fn s3_set(config: booya_ai::s3::S3Config, secret: Option<String>) -> R<()> {
     config.validate().map_err(e)?;
-    std::fs::write(s3_path(), serde_json::to_string_pretty(&config).map_err(e)?).map_err(e)?;
+    booya_core::fsutil::write_atomic(&s3_path(), serde_json::to_string_pretty(&config).map_err(e)?.as_bytes()).map_err(e)?;
     if let Some(sct) = secret.filter(|s| !s.trim().is_empty()) {
         keyring_entry("s3-secret")?.set_password(sct.trim()).map_err(e)?;
     }
@@ -1495,7 +1533,7 @@ async fn background_import(app: tauri::AppHandle, path: String, project_source: 
         rec.insert(0, d.clone());
         rec.truncate(12);
         let _ = std::fs::create_dir_all(recents_path(&app).parent().unwrap_or(&PathBuf::from(".")));
-        let _ = std::fs::write(recents_path(&app), serde_json::to_string(&rec).unwrap_or_default());
+        let _ = booya_core::fsutil::write_atomic(&recents_path(&app), serde_json::to_string(&rec).unwrap_or_default().as_bytes());
         Ok(d)
     })
     .await
@@ -1533,6 +1571,8 @@ async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
     .await
 }
 
+// A Tauri command's arguments are the names the window sends, so they stay flat.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool, cut_pauses: Option<bool>,
 ) -> R<AiResult<pipeline::ReadyReport>> {
@@ -2379,22 +2419,118 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
         .build()
 }
 
-/// Menu bar glyphs from brand/ (88x88 raw RGBA, made from the PNGs): the outline ghost when idle, the filled one while recording.
+// Tray glyphs from the brand kit (brand/assets/tray). Idle and recording
+// differ only by the ripple arc. macOS gets black template images that the
+// menu bar tints itself; Windows gets a 16 px glyph in ink for a light
+// taskbar and in paper for a dark one.
 #[cfg(target_os = "macos")]
-const TRAY_IDLE: &[u8] = include_bytes!("../../brand/tray-template@2x.rgba");
+const TRAY_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idleTemplate@2x.png");
 #[cfg(target_os = "macos")]
-const TRAY_REC: &[u8] = include_bytes!("../../brand/tray-recording@2x.rgba");
+const TRAY_REC: &[u8] = include_bytes!("../icons/tray/tray-recordingTemplate@2x.png");
+#[cfg(target_os = "windows")]
+const TRAY_IDLE_LIGHT: &[u8] = include_bytes!("../icons/tray/tray-idle-light.ico");
+#[cfg(target_os = "windows")]
+const TRAY_REC_LIGHT: &[u8] = include_bytes!("../icons/tray/tray-recording-light.ico");
+#[cfg(target_os = "windows")]
+const TRAY_IDLE_DARK: &[u8] = include_bytes!("../icons/tray/tray-idle-dark.ico");
+#[cfg(target_os = "windows")]
+const TRAY_REC_DARK: &[u8] = include_bytes!("../icons/tray/tray-recording-dark.ico");
 
-/// Swap the menu bar glyph between idle and recording (macOS only).
-fn tray_recording(app: &tauri::AppHandle, on: bool) {
+/// Whether the tray currently shows the recording glyph, so a taskbar theme
+/// change can redraw the right one.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static TRAY_REC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True when the Windows taskbar uses the light theme
+/// (`SystemUsesLightTheme` is 1). The Windows default is a dark taskbar.
+#[cfg(target_os = "windows")]
+fn taskbar_is_light() -> bool {
+    booya_core::proc::command("reg")
+        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "/v", "SystemUsesLightTheme"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().last().is_some_and(|v| v == "0x1"))
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_glyph(on: bool) -> Option<tauri::image::Image<'static>> {
     #[cfg(target_os = "macos")]
-    if let Some(t) = app.tray_by_id("main") {
-        let img = tauri::image::Image::new_owned((if on { TRAY_REC } else { TRAY_IDLE }).to_vec(), 88, 88,
-        );
-        let _ = t.set_icon(Some(img));
-        let _ = t.set_icon_as_template(true);
+    let bytes = if on { TRAY_REC } else { TRAY_IDLE };
+    #[cfg(target_os = "windows")]
+    let bytes = match (on, taskbar_is_light()) {
+        (false, true) => TRAY_IDLE_LIGHT,
+        (true, true) => TRAY_REC_LIGHT,
+        (false, false) => TRAY_IDLE_DARK,
+        (true, false) => TRAY_REC_DARK,
+    };
+    tauri::image::Image::from_bytes(bytes).ok()
+}
+
+/// "0:42", or "1:02:03" past an hour.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+fn clock_label(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// Recorded time so far, with paused stretches left out.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_clock(app: &tauri::AppHandle) -> Option<(String, bool)> {
+    let state = app.state::<AppState>();
+    let slot = state.recording.lock().ok()?;
+    match &*slot {
+        Some(RecSlot::Running(s)) => Some((clock_label(s.elapsed().saturating_sub(s.paused()).as_secs()), s.is_paused())),
+        _ => None,
     }
-    #[cfg(not(target_os = "macos"))]
+}
+
+/// Show the recording time in the tray tooltip ("Booya, recording 0:42")
+/// and, on macOS, next to the menu bar glyph.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_show_clock(app: &tauri::AppHandle) {
+    let Some(t) = app.tray_by_id("main") else { return };
+    let on = TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed);
+    match tray_clock(app).filter(|_| on) {
+        Some((time, paused)) => {
+            let _ = t.set_tooltip(Some(format!("Booya, {} {time}", if paused { "paused" } else { "recording" })));
+            #[cfg(target_os = "macos")]
+            let _ = t.set_title(Some(time));
+        }
+        None => {
+            let _ = t.set_tooltip(Some(if on { "Booya, recording" } else { "Booya" }));
+            #[cfg(target_os = "macos")]
+            let _ = t.set_title(None::<&str>);
+        }
+    }
+}
+
+/// Swap the tray glyph between idle and recording, and keep the time in the
+/// tooltip ticking while recording.
+fn tray_recording(app: &tauri::AppHandle, on: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let was_on = TRAY_REC_ON.swap(on, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = app.tray_by_id("main") {
+            if let Some(img) = tray_glyph(on) {
+                let _ = t.set_icon(Some(img));
+            }
+            #[cfg(target_os = "macos")]
+            let _ = t.set_icon_as_template(true);
+        }
+        tray_show_clock(app);
+        if on && !was_on {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                while TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    tray_show_clock(&app);
+                }
+                tray_show_clock(&app);
+            });
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (app, on);
 }
 
@@ -2403,14 +2539,10 @@ fn tray_recording(app: &tauri::AppHandle, on: bool) {
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::tray::TrayIconBuilder;
     let mut b = TrayIconBuilder::with_id("main").menu(&tray_menu(app)?).tooltip("Booya");
-    // The Mac menu bar gets the single colour ghost outline as a template image, so it
-    // follows the light or dark bar. Windows keeps the full colour app icon.
-    #[cfg(target_os = "macos")]
-    let template = Some(tauri::image::Image::new_owned(TRAY_IDLE.to_vec(), 88, 88));
-    #[cfg(not(target_os = "macos"))]
-    let template: Option<tauri::image::Image<'static>> = None;
-    if let Some(img) = template {
-        b = b.icon(img).icon_as_template(true);
+    // The idle glyph: a template image on macOS (it follows the light or
+    // dark menu bar), the taskbar theme's glyph on Windows.
+    if let Some(img) = tray_glyph(false) {
+        b = b.icon(img).icon_as_template(cfg!(target_os = "macos"));
     } else if let Some(icon) = app.default_window_icon() {
         b = b.icon(icon.clone());
     }
@@ -2458,6 +2590,17 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     use tauri_plugin_updater::UpdaterExt;
     if !can_self_update() {
         return Err("This copy was installed from a .deb or .rpm package. Update it with your package manager or download the new release.".into());
+    }
+    // The install ends with a restart. Doing that in the middle of a take
+    // killed ffmpeg before it could finish the file, and the take was lost.
+    {
+        let state = app.state::<AppState>();
+        if state.recording.lock().unwrap().is_some() {
+            return Err("Stop the recording first. Installing the update restarts Booya.".into());
+        }
+        if state.exports.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return Err("Wait for the export to finish. Installing the update restarts Booya.".into());
+        }
     }
     let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into());
     };
@@ -2583,6 +2726,11 @@ fn main() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 remember_main_window(window);
+            }
+            // The taskbar may have switched between light and dark.
+            #[cfg(target_os = "windows")]
+            if matches!(event, tauri::WindowEvent::ThemeChanged(_)) {
+                tray_recording(window.app_handle(), TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed));
             }
         })
         .setup(move |app| {

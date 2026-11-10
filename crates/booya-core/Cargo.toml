@@ -58,3 +58,7 @@ windows-sys = { version = "0.52", features = [
 # build needs Xcode (the macos runners and any Mac with Xcode tools have it).
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "11", features = ["macos_14_0"] }
+
+[dev-dependencies]
+# Property tests for the time mapping, cuts, splices and captions.
+proptest = { version = "1", default-features = false, features = ["std"] }

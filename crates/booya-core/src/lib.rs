@@ -7,6 +7,7 @@ pub mod export;
 pub mod finalize;
 pub mod ffmpeg;
 pub mod frames;
+pub mod fsutil;
 pub mod activity;
 pub mod audio;
 pub mod text;

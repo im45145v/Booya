@@ -1,94 +1,73 @@
-/* Booya design tokens, from brand/GUIDELINES.md (Ludo's brand guideline v1).
-   Dark is the default; [data-theme=light] overrides. Purple is only for primary
-   buttons, active states, focus rings, links and progress. Recording is always red. */
-@font-face { font-family: "Inter"; src: url("fonts/Inter.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
-@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono.woff2") format("woff2"); font-weight: 400 600; font-style: normal; font-display: swap; }
-@font-face { font-family: "Nunito Sans"; src: url("fonts/NunitoSans-Bold.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+/* Booya app styles. Colours, type and motion come from the brand tokens in
+   styles/tokens.css (brand kit, direction E: Ghost x Ink mono). The names
+   below are the app's own and only point at those tokens.
+   Signal orange is for the record dot, Stop, the ripple and the focus frame,
+   nothing else. Orange text on a light background uses --by-signal-text, and
+   text on a Signal fill is Ink, never white. */
+@import url("styles/tokens.css");
 :root {
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, "Noto Sans", sans-serif;
-  --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
-  --wordmark: "Nunito Sans", "Inter", system-ui, sans-serif;
+  --font: var(--by-font-sans);
+  --mono: var(--by-font-mono);
+  --wordmark: var(--by-font-sans);
   --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 14px; --fs-xl: 18px;
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
-  --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-xl: 10px;
-  --t-fast: 150ms ease;
-  --t-ui: 200ms ease;
-  --ease-ripple: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --sp-1: var(--by-space-1); --sp-2: var(--by-space-2); --sp-3: var(--by-space-3); --sp-4: var(--by-space-4); --sp-5: var(--by-space-6); --sp-6: var(--by-space-8);
+  --r-sm: var(--by-radius-xs); --r-md: var(--by-radius-sm); --r-lg: 8px; --r-xl: var(--by-radius-md);
+  --t-fast: var(--by-duration-fast) var(--by-ease-standard);
+  --t-ui: var(--by-duration-base) var(--by-ease-standard);
+  --ease-ripple: var(--by-ease-standard);
 
-  /* Dark */
-  --bg: #14121F;
-  --surface: #1E1B2E;
-  --surface-2: #252238;
-  --surface-3: #2E2A42;
-  --line: #2E2A42;
-  --line-strong: #3d3858;
-  --text: #F1EEFA;
-  --muted: #A19BB8;
-  --faint: #7d7794;
-  --accent: #9B82FF;
-  --accent-hover: #B09CFF;
-  --accent-text: #14121F;
-  --accent-soft: #2A2447;
-  --danger: #FF6369;
-  --rec: #FF6369;
-  --success: #4ade80;
-  --warn: #f5b042;
-  --focus: rgba(155, 130, 255, .4);
-  --shadow: 0 12px 32px rgba(0,0,0,.45);
-  --stage: #0f0d18;
+  --bg: var(--by-bg);
+  --surface: var(--by-surface);
+  --surface-2: var(--by-surface-raised);
+  --surface-3: var(--by-rule);
+  --line: var(--by-rule);
+  --line-strong: var(--by-border-strong);
+  --text: var(--by-text);
+  --muted: var(--by-text-muted);
+  --faint: var(--by-text-muted);
+  /* Primary actions are Ink on Paper (Paper on Night in dark), not orange. */
+  --accent: var(--by-inverse);
+  --accent-hover: var(--by-text-muted);
+  --accent-text: var(--by-on-inverse);
+  --accent-soft: var(--by-rule);
+  --signal: var(--by-signal);
+  --signal-text: var(--by-signal-text);
+  --on-signal: var(--by-on-signal);
+  --danger: var(--by-danger);
+  --rec: var(--by-recording);
+  --success: var(--by-success);
+  --warn: var(--by-warning);
+  --focus: var(--by-focus);
+  --shadow: var(--by-shadow-md);
+  --stage: var(--by-rule);
 
-  --tl-bg: #181526;
-  --tl-ruler: #7d7794;
-  --tl-clip: #4a4566;
-  --tl-clip-sel: var(--accent);
-  --tl-zoom: #5b4f8a;
-  --tl-zoom-sel: #8b7ac4;
-  --tl-layout: #3f6a86;
-  --tl-layout-sel: #5b9bc2;
-  --tl-word: #34b48a;
-  --tl-filler: #e0a13a;
-  --tl-playhead: var(--text);
-  --tl-label: #F1EEFA;
-  --tl-note: #5b8def;
-  --tl-blur: #6d7a8f;
-  --tl-key: #2a9d8f;
+  /* Timeline: greys for clips, and plain hues only where a lane needs telling apart. */
+  --tl-bg: var(--by-surface);
+  --tl-ruler: var(--by-text-muted);
+  --tl-clip: #8C8A83;
+  --tl-clip-sel: var(--by-text);
+  --tl-zoom: #6B6963;
+  --tl-zoom-sel: var(--by-text);
+  --tl-layout: #4F6B78;
+  --tl-layout-sel: #2E5566;
+  --tl-word: #1D7A45;
+  --tl-filler: #975A00;
+  --tl-playhead: var(--by-signal);
+  --tl-label: var(--by-text);
+  --tl-note: #3E5C8A;
+  --tl-blur: #76736C;
+  --tl-key: #2F6F68;
 }
-[data-theme="light"] {
-  --bg: #FBFAFF;
-  --surface: #F3F0FC;
-  --surface-2: #FBFAFF;
-  --surface-3: #E9E4FB;
-  --line: #E2DCF5;
-  --line-strong: #cfc7ec;
-  --text: #1E1B2E;
-  --muted: #6B6580;
-  --faint: #8f89a3;
-  --accent: #7C5CFA;
-  --accent-hover: #6A48F0;
-  --accent-text: #ffffff;
-  --accent-soft: #E9E4FB;
-  --danger: #E5484D;
-  --rec: #E5484D;
-  --success: #1f9d55;
-  --warn: #b7791f;
-  --focus: rgba(124, 92, 250, .4);
-  --shadow: 0 12px 32px rgba(30,27,46,.14);
-  --stage: #e6e1f6;
-  --tl-bg: #F3F0FC;
-  --tl-ruler: #8f89a3;
-  --tl-clip: #c9c1e6;
-  --tl-clip-sel: var(--accent);
-  --tl-zoom: #d3c9f0;
-  --tl-zoom-sel: #8f78e6;
-  --tl-layout: #a9cde0;
-  --tl-layout-sel: #3f8fb8;
-  --tl-word: #0f9d73;
-  --tl-filler: #c27a10;
-  --tl-playhead: var(--text);
-  --tl-label: #1E1B2E;
-  --tl-note: #3b82f6;
-  --tl-blur: #94a3b8;
-  --tl-key: #14a095;
+[data-theme="dark"] {
+  --tl-clip: #4A4844;
+  --tl-zoom: #5C5A55;
+  --tl-layout: #3F5E6B;
+  --tl-layout-sel: #6E9AAD;
+  --tl-word: #4CC385;
+  --tl-filler: #F0B24E;
+  --tl-note: #7C9CCB;
+  --tl-blur: #76736C;
+  --tl-key: #5FB3A9;
 }
 
 /* The click ripple: one ring, 0.4 to 1.6 scale, 0.6 to 0 opacity, 400ms. */
@@ -123,8 +102,8 @@ body { margin: 0; font: var(--fs-md)/1.4 var(--font); background: var(--bg); col
 .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.rec { background: transparent; color: var(--text); border-color: var(--line-strong); }
 .btn.rec .ico { color: var(--danger); }
-.btn.rec.recording { background: var(--rec); border-color: var(--rec); color: #fff; }
-.btn.rec.recording .ico { color: #fff; }
+.btn.rec.recording { background: var(--rec); border-color: var(--rec); color: var(--on-signal); }
+.btn.rec.recording .ico { color: var(--on-signal); }
 .btn.toggle[aria-pressed="true"] { color: var(--text); background: var(--surface-3); }
 .btn.lg { height: 32px; padding: 0 14px; font-size: var(--fs-md); }
 .btn.sm { height: 24px; padding: 0 8px; font-size: var(--fs-sm); }
@@ -176,7 +155,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 1px solid v
 .steps { list-style: none; padding: 0; margin: 0 0 var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
 .steps li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm); }
 .steps li.done { color: var(--text); }
-.steps li.done b { background: var(--accent, #22c55e); color: #fff; }
+.steps li.done b { background: var(--accent); color: var(--accent-text); }
 .steps b { width: 20px; height: 20px; border-radius: var(--r-sm); display: grid; place-items: center; background: var(--surface-3); color: var(--text); font-size: var(--fs-xs); }
 .hint { color: var(--faint); font-size: var(--fs-sm); }
 
@@ -387,7 +366,7 @@ dialog.wide { width: min(980px, 94vw); }
 /* Shapes on the preview and in the Edit tab */
 .shape-layer { position: absolute; cursor: crosshair; touch-action: none; outline: 2px dashed var(--accent); outline-offset: -2px; }
 .shape-layer svg { width: 100%; height: 100%; display: block; pointer-events: none; }
-#sh-tools .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+#sh-tools .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .swatches { display: flex; gap: 6px; align-items: center; flex: 1; }
 .swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); padding: 0; cursor: pointer; }
 .swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface); }
@@ -495,10 +474,10 @@ html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .cut-review span { flex: 1; }
 
 /* Preview sound: volume and state next to the transport */
-.transport .vol { flex: none; width: 84px; accent-color: var(--accent, #5b50e6); }
+.transport .vol { flex: none; width: 84px; accent-color: var(--accent); }
 .audio-chip { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .audio-chip[data-state="ready"] { color: var(--ok, #1a8f5a); }
-.audio-chip[data-state="error"], .audio-chip[data-state="blocked"] { color: #fff; background: #d64545; border-color: #d64545; }
+.audio-chip[data-state="error"], .audio-chip[data-state="blocked"] { color: #fff; background: var(--danger); border-color: var(--danger); }
 .audio-chip[data-state="none"] { color: var(--muted); }
 .audio-chip.warn { color: #9a5b00; }
 

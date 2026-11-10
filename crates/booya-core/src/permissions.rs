@@ -92,23 +92,17 @@ pub fn request(id: &str) -> anyhow::Result<Option<&'static str>> {
                     return Ok(None);
                 }
             }
-            MIC => {
-                if mac::mic_status() == Status::Unknown {
-                    mac::request_mic();
-                    return Ok(None);
-                }
+            MIC if mac::mic_status() == Status::Unknown => {
+                mac::request_mic();
+                return Ok(None);
             }
-            CAMERA => {
-                if mac::camera_status() == Status::Unknown {
-                    mac::request_camera();
-                    return Ok(None);
-                }
+            CAMERA if mac::camera_status() == Status::Unknown => {
+                mac::request_camera();
+                return Ok(None);
             }
-            INPUT => {
-                if mac::input_status() == Status::Unknown {
-                    mac::request_input();
-                    return Ok(None);
-                }
+            INPUT if mac::input_status() == Status::Unknown => {
+                mac::request_input();
+                return Ok(None);
             }
             _ => {}
         }
