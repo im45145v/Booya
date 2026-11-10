@@ -189,7 +189,7 @@ impl MicRec {
             None => MicState::Off,
             Some(Backend::Ffmpeg { child, err }) => {
                 if let Ok(Some(st)) = child.try_wait() {
-                    return MicState::Failed { reason: format!("the microphone recorder stopped ({st}): {}", explain_error(&err.lock().unwrap())),
+                    return MicState::Failed { reason: format!("the microphone recorder stopped ({st}): {}", explain_error(&err.lock().unwrap_or_else(|p| p.into_inner()))),
                     };
                 }
                 let size = std::fs::metadata(&self.out).map(|m| m.len()).unwrap_or(0);
@@ -230,7 +230,7 @@ impl MicRec {
             Some(Backend::Ffmpeg { mut child, err }) => {
                 let died = matches!(child.try_wait(), Ok(Some(_)));
                 finish(&mut child, false);
-                let e = err.lock().unwrap().clone();
+                let e = err.lock().unwrap_or_else(|p| p.into_inner()).clone();
                 if !e.trim().is_empty() {
                     log_line(&self.log, &format!("ffmpeg microphone stderr: {}", e.trim()),
                     );
@@ -291,7 +291,7 @@ fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
         }),
         Err(e) => {
             let text = if e.starts_with("TIMEOUT") { "the microphone did not respond".to_string() } else { e.clone() };
-            log_line(log, &format!("ffmpeg could not open the microphone: {}", err.lock().unwrap().trim()),
+            log_line(log, &format!("ffmpeg could not open the microphone: {}", err.lock().unwrap_or_else(|p| p.into_inner()).trim()),
             );
             let _ = c.kill();
             let _ = c.wait();

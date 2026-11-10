@@ -81,7 +81,7 @@ impl Shared {
         let frames = samples.len() / ch;
         self.probe.feed(samples, frames);
         if let Some(cb) = &self.level {
-            let mut a = self.acc.lock().unwrap();
+            let mut a = self.acc.lock().unwrap_or_else(|p| p.into_inner());
             for s in samples {
                 a.0 += (*s as f64) * (*s as f64);
                 a.1 = a.1.max(s.abs());
@@ -94,8 +94,8 @@ impl Shared {
             }
         }
         let now_ms = (unix_now() - self.epoch) * 1000.0;
-        let pad = self.filler.lock().unwrap().before(now_ms, frames);
-        if let Some(w) = self.writer.lock().unwrap().as_mut() {
+        let pad = self.filler.lock().unwrap_or_else(|p| p.into_inner()).before(now_ms, frames);
+        if let Some(w) = self.writer.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             let r = (|| {
                 if pad > 0 {
                     w.write_silence(pad)?;
@@ -103,7 +103,7 @@ impl Shared {
                 w.write(samples)
             })();
             if let Err(e) = r {
-                *self.err.lock().unwrap() = Some(format!("could not write the audio file: {e}"));
+                *self.err.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!("could not write the audio file: {e}"));
             }
         }
     }
@@ -124,7 +124,7 @@ where
             sh.push(&buf);
         },
         move |e| {
-            *err.lock().unwrap() = Some(e.to_string());
+            *err.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.to_string());
         },
         Some(Duration::from_secs(5)),
     )
@@ -202,13 +202,13 @@ fn start_with(source: Source, epoch: f64, wav: Option<&Path>, level: Option<Box<
                         std::thread::sleep(Duration::from_millis(40));
                     }
                     drop(stream);
-                    let w = sh.writer.lock().unwrap().take();
-                    let first = sh.filler.lock().unwrap().first_ms();
+                    let w = sh.writer.lock().unwrap_or_else(|p| p.into_inner()).take();
+                    let first = sh.filler.lock().unwrap_or_else(|p| p.into_inner()).first_ms();
                     if let Some(w) = w {
                         let channels = sh.channels;
                         match w.finish() {
-                            Ok(frames) => *result2.lock().unwrap() = Some(Finished { frames, rate, channels, offset_s: first.unwrap_or(0.0).max(0.0) / 1000.0 }),
-                            Err(e) => *err2.lock().unwrap() = Some(format!("could not finish the audio file: {e}")),
+                            Ok(frames) => *result2.lock().unwrap_or_else(|p| p.into_inner()) = Some(Finished { frames, rate, channels, offset_s: first.unwrap_or(0.0).max(0.0) / 1000.0 }),
+                            Err(e) => *err2.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!("could not finish the audio file: {e}")),
                         }
                     }
                 }
@@ -232,7 +232,7 @@ fn start_with(source: Source, epoch: f64, wav: Option<&Path>, level: Option<Box<
 
 impl Recorder {
     pub fn error(&self) -> Option<String> {
-        self.err.lock().unwrap().clone()
+        self.err.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub fn age(&self) -> Duration {
@@ -246,7 +246,7 @@ impl Recorder {
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
-        let r = self.result.lock().unwrap().take();
+        let r = self.result.lock().unwrap_or_else(|p| p.into_inner()).take();
         let Some(f) = r else { bail!("{}", self.error().unwrap_or_else(|| "no audio was written".into())) };
         if f.frames == 0 {
             bail!("the device delivered no audio");

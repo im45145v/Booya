@@ -60,7 +60,7 @@ fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
 }
 
 fn grant(app: &tauri::AppHandle, p: &Path) {
-    app.state::<AppState>().granted.lock().unwrap().insert(p.to_path_buf());
+    app.state::<AppState>().granted.lock().unwrap_or_else(|p| p.into_inner()).insert(p.to_path_buf());
 }
 
 /// Allow a write only to a path picked in a dialog, with an allowed extension.
@@ -70,7 +70,7 @@ fn check_write(app: &tauri::AppHandle, path: &str, exts: &[&str]) -> R<PathBuf> 
     if !exts.contains(&ext.as_str()) {
         return Err(format!("Booya only writes {} files here", exts.join(", ")));
     }
-    if !app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+    if !app.state::<AppState>().granted.lock().unwrap_or_else(|p| p.into_inner()).contains(&p) {
         return Err("Pick the file with the Save dialog first".into());
     }
     Ok(p)
@@ -300,7 +300,7 @@ async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: 
     blocking(move || {
         if let Some(path) = path {
             let p = PathBuf::from(&path);
-            if !app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+            if !app.state::<AppState>().granted.lock().unwrap_or_else(|p| p.into_inner()).contains(&p) {
                 return Ok(None);
             }
             // The user's own project is never overwritten in the background:
@@ -327,7 +327,7 @@ async fn autosave_project(app: tauri::AppHandle, path: Option<String>, project: 
 #[tauri::command]
 fn discard_autosave(app: tauri::AppHandle, path: String) {
     let p = PathBuf::from(path);
-    if app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+    if app.state::<AppState>().granted.lock().unwrap_or_else(|p| p.into_inner()).contains(&p) {
         let _ = std::fs::remove_file(p.join(AUTOSAVE));
     }
 }
@@ -369,12 +369,12 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
         let (w, h) = project.export.aspect.size(short_side);
         let key = serde_json::to_string(&project).map_err(e)?;
         let state = app.state::<AppState>();
-        let cached = state.renderer.lock().unwrap().as_ref().filter(|c| c.0 == key && c.1 == w && c.2 == h).map(|c| c.3.clone());
+        let cached = state.renderer.lock().unwrap_or_else(|p| p.into_inner()).as_ref().filter(|c| c.0 == key && c.1 == w && c.2 == h).map(|c| c.3.clone());
         let r = match cached {
             Some(r) => r,
             None => {
                 let r = std::sync::Arc::new(export::make_renderer(&project, w, h).map_err(e)?);
-                *state.renderer.lock().unwrap() = Some((key, w, h, r.clone()));
+                *state.renderer.lock().unwrap_or_else(|p| p.into_inner()) = Some((key, w, h, r.clone()));
                 r
             }
         };
@@ -389,7 +389,7 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             })
             .unwrap_or_else(|| project.source.clone());
         let src = {
-            let mut dec = state.decoder.lock().unwrap();
+            let mut dec = state.decoder.lock().unwrap_or_else(|p| p.into_inner());
             if !dec.as_ref().is_some_and(|d| d.matches(&decode_path, dw, dh)) {
                 *dec = Some(booya_core::ffmpeg::PreviewDecoder::new(&decode_path, dw, dh,
                 ));
@@ -397,7 +397,7 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
             dec.as_mut().unwrap().frame(src_t, playing.unwrap_or(false)).map_err(e)?
         };
         let cam = {
-            let mut slot = state.cam_decoder.lock().unwrap();
+            let mut slot = state.cam_decoder.lock().unwrap_or_else(|p| p.into_inner());
             export::preview_cam(&r, &project, src_t, playing.unwrap_or(false), &mut slot)
         };
         let frame = r.render(&src, src_t, cam.as_ref());
@@ -474,7 +474,7 @@ async fn start_recording(
     let webcam = webcam.unwrap_or(false);
     {
         let state = app.state::<AppState>();
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
         match &*slot {
             Some(RecSlot::Starting) => return Err("Recording is already starting".into()),
             Some(RecSlot::Running(_)) => return Err("Already recording".into()),
@@ -484,7 +484,7 @@ async fn start_recording(
         state.countdown_done.store(false, std::sync::atomic::Ordering::SeqCst);
     }
     let fail_reset = |app: &tauri::AppHandle| {
-        *app.state::<AppState>().recording.lock().unwrap() = None;
+        *app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()) = None;
     };
     // Recordings go to Videos/Booya/<timestamp>. The folder is only
     // created once capture really starts (see capture::start).
@@ -494,7 +494,7 @@ async fn start_recording(
     let mic_device = mic_device.filter(|m| !m.is_empty());
     // Nothing may hold the microphone when the recorder opens it: stop the
     // level meter here, in Rust, rather than trusting the page to have done it.
-    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
+    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap_or_else(|p| p.into_inner()).take() {
         m.stop();
     }
     // Open the screen, microphone and camera first. That is the slow part
@@ -535,7 +535,7 @@ async fn start_recording(
     let warnings = session.warnings.clone();
     {
         let state = app.state::<AppState>();
-        *state.recording.lock().unwrap() = Some(RecSlot::Running(session));
+        *state.recording.lock().unwrap_or_else(|p| p.into_inner()) = Some(RecSlot::Running(session));
     }
     if mic {
         watch_mic(app.clone());
@@ -644,7 +644,7 @@ fn cancel_countdown(app: tauri::AppHandle) {
 #[tauri::command]
 fn rec_status(app: tauri::AppHandle) -> serde_json::Value {
     let state = app.state::<AppState>();
-    let slot = state.recording.lock().unwrap();
+    let slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
     match &*slot {
         Some(RecSlot::Running(s)) => serde_json::json!({
             "recording": true, "paused": s.is_paused(),
@@ -666,7 +666,7 @@ fn request_stop(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         for _ in 0..4 {
             std::thread::sleep(std::time::Duration::from_millis(600));
-            let running = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+            let running = matches!(&*app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()), Some(RecSlot::Running(_)));
             if !running {
                 return;
             }
@@ -689,7 +689,7 @@ fn restore_main(app: &tauri::AppHandle) {
 async fn discard_recording(app: tauri::AppHandle) -> R<()> {
     let s = {
         let state = app.state::<AppState>();
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
         match slot.take() {
             Some(RecSlot::Running(s)) => s,
             other => {
@@ -720,7 +720,7 @@ struct InsertAt {
 async fn stop_recording(app: tauri::AppHandle, insert: Option<InsertAt>) -> R<Project> {
     let s = {
         let state = app.state::<AppState>();
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
         match slot.take() {
             Some(RecSlot::Running(s)) => s,
             other => {
@@ -830,7 +830,7 @@ async fn screen_snapshot() -> R<serde_json::Value> {
 #[tauri::command]
 fn pause_recording(app: tauri::AppHandle, paused: Option<bool>) -> R<bool> {
     let state = app.state::<AppState>();
-    let mut slot = state.recording.lock().unwrap();
+    let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
     let Some(RecSlot::Running(s)) = &mut *slot else { return Err("Not recording".into());
     };
     let want = paused.unwrap_or(!s.is_paused());
@@ -1566,7 +1566,7 @@ fn cancel_auto_edit(app: tauri::AppHandle) {
 fn reveal(app: tauri::AppHandle, path: String) -> R<()> {
     let p = std::path::PathBuf::from(&path);
     let in_recordings = recordings_dir(&app).ok().and_then(|r| r.canonicalize().ok()).is_some_and(|r| p.canonicalize().is_ok_and(|c| c.starts_with(r)));
-    if !in_recordings && !app.state::<AppState>().granted.lock().unwrap().contains(&p) {
+    if !in_recordings && !app.state::<AppState>().granted.lock().unwrap_or_else(|p| p.into_inner()).contains(&p) {
         return Err("Only files you saved or recorded can be shown".into());
     }
     #[cfg(target_os = "macos")]
@@ -1630,7 +1630,7 @@ fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<booya_core::proxy::Proxy
     let key = src.to_string_lossy().to_string();
     {
         let st = app.state::<AppState>();
-        if !st.proxying.lock().unwrap().insert(key.clone()) {
+        if !st.proxying.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone()) {
             return Err("A proxy is already being built for this video".into());
         }
     }
@@ -1640,7 +1640,7 @@ fn build_proxy(app: &tauri::AppHandle, src: &Path) -> R<booya_core::proxy::Proxy
         let _ = a2.emit("proxy-progress", serde_json::json!({ "source": k2, "progress": p, "done": false }),
         );
     });
-    app.state::<AppState>().proxying.lock().unwrap().remove(&key);
+    app.state::<AppState>().proxying.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
     match &r {
         Ok(st) => {
             let _ = app.emit("proxy-progress", serde_json::json!({ "source": key, "progress": 1.0, "done": true, "path": st.path, "seconds": st.seconds, "encoder": st.encoder }));
@@ -1983,7 +1983,7 @@ async fn mic_meter_start(app: tauri::AppHandle, device: Option<String>) -> R<()>
     let a2 = app.clone();
     blocking(move || {
         let state = a2.state::<AppState>();
-        if let Some(mut m) = state.meter.lock().unwrap().take() {
+        if let Some(mut m) = state.meter.lock().unwrap_or_else(|p| p.into_inner()).take() {
             m.stop();
         }
         let a3 = a2.clone();
@@ -1992,7 +1992,7 @@ async fn mic_meter_start(app: tauri::AppHandle, device: Option<String>) -> R<()>
             let _ = a3.emit("mic-level", serde_json::json!({ "rms": rms, "peak": peak }));
         })
         .map_err(e)?;
-        *state.meter.lock().unwrap() = Some(m);
+        *state.meter.lock().unwrap_or_else(|p| p.into_inner()) = Some(m);
         Ok(())
     })
     .await
@@ -2000,7 +2000,7 @@ async fn mic_meter_start(app: tauri::AppHandle, device: Option<String>) -> R<()>
 
 #[tauri::command]
 fn mic_meter_stop(app: tauri::AppHandle) {
-    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap().take() {
+    if let Some(mut m) = app.state::<AppState>().meter.lock().unwrap_or_else(|p| p.into_inner()).take() {
         m.stop();
     }
 }
@@ -2187,7 +2187,7 @@ static REGISTERED: Mutex<Vec<(String, tauri_plugin_global_shortcut::Shortcut)>> 
 fn apply_shortcuts(app: &tauri::AppHandle) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let gs = app.global_shortcut();
-    let old: Vec<_> = REGISTERED.lock().unwrap().drain(..).collect();
+    let old: Vec<_> = REGISTERED.lock().unwrap_or_else(|p| p.into_inner()).drain(..).collect();
     for (_, sc) in old {
         let _ = gs.unregister(sc);
     }
@@ -2203,14 +2203,14 @@ fn apply_shortcuts(app: &tauri::AppHandle) {
             continue;
         };
         match gs.register(sc) {
-            Ok(()) => REGISTERED.lock().unwrap().push((id.to_string(), sc)),
+            Ok(()) => REGISTERED.lock().unwrap_or_else(|p| p.into_inner()).push((id.to_string(), sc)),
             Err(err) => {
                 eprintln!("shortcut {id} ({combo}) unavailable: {err}");
                 failures.insert(id.to_string(), err.to_string());
             }
         }
     }
-    *SHORTCUT_FAILURES.lock().unwrap() = failures;
+    *SHORTCUT_FAILURES.lock().unwrap_or_else(|p| p.into_inner()) = failures;
 }
 
 /// Rebuild what shows the keys: the macOS Record menu and the tray menu.
@@ -2259,7 +2259,7 @@ fn run_action(app: &tauri::AppHandle, id: &str) {
 #[tauri::command]
 fn drop_marker(app: tauri::AppHandle) -> R<bool> {
     let state = app.state::<AppState>();
-    let slot = state.recording.lock().unwrap();
+    let slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
     let Some(RecSlot::Running(s)) = &*slot else { return Err("Not recording".into());
     };
     let ok = s.mark();
@@ -2271,7 +2271,7 @@ fn drop_marker(app: tauri::AppHandle) -> R<bool> {
 
 fn shortcuts_json() -> serde_json::Value {
     let ov = load_settings().shortcuts;
-    let failed = SHORTCUT_FAILURES.lock().unwrap().clone();
+    let failed = SHORTCUT_FAILURES.lock().unwrap_or_else(|p| p.into_inner()).clone();
     let mac = cfg!(target_os = "macos");
     let rows: Vec<_> = shortcuts::ACTIONS
         .iter()
@@ -2305,7 +2305,7 @@ fn set_shortcut(app: tauri::AppHandle, action: String, combo: String) -> R<serde
     shortcuts::set_binding(&mut st.shortcuts, &action, &combo)?;
     save_settings(&st)?;
     apply_shortcuts(&app);
-    let failed = SHORTCUT_FAILURES.lock().unwrap().get(&action).cloned();
+    let failed = SHORTCUT_FAILURES.lock().unwrap_or_else(|p| p.into_inner()).get(&action).cloned();
     if let Some(err) = failed {
         st.shortcuts = prev;
         save_settings(&st)?;
@@ -2324,7 +2324,7 @@ fn set_shortcut(app: tauri::AppHandle, action: String, combo: String) -> R<serde
 fn shortcuts_pause(app: tauri::AppHandle, paused: bool) {
     if paused {
         use tauri_plugin_global_shortcut::GlobalShortcutExt;
-        let old: Vec<_> = REGISTERED.lock().unwrap().drain(..).collect();
+        let old: Vec<_> = REGISTERED.lock().unwrap_or_else(|p| p.into_inner()).drain(..).collect();
         for (_, sc) in old {
             let _ = app.global_shortcut().unregister(sc);
         }
@@ -2347,13 +2347,13 @@ fn reset_shortcuts(app: tauri::AppHandle) -> R<serde_json::Value> {
 /// Global shortcuts that could not be registered (empty when all work).
 #[tauri::command]
 fn shortcut_status() -> String {
-    SHORTCUT_FAILURES.lock().unwrap().keys().cloned().collect::<Vec<_>>().join(",")
+    SHORTCUT_FAILURES.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect::<Vec<_>>().join(",")
 }
 
 /// When idle, a record shortcut brings the editor forward so the choices (and
 /// the picker) are visible. While recording the editor stays out of the way.
 fn restore_main_if_idle(app: &tauri::AppHandle) {
-    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()), Some(RecSlot::Running(_)));
     if !recording {
         restore_main(app);
     }
@@ -2588,7 +2588,7 @@ fn main() {
                     if ev.state() != ShortcutState::Pressed {
                         return;
                     }
-                    let id = REGISTERED.lock().unwrap().iter().find(|(_, s)| s == sc).map(|(a, _)| a.clone());
+                    let id = REGISTERED.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(_, s)| s == sc).map(|(a, _)| a.clone());
                     if let Some(id) = id {
                         run_action(app, &id);
                     }
@@ -2605,7 +2605,7 @@ fn main() {
                 "tray-show" => restore_main(app),
                 "tray-quit" => {
                     // Never quit under a running recording: bring the editor up so it can be stopped.
-                    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap(), Some(RecSlot::Running(_)));
+                    let recording = matches!(&*app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()), Some(RecSlot::Running(_)));
                     if recording {
                         restore_main(app);
                     } else {

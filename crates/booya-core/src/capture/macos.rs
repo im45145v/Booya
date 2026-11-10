@@ -51,7 +51,7 @@ pub(crate) fn list_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
 pub(crate) fn cached_devices() -> (Vec<AvDevice>, Vec<AvDevice>) {
     use std::sync::Mutex;
     static CACHE: Mutex<Option<(Instant, (Vec<AvDevice>, Vec<AvDevice>))>> = Mutex::new(None);
-    let mut slot = CACHE.lock().unwrap();
+    let mut slot = CACHE.lock().unwrap_or_else(|p| p.into_inner());
     if let Some((at, devices)) = &*slot {
         if at.elapsed() < Duration::from_secs(8) {
             return devices.clone();

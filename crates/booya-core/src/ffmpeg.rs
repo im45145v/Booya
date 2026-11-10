@@ -73,14 +73,14 @@ fn resolve(env: &'static str, name: &'static str) -> String {
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<&'static str, String>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(p) = cache.lock().unwrap().get(name) {
+    if let Some(p) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(name) {
         return p.clone();
     }
     let found = candidates(env, name).into_iter().find(|p| p.is_file() && runs(p));
     match found {
         Some(p) => {
             let s = p.to_string_lossy().into_owned();
-            cache.lock().unwrap().insert(name, s.clone());
+            cache.lock().unwrap_or_else(|p| p.into_inner()).insert(name, s.clone());
             s
         }
         // not cached, so installing ffmpeg while the app runs starts working
