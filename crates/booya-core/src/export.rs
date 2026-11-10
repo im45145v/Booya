@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Build the renderer for a project at its export size.
 pub fn make_renderer(project: &Project, out_w: u32, out_h: u32) -> Result<Renderer> {
@@ -244,6 +245,7 @@ pub fn measure_export_audio(project: &Project, audio_input: &Path) -> Option<cra
     crate::audio::measure_graph(audio_input, &graph).ok().flatten()
 }
 
+#[derive(Debug)]
 pub struct ExportStats {
     pub frames: u64,
     pub width: u32,
@@ -251,16 +253,35 @@ pub struct ExportStats {
     pub seconds: f64,
 }
 
+/// The error an export returns when it was cancelled. Check for it with
+/// `err.is::<Cancelled>()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Export cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
 /// Export the project. `progress` is called with values in 0..=1.
-pub fn export(project: &Project, out: &Path, mut progress: impl FnMut(f64)) -> Result<ExportStats> {
+pub fn export(project: &Project, out: &Path, progress: impl FnMut(f64)) -> Result<ExportStats> {
+    export_cancellable(project, out, progress, &AtomicBool::new(false))
+}
+
+/// Like [`export`], and stops within a frame once `cancel` is set. A
+/// cancelled export returns [`Cancelled`] and leaves no partial file behind.
+pub fn export_cancellable(project: &Project, out: &Path, mut progress: impl FnMut(f64), cancel: &AtomicBool) -> Result<ExportStats> {
     let enc = crate::ffmpeg::best_encoder();
-    match export_with(project, out, enc, &mut progress) {
+    match export_inner(project, out, enc, &mut progress, cancel) {
         // A hardware encoder can still fail mid-run (busy, unsupported size).
         // Redo it in software rather than failing the export.
-        Err(e) if enc.is_hardware() && project.export.format == Format::Mp4 && !passthrough_ok(project) => {
+        Err(e) if !e.is::<Cancelled>() && !cancel.load(Ordering::SeqCst) && enc.is_hardware() && project.export.format == Format::Mp4 && !passthrough_ok(project) => {
             eprintln!("{} failed ({e:#}); retrying with libx264", enc.name());
             progress(0.0);
-            export_with(project, out, crate::ffmpeg::Encoder::X264, &mut progress)
+            export_inner(project, out, crate::ffmpeg::Encoder::X264, &mut progress, cancel)
         }
         r => r,
     }
@@ -396,7 +417,14 @@ impl Drop for KillOnDrop {
 }
 
 pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64)) -> Result<ExportStats> {
+    export_inner(project, out, enc, progress, &AtomicBool::new(false))
+}
+
+fn export_inner(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, progress: &mut dyn FnMut(f64), cancel: &AtomicBool) -> Result<ExportStats> {
     project.validate()?;
+    if cancel.load(Ordering::SeqCst) {
+        return Err(Cancelled.into());
+    }
     if passthrough_ok(project) {
         return export_passthrough(project, out, progress);
     }
@@ -507,6 +535,13 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
         }
     }
     cmd.arg(ffmpeg::file_url(out));
+    // Cleaning the sound and measuring its loudness can take a while.
+    if cancel.load(Ordering::SeqCst) {
+        if let Some(t) = &tmp {
+            let _ = std::fs::remove_dir_all(t);
+        }
+        return Err(Cancelled.into());
+    }
     let mut guard = KillOnDrop(Some(cmd.stdin(Stdio::null()).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().context("failed to start ffmpeg encoder")?));
     let stdin = guard.0.as_mut().unwrap().stdin.take().unwrap();
     // Frames go to the encoder from their own thread, so the next frame is
@@ -526,6 +561,9 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     let write_card = |card: &crate::project::Card, n: u64, stdin: &mut FrameWriter, written: &mut u64, progress: &mut dyn FnMut(f64)| -> bool {
         let fade = (fps * 0.45).max(1.0);
         for i in 0..n {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
             let (a, b) = (i as f64, (n - 1 - i) as f64);
             let k = (a.min(b) / fade).clamp(0.0, 1.0) as f32;
             let k = k * k * (3.0 - 2.0 * k);
@@ -543,6 +581,9 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     }
 
     for i in 0..total {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let out_t = i as f64 * 1000.0 / fps;
         let src_t = project.source_time(out_t).unwrap_or(project.duration_ms);
         // Advance the decoder. Clips are in source order, so this only moves
@@ -594,6 +635,20 @@ pub fn export_with(project: &Project, out: &Path, enc: crate::ffmpeg::Encoder, p
     }
     if let (Some(c), true) = (project.outro.as_ref(), outro_n > 0) {
         write_card(c, outro_n, &mut stdin, &mut written, progress);
+    }
+    if cancel.load(Ordering::SeqCst) {
+        // Stop the encoder before it finishes a short file, wait for it to
+        // let go of the file (Windows keeps it locked until then), and
+        // remove what it wrote.
+        let mut child = guard.0.take().unwrap();
+        let _ = child.kill();
+        drop(stdin);
+        let _ = child.wait();
+        let _ = std::fs::remove_file(out);
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_dir_all(t);
+        }
+        return Err(Cancelled.into());
     }
     stdin.finish();
     let res = guard.0.take().unwrap().wait_with_output()?;
@@ -703,6 +758,56 @@ mod tests {
         let (v, a) = stream_durations(&out);
         assert!((v - expect).abs() < 0.2, "video {v} vs expected {expect}");
         assert!((a - v).abs() < 0.15, "audio {a} vs video {v}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cancelled_export_stops_early_and_leaves_no_file() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("booya-export-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("long.mp4");
+        let ok = crate::proc::command(ffmpeg::ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=640x360:r=30:d=20", "-f", "lavfi", "-i", "sine=frequency=300:d=20", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let mut p = Project::new(src.clone(), None, 640, 360, 20_000.0);
+        p.export.quality = 360;
+        p.intro = Some(crate::project::Card { title: "Intro".into(), subtitle: String::new(), duration_ms: 2000.0 });
+        let out = dir.join("out.mp4");
+        // Cancelled a quarter of the way in, from the progress callback the
+        // app uses, the way a click on Cancel arrives from another thread.
+        let cancel = AtomicBool::new(false);
+        let mut last = 0.0;
+        let err = export_cancellable(&p, &out, |f| {
+            last = f;
+            if f > 0.25 {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }, &cancel).unwrap_err();
+        assert!(err.is::<Cancelled>(), "{err:#}");
+        assert_eq!(err.to_string(), "Export cancelled");
+        assert!(last < 0.4, "it stopped soon after the click, at {last}");
+        assert!(!out.exists(), "no partial file is left");
+        // Cancelled during the intro card.
+        cancel.store(false, Ordering::SeqCst);
+        let err = export_cancellable(&p, &out, |f| {
+            if f > 0.01 {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }, &cancel).unwrap_err();
+        assert!(err.is::<Cancelled>() && !out.exists());
+        // Already cancelled: nothing starts.
+        let err = export_cancellable(&p, &out, |_| panic!("no progress when cancelled up front"), &cancel).unwrap_err();
+        assert!(err.is::<Cancelled>() && !out.exists());
+        // And an export that is not cancelled still works afterwards.
+        export_cancellable(&p, &out, |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(out.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
