@@ -2427,18 +2427,67 @@ fn tray_glyph(on: bool) -> Option<tauri::image::Image<'static>> {
     tauri::image::Image::from_bytes(bytes).ok()
 }
 
-/// Swap the tray glyph between idle and recording.
+/// "0:42", or "1:02:03" past an hour.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+fn clock_label(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// Recorded time so far, with paused stretches left out.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_clock(app: &tauri::AppHandle) -> Option<(String, bool)> {
+    let state = app.state::<AppState>();
+    let slot = state.recording.lock().ok()?;
+    match &*slot {
+        Some(RecSlot::Running(s)) => Some((clock_label(s.elapsed().saturating_sub(s.paused()).as_secs()), s.is_paused())),
+        _ => None,
+    }
+}
+
+/// Show the recording time in the tray tooltip ("Booya, recording 0:42")
+/// and, on macOS, next to the menu bar glyph.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn tray_show_clock(app: &tauri::AppHandle) {
+    let Some(t) = app.tray_by_id("main") else { return };
+    let on = TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed);
+    match tray_clock(app).filter(|_| on) {
+        Some((time, paused)) => {
+            let _ = t.set_tooltip(Some(format!("Booya, {} {time}", if paused { "paused" } else { "recording" })));
+            #[cfg(target_os = "macos")]
+            let _ = t.set_title(Some(time));
+        }
+        None => {
+            let _ = t.set_tooltip(Some(if on { "Booya, recording" } else { "Booya" }));
+            #[cfg(target_os = "macos")]
+            let _ = t.set_title(None::<&str>);
+        }
+    }
+}
+
+/// Swap the tray glyph between idle and recording, and keep the time in the
+/// tooltip ticking while recording.
 fn tray_recording(app: &tauri::AppHandle, on: bool) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        TRAY_REC_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+        let was_on = TRAY_REC_ON.swap(on, std::sync::atomic::Ordering::Relaxed);
         if let Some(t) = app.tray_by_id("main") {
             if let Some(img) = tray_glyph(on) {
                 let _ = t.set_icon(Some(img));
             }
             #[cfg(target_os = "macos")]
             let _ = t.set_icon_as_template(true);
-            let _ = t.set_tooltip(Some(if on { "Booya, recording" } else { "Booya" }));
+        }
+        tray_show_clock(app);
+        if on && !was_on {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                while TRAY_REC_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    tray_show_clock(&app);
+                }
+                tray_show_clock(&app);
+            });
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
