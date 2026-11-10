@@ -39,6 +39,13 @@ for shape, test in SHAPES.items():
             # The mixed video has two segments that share a layout, so only the layout stills must all differ.
             if group is names[:4]:
                 check(d > 3, f"{a} and {b} look different (mean difference {d:.1f})")
+    # The dragged bubble is a different picture from the bubble in its corner.
+    dragged = shots / f"layout-bubble-dragged-{shape}.png"
+    if not dragged.exists():
+        check(False, f"{dragged.name} exists")
+    elif f"layout-bubble-{shape}.png" in imgs:
+        d = diff(Image.open(dragged), imgs[f"layout-bubble-{shape}.png"])
+        check(d > 1, f"{dragged.name} moves the camera (mean difference {d:.1f})")
     ex = [imgs[n] for n in names[4:] if n in imgs]
     far = max((diff(a, b) for a, b in itertools.combinations(ex, 2)), default=0)
     check(far > 5, f"the {shape} export changes layout over time (largest difference {far:.1f})")

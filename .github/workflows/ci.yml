@@ -54,6 +54,8 @@ jobs:
         run: node tests/js/timeline-touch.test.js
       - name: Test the editor preview clock
         run: node tests/js/avsync.test.js
+      - name: Test the camera bubble geometry
+        run: node tests/js/campos.test.js
       - name: Test the updater manifest builder
         run: python3 scripts/test_make_latest_json.py
       - name: ffmpeg for the media tests and the sync probe
@@ -279,6 +281,8 @@ jobs:
         run: python3 tests/e2e/test_layout.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layout lane and controls
         run: python3 tests/e2e/test_scenes.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
+      - name: Dragging the camera bubble
+        run: python3 tests/e2e/test_camera_drag.py "$RUNNER_TEMP/fx" "$RUNNER_TEMP/shots"
       - name: Layouts in the real renderer and exporter
         run: |
           cargo run -q -p booya-core --release --example layouts_gallery -- "$RUNNER_TEMP/gal"

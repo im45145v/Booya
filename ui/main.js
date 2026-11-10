@@ -92,7 +92,7 @@ function syncPanel() {
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only; $('keys-sym').checked = project.keys.symbols !== false;
   $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
   const w = project.webcam; $('cam-section').hidden = !w;
-  if (w) { $('cam-visible').checked = w.visible; $('cam-shape').value = w.shape || (w.circle ? 'circle' : 'rounded-square'); $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; $('lay-share').value = L.split_camera_fraction ?? 0.34; }
+  if (w) { $('cam-visible').checked = w.visible; $('cam-shape').value = w.shape || (w.circle ? 'circle' : 'rounded-square'); $('cam-size').value = w.size; $('cam-corner').value = w.corner; window.syncCamCustom && window.syncCamCustom(); $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; $('lay-share').value = L.split_camera_fraction ?? 0.34; }
   $('lay-follow').checked = (project.layouts || {}).follow_cursor !== false;
   const wm = project.watermark || {}; $('wm-text').value = wm.text || ''; $('wm-corner').value = wm.corner || 'bottom-right'; $('wm-opacity').value = wm.opacity || 0.7;
   const ic = project.intro || {}, oc = project.outro || {};
@@ -155,7 +155,9 @@ function readPanel() {
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked, symbols: $('keys-sym').checked });
   Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
-  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, shape: $('cam-shape').value, circle: $('cam-shape').value === 'circle', size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
+  // Picking a corner puts a dragged bubble back in that corner.
+  if (project.webcam && $('cam-corner').value !== 'custom') { delete project.webcam.position; window.syncCamCustom && window.syncCamCustom(); }
+  if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, shape: $('cam-shape').value, circle: $('cam-shape').value === 'circle', size: +$('cam-size').value, corner: $('cam-corner').value === 'custom' ? project.webcam.corner : $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
   { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; L.split_camera_fraction = +$('lay-share').value; $('lay-share-out').textContent = Math.round(L.split_camera_fraction * 100) + '%'; }
   if (project.webcam) { const L = project.layouts; L.base = $('cam-layout').value; L.transition_ms = +$('lay-trans').value; $('lay-trans-out').textContent = (L.transition_ms / 1000).toFixed(2) + ' s'; }
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
@@ -293,6 +295,7 @@ async function refresh() {
 }
 function setPlaying(v) {
   playing = v;
+  window.updateCamHandle && window.updateCamHandle();
   $('play').innerHTML = icon(v ? 'i-pause' : 'i-play'); $('play').setAttribute('aria-label', v ? 'Pause' : 'Play');
   if (v) playLoop();
 }

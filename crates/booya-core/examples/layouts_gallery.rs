@@ -35,6 +35,16 @@ fn main() {
             let png = booya_core::export::preview_png(&p, t, w, h).expect("preview");
             std::fs::write(shots.join(format!("layout-{}-{name}.png", kind.name())), png).expect("write");
         }
+        // The bubble dragged off its corner on the preview.
+        p.layouts.base = Some(SceneKind::Bubble);
+        if let Some(w) = p.webcam.as_mut() {
+            w.position = Some([0.3, 0.35]);
+        }
+        let png = booya_core::export::preview_png(&p, t, w, h).expect("preview");
+        std::fs::write(shots.join(format!("layout-bubble-dragged-{name}.png")), png).expect("write");
+        if let Some(w) = p.webcam.as_mut() {
+            w.position = None;
+        }
         // One video that goes through all four layouts, with blends.
         p.layouts.base = Some(SceneKind::Screen);
         let d = p.duration_ms;
