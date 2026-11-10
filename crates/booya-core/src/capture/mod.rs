@@ -605,7 +605,10 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     // 60, not the 30 asked for: a camera that really runs at 60 fps (or a
     // DirectShow default mode) must never be held back by the burst spacing.
     let timeline = camera_timeline_filter(60);
-    cmd.args(["-vf", &timeline, "-fps_mode", "passthrough"]);
+    // The encoder's time base is fine grained too: newer ffmpeg defaults it
+    // to 1/frame rate, which rounds the real frame times onto a 30 fps grid
+    // and gives two frames one time.
+    cmd.args(["-vf", &timeline, "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000"]);
     cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
@@ -974,7 +977,7 @@ mod tests {
         let fixed = dir.join("fixed.mkv");
         run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", "setpts=0.4/TB", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &smashed);
         let cam = format!("setpts=0.4/TB,{}", camera_timeline_filter(30));
-        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", &cam, "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &fixed);
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1", "-vf", &cam, "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &fixed);
         let smashed_pts = pts(&smashed, "v");
         let fixed_pts = pts(&fixed, "v");
         assert!(smashed_pts.len() < 10, "a shared timestamp drops the frames, got {}", smashed_pts.len());
@@ -989,7 +992,7 @@ mod tests {
         // A camera that delivers 15 fps although it was opened at 30 keeps
         // its real length (stepping at 30 fps played it twice as fast).
         let slow = dir.join("slow.mkv");
-        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=15:d=4", "-vf", &camera_timeline_filter(30), "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &slow);
+        run(&arg(&["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=15:d=4", "-vf", &camera_timeline_filter(30), "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), &slow);
         let slow_pts = pts(&slow, "v");
         let span = slow_pts[slow_pts.len() - 1] - slow_pts[0];
         assert!(slow_pts.len() >= 58 && (span - 59.0 / 15.0).abs() < 0.05, "a 15 fps camera stays 4 s long: {} frames over {span}", slow_pts.len());
