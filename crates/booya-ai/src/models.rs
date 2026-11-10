@@ -283,7 +283,7 @@ fn download_from(m: &ModelInfo, url: &str, mut progress: impl FnMut(u64, u64)) -
         std::fs::create_dir_all(&out)?;
         // bsdtar ships with Windows 10+ and macOS and reads zip and tar.gz.
         // Both bsdtar and GNU tar refuse absolute and ".." member paths.
-        let st = booya_core::proc::command("tar").arg("-xf").arg(&tmp).arg("-C").arg(&out).status().context("tar not found")?;
+        let st = booya_core::proc::command(tar_bin()).arg("-xf").arg(&tmp).arg("-C").arg(&out).status().context("tar not found")?;
         if !st.success() {
             bail!("could not extract {}", tmp.display());
         }
@@ -294,6 +294,21 @@ fn download_from(m: &ModelInfo, url: &str, mut progress: impl FnMut(u64, u64)) -
         std::fs::rename(&tmp, &dest)?;
     }
     Ok(dest)
+}
+
+/// The tar to extract with. On Windows that is the bsdtar in System32 by
+/// name: a GNU tar from Git or MSYS earlier on PATH reads `C:\...` as a
+/// remote host called C and fails, and cannot open zip files at all.
+fn tar_bin() -> std::path::PathBuf {
+    if cfg!(windows) {
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            let p = std::path::Path::new(&root).join("System32").join("tar.exe");
+            if p.is_file() {
+                return p;
+            }
+        }
+    }
+    "tar".into()
 }
 
 pub fn delete(id: &str) -> Result<()> {
