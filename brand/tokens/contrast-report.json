@@ -1,0 +1,263 @@
+[
+  {
+    "mode": "light",
+    "pair": "Ink on Paper",
+    "fg": "#111110",
+    "bg": "#F4F3EF",
+    "ratio": 17.02,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "light",
+    "pair": "Ink on Surface",
+    "fg": "#111110",
+    "bg": "#FFFFFF",
+    "ratio": 18.89,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "light",
+    "pair": "Graphite on Paper",
+    "fg": "#6B6963",
+    "bg": "#F4F3EF",
+    "ratio": 4.94,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Graphite on Surface",
+    "fg": "#6B6963",
+    "bg": "#FFFFFF",
+    "ratio": 5.49,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal on Paper",
+    "fg": "#FF5A1F",
+    "bg": "#F4F3EF",
+    "ratio": 2.81,
+    "kind": "text",
+    "result": "Fail"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal on Surface",
+    "fg": "#FF5A1F",
+    "bg": "#FFFFFF",
+    "ratio": 3.12,
+    "kind": "text",
+    "result": "AA large only"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal text on Paper",
+    "fg": "#BF4317",
+    "bg": "#F4F3EF",
+    "ratio": 4.69,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal text on Surface",
+    "fg": "#BF4317",
+    "bg": "#FFFFFF",
+    "ratio": 5.21,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Ink on Signal (button label)",
+    "fg": "#111110",
+    "bg": "#FF5A1F",
+    "ratio": 6.06,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "White on Signal (button label)",
+    "fg": "#FFFFFF",
+    "bg": "#FF5A1F",
+    "ratio": 3.12,
+    "kind": "text",
+    "result": "AA large only"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal on Paper (record dot, non-text)",
+    "fg": "#FF5A1F",
+    "bg": "#F4F3EF",
+    "ratio": 2.81,
+    "kind": "ui",
+    "result": "Below 3:1"
+  },
+  {
+    "mode": "light",
+    "pair": "Signal on Surface (record dot in toolbar)",
+    "fg": "#FF5A1F",
+    "bg": "#FFFFFF",
+    "ratio": 3.12,
+    "kind": "ui",
+    "result": "Pass 3:1"
+  },
+  {
+    "mode": "light",
+    "pair": "Rule on Paper (divider)",
+    "fg": "#DCDAD3",
+    "bg": "#F4F3EF",
+    "ratio": 1.26,
+    "kind": "ui",
+    "result": "Below 3:1"
+  },
+  {
+    "mode": "light",
+    "pair": "Border strong on Surface (inputs)",
+    "fg": "#8C8A83",
+    "bg": "#FFFFFF",
+    "ratio": 3.45,
+    "kind": "ui",
+    "result": "Pass 3:1"
+  },
+  {
+    "mode": "light",
+    "pair": "Success on Surface",
+    "fg": "#1D7A45",
+    "bg": "#FFFFFF",
+    "ratio": 5.35,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Warning on Surface",
+    "fg": "#975A00",
+    "bg": "#FFFFFF",
+    "ratio": 5.56,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "light",
+    "pair": "Danger on Surface",
+    "fg": "#C2301F",
+    "bg": "#FFFFFF",
+    "ratio": 5.62,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Paper on Night",
+    "fg": "#EDEBE5",
+    "bg": "#111110",
+    "ratio": 15.85,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Paper on Surface",
+    "fg": "#EDEBE5",
+    "bg": "#1C1B19",
+    "ratio": 14.44,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Stone on Night",
+    "fg": "#8D8A82",
+    "bg": "#111110",
+    "ratio": 5.48,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Stone on Surface",
+    "fg": "#8D8A82",
+    "bg": "#1C1B19",
+    "ratio": 4.99,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Signal on Night",
+    "fg": "#FF6A33",
+    "bg": "#111110",
+    "ratio": 6.62,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Signal on Surface",
+    "fg": "#FF6A33",
+    "bg": "#1C1B19",
+    "ratio": 6.03,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Night on Signal (button label)",
+    "fg": "#111110",
+    "bg": "#FF6A33",
+    "ratio": 6.62,
+    "kind": "text",
+    "result": "AA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Rule on Night (divider)",
+    "fg": "#2C2B28",
+    "bg": "#111110",
+    "ratio": 1.33,
+    "kind": "ui",
+    "result": "Below 3:1"
+  },
+  {
+    "mode": "dark",
+    "pair": "Border strong on Surface (inputs)",
+    "fg": "#76736C",
+    "bg": "#1C1B19",
+    "ratio": 3.64,
+    "kind": "ui",
+    "result": "Pass 3:1"
+  },
+  {
+    "mode": "dark",
+    "pair": "Success on Surface",
+    "fg": "#4CC385",
+    "bg": "#1C1B19",
+    "ratio": 7.75,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Warning on Surface",
+    "fg": "#F0B24E",
+    "bg": "#1C1B19",
+    "ratio": 9.17,
+    "kind": "text",
+    "result": "AAA"
+  },
+  {
+    "mode": "dark",
+    "pair": "Danger on Surface",
+    "fg": "#FF6B5B",
+    "bg": "#1C1B19",
+    "ratio": 6.15,
+    "kind": "text",
+    "result": "AA"
+  }
+]

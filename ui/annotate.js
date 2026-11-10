@@ -100,7 +100,7 @@ const WALLPAPERS = [
   ['Aurora', ['#0f172a', '#14b8a6', '#6366f1', '#a855f7']], ['Sunset', ['#f97316', '#ec4899', '#facc15', '#7c3aed']],
   ['Ocean', ['#0ea5e9', '#1e3a8a', '#22d3ee', '#4f46e5']], ['Candy', ['#f9a8d4', '#a5b4fc', '#fde68a', '#fb7185']],
   ['Forest', ['#064e3b', '#65a30d', '#0f766e', '#a3e635']], ['Midnight', ['#020617', '#312e81', '#1e293b', '#6d28d9']],
-  ['Peach', ['#fed7aa', '#fda4af', '#fef3c7', '#f0abfc']], ['Lavender', ['#ddd6fe', '#c4b5fd', '#e0e7ff', '#f5d0fe']],
+  ['Peach', ['#fed7aa', '#fda4af', '#fef3c7', '#f0abfc']], ['Lilac', ['#ddd6fe', '#c4b5fd', '#e0e7ff', '#f5d0fe']],
   ['Slate', ['#0f172a', '#334155', '#1e293b', '#64748b']], ['Citrus', ['#fde047', '#fb923c', '#a3e635', '#f43f5e']],
   ['Dusk', ['#1e1b4b', '#be185d', '#4c1d95', '#fb923c']], ['Mint', ['#d1fae5', '#67e8f9', '#a7f3d0', '#a5b4fc']],
 ];
