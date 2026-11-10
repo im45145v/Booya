@@ -22,17 +22,22 @@ use tauri::{Emitter, Manager};
 mod keys;
 use tauri_plugin_dialog::DialogExt;
 
+// Only one slot exists, for the whole app, so the size difference costs nothing.
+#[allow(clippy::large_enum_variant)]
 enum RecSlot {
     Starting,
     Running(RecordingSession),
 }
+
+/// (project key, width, height, renderer)
+type CachedRenderer = (String, u32, u32, std::sync::Arc<Renderer>);
 
 #[derive(Default)]
 struct AppState {
     recording: Mutex<Option<RecSlot>>,
     /// The renderer for the last previewed project and size. Building one
     /// loads the event log and background image, so scrubbing reuses it.
-    renderer: Mutex<Option<(String, u32, u32, std::sync::Arc<Renderer>)>>,
+    renderer: Mutex<Option<CachedRenderer>>,
     /// One ffmpeg decoder kept open while the preview plays.
     decoder: Mutex<Option<booya_core::ffmpeg::PreviewDecoder>>,
     /// The camera's decoder, kept open for the same reason. Opening it per
@@ -458,6 +463,8 @@ fn apply_preset(name: String, mut project: Project) -> R<Project> {
 
 // Recording commands are async and do their work on a blocking thread, so a
 // slow or stuck ffmpeg can never freeze the window.
+// A Tauri command's arguments are the names the window sends, so they stay flat.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn start_recording(
     app: tauri::AppHandle,
@@ -793,7 +800,7 @@ async fn raw_frame(project: Project, src_ms: f64) -> R<serde_json::Value> {
 /// Displays and windows the picker can show (names and sizes only, fast).
 #[tauri::command]
 async fn capture_sources() -> R<serde_json::Value> {
-    blocking(|| Ok(serde_json::to_value(capture::sources::list_sources().map_err(e)?).map_err(e)?)).await
+    blocking(|| serde_json::to_value(capture::sources::list_sources().map_err(e)?).map_err(e)).await
 }
 
 /// Preview image and app icon for one source, as data URLs. Fetched one at a
@@ -1533,6 +1540,8 @@ async fn make_sample(app: tauri::AppHandle) -> R<serde_json::Value> {
     .await
 }
 
+// A Tauri command's arguments are the names the window sends, so they stay flat.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn ai_demo_ready(app: tauri::AppHandle, mut project: Project, zoom: bool, captions: bool, cut: bool, blur: bool, denoise: bool, cut_pauses: Option<bool>,
 ) -> R<AiResult<pipeline::ReadyReport>> {
