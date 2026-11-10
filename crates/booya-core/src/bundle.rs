@@ -174,10 +174,7 @@ pub fn save_bundle(project: &Project, dir: &Path) -> Result<Project> {
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::fsutil::write_atomic(path, bytes)
 }
 
 /// The captions as plain text with times in seconds of the source.

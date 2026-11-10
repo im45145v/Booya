@@ -199,7 +199,7 @@ fn touch_recent(app: &tauri::AppHandle, path: &str) {
     if let Some(d) = f.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let _ = std::fs::write(f, serde_json::to_string(&list).unwrap_or_default());
+    let _ = booya_core::fsutil::write_atomic(&f, serde_json::to_string(&list).unwrap_or_default().as_bytes());
 }
 
 /// The recent projects that are still there, newest first.
@@ -221,8 +221,7 @@ fn recent_projects(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 fn forget_recent(app: tauri::AppHandle, path: String) {
     let mut list = read_recent(&app);
     list.retain(|r| r.path != path);
-    let _ = std::fs::write(recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default(),
-    );
+    let _ = booya_core::fsutil::write_atomic(&recent_projects_path(&app), serde_json::to_string(&list).unwrap_or_default().as_bytes());
 }
 
 /// Open a project folder, its project.json, or an older loose project file.
@@ -926,7 +925,9 @@ fn save_settings(st: &Settings) -> R<()> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(e)?;
     }
-    std::fs::write(&p, serde_json::to_string_pretty(st).map_err(e)?).map_err(e)?;
+    // A full disk must not wipe every setting: replace the file only once
+    // the new one is written.
+    booya_core::fsutil::write_atomic(&p, serde_json::to_string_pretty(st).map_err(e)?.as_bytes()).map_err(e)?;
     Ok(())
 }
 
@@ -1262,7 +1263,7 @@ fn s3_get() -> serde_json::Value {
 #[tauri::command]
 fn s3_set(config: booya_ai::s3::S3Config, secret: Option<String>) -> R<()> {
     config.validate().map_err(e)?;
-    std::fs::write(s3_path(), serde_json::to_string_pretty(&config).map_err(e)?).map_err(e)?;
+    booya_core::fsutil::write_atomic(&s3_path(), serde_json::to_string_pretty(&config).map_err(e)?.as_bytes()).map_err(e)?;
     if let Some(sct) = secret.filter(|s| !s.trim().is_empty()) {
         keyring_entry("s3-secret")?.set_password(sct.trim()).map_err(e)?;
     }
@@ -1495,7 +1496,7 @@ async fn background_import(app: tauri::AppHandle, path: String, project_source: 
         rec.insert(0, d.clone());
         rec.truncate(12);
         let _ = std::fs::create_dir_all(recents_path(&app).parent().unwrap_or(&PathBuf::from(".")));
-        let _ = std::fs::write(recents_path(&app), serde_json::to_string(&rec).unwrap_or_default());
+        let _ = booya_core::fsutil::write_atomic(&recents_path(&app), serde_json::to_string(&rec).unwrap_or_default().as_bytes());
         Ok(d)
     })
     .await
