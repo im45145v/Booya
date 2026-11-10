@@ -70,7 +70,7 @@ pub fn compact(audio: &[f32], spans: &[(usize, usize)], rate: usize,
     let mut map = Vec::new();
     for &(s, e) in spans {
         if !out.is_empty() {
-            out.extend(std::iter::repeat(0.0).take(gap));
+            out.extend(std::iter::repeat_n(0.0, gap));
         }
         map.push((out.len(), s, e - s));
         out.extend_from_slice(&audio[s..e]);
@@ -578,7 +578,7 @@ pub fn retime_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)]) {
         }
         let lo = words[i].start_ms;
         let hi = if j < n { words[j].start_ms.max(words[j - 1].end_ms) } else { words[j - 1].end_ms };
-        let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(a, b)| (a.max(lo) < b.min(hi)).then(|| (a.max(lo), b.min(hi)))).collect();
+        let pieces: Vec<(f64, f64)> = voiced.iter().filter(|&&(a, b)| a.max(lo) < b.min(hi)).map(|&(a, b)| (a.max(lo), b.min(hi))).collect();
         let total: f64 = pieces.iter().map(|(a, b)| b - a).sum();
         if total < 60.0 * (j - i) as f64 {
             i = j;
@@ -630,7 +630,7 @@ pub fn respread_if_implausible(words: &mut [CaptionWord], voiced: &[(f64, f64)],
     if words.len() < 2 || (words.iter().filter(|w| bad(w)).count() as f64) < 0.3 * words.len() as f64 {
         return false;
     }
-    let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(a, b)| (a.max(from) < b.min(to)).then(|| (a.max(from), b.min(to)))).collect();
+    let pieces: Vec<(f64, f64)> = voiced.iter().filter(|&&(a, b)| a.max(from) < b.min(to)).map(|&(a, b)| (a.max(from), b.min(to))).collect();
     let total: f64 = pieces.iter().map(|(a, b)| b - a).sum();
     if total < 60.0 * words.len() as f64 {
         return false;
@@ -652,7 +652,7 @@ pub fn place_heard_again(mut ws: Vec<CaptionWord>, voiced: &[(f64, f64)], (a, b)
     }
     let outside = ws.iter().filter(|w| w.start_ms < a - 100.0 || w.start_ms >= b).count();
     if outside > 0 {
-        let pieces: Vec<(f64, f64)> = voiced.iter().filter_map(|&(x, y)| (x.max(a) < y.min(b)).then(|| (x.max(a), y.min(b)))).collect();
+        let pieces: Vec<(f64, f64)> = voiced.iter().filter(|&&(x, y)| x.max(a) < y.min(b)).map(|&(x, y)| (x.max(a), y.min(b))).collect();
         let total: f64 = pieces.iter().map(|(x, y)| y - x).sum();
         if total >= 60.0 * ws.len() as f64 {
             spread(&mut ws, &pieces, total);
