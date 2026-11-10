@@ -114,8 +114,15 @@ pub struct Logged {
 
 impl InputLogger {
     pub fn start(region: Region, keys: KeyLogging) -> Result<Self> {
+        Self::start_for(region, keys, false)
+    }
+
+    /// `whole_display`: the region is one whole display (not an area or a
+    /// window). On macOS its origin then tells which display it is, and so
+    /// its own points to pixels scale, which can differ from the main one.
+    pub fn start_for(region: Region, keys: KeyLogging, whole_display: bool) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Shared { epoch: None, events: Vec::new(), active: true, paused_at: None, pauses: Vec::new(), last_pos: (region.w as f64 / 2.0, region.h as f64 / 2.0) }));
-        let poller = poll::spawn(shared.clone(), region);
+        let poller = poll::spawn(shared.clone(), region, whole_display);
         let touch = start_touch(shared.clone(), region);
         let mut me = Self { shared, keys, hook: None, poller, touch, keypoll: None };
         me.start_hook();
@@ -239,6 +246,23 @@ impl InputLogger {
         crate::touch::drop_emulated_mouse(&mut events);
         Logged { events, pauses }
     }
+}
+
+/// The points to pixels scale for converting the pointer on macOS. A whole
+/// display recording has its origin at that display's top left, in its own
+/// pixels (left and top in points times its scale), which singles it out.
+/// Areas and windows are measured on the main display, so they keep its scale.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn display_scale_for(displays: &[(f64, f64, f64)], origin: (i32, i32), whole_display: bool, main_scale: f64) -> f64 {
+    if !whole_display {
+        return main_scale;
+    }
+    displays
+        .iter()
+        .find(|&&(x, y, s)| (x * s) as i32 == origin.0 && (y * s) as i32 == origin.1)
+        .map(|d| d.2)
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or(main_scale)
 }
 
 /// Logs taps and drags from the touch screen as touch clicks.
@@ -522,9 +546,21 @@ mod poll {
     use crate::events::{EventKind, MouseButton};
     use std::time::Duration;
 
-    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region) -> Option<std::thread::JoinHandle<()>> {
-        let mut src = platform::Pointer::open()?;
+    pub fn spawn(shared: Arc<Mutex<Shared>>, region: Region, whole_display: bool) -> Option<std::thread::JoinHandle<()>> {
+        #[cfg(target_os = "macos")]
+        let mut src = platform::Pointer::open_for(region, whole_display)?;
+        #[cfg(not(target_os = "macos"))]
+        let mut src = {
+            let _ = whole_display;
+            platform::Pointer::open()?
+        };
         Some(std::thread::spawn(move || {
+            // The grabber and the region are in physical pixels. Without this
+            // the cursor came back in scaled units whenever the process was
+            // not DPI aware (the CLI, at 125 % or 150 % display scaling), and
+            // every click and zoom landed up and to the left of the pointer.
+            #[cfg(windows)]
+            let _px = crate::capture::winapi::physical_pixels();
             let mut last = (f64::NAN, f64::NAN);
             let mut down = [false; 3];
             let mut last_change = Instant::now();
@@ -650,8 +686,15 @@ mod poll {
             scale: f64,
         }
         impl Pointer {
-            pub fn open() -> Option<Self> {
-                Some(Self { scale: super::super::mac::backing_scale() })
+            /// The pointer comes in points of the global desktop, the region
+            /// in pixels of the display that is recorded. Converting with the
+            /// main display's scale put every click on an external monitor of
+            /// another scale (a 1x screen next to a Retina laptop) far from
+            /// where it happened, and zoomed on the wrong place.
+            pub fn open_for(region: crate::capture::Region, whole_display: bool) -> Option<Self> {
+                let main = super::super::mac::backing_scale();
+                let scale = super::super::display_scale_for(&super::super::mac::displays(), (region.x, region.y), whole_display, main);
+                Some(Self { scale })
             }
             pub fn read(&mut self) -> Option<(f64, f64, [bool; 3])> {
                 let (x, y) = super::super::mac::mouse();
@@ -722,6 +765,7 @@ mod mac {
         fn CGDisplayCopyDisplayMode(display: u32) -> *mut c_void;
         fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
         fn CGDisplayModeRelease(mode: *mut c_void);
+        fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     }
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -730,8 +774,11 @@ mod mac {
 
     /// Points to pixels factor of the main display (2.0 on Retina).
     pub fn backing_scale() -> f64 {
+        display_scale(unsafe { CGMainDisplayID() })
+    }
+
+    fn display_scale(id: u32) -> f64 {
         unsafe {
-            let id = CGMainDisplayID();
             let b = CGDisplayBounds(id);
             let mode = CGDisplayCopyDisplayMode(id);
             if mode.is_null() || b.size.width <= 0.0 {
@@ -741,6 +788,22 @@ mod mac {
             CGDisplayModeRelease(mode);
             if px > 0.0 { px / b.size.width } else { 1.0 }
         }
+    }
+
+    /// Every active display: (left, top) in global points, and its scale.
+    pub fn displays() -> Vec<(f64, f64, f64)> {
+        let mut ids = [0u32; 32];
+        let mut n = 0u32;
+        if unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n) } != 0 {
+            return Vec::new();
+        }
+        ids[..(n as usize).min(ids.len())]
+            .iter()
+            .map(|&id| {
+                let b = unsafe { CGDisplayBounds(id) };
+                (b.origin.x, b.origin.y, display_scale(id))
+            })
+            .collect()
     }
 
     pub fn mouse() -> (f64, f64) {
@@ -1082,6 +1145,28 @@ mod mac_keys {
 mod tests {
     use super::{classify, KeyLogging};
     use crate::events::PRINTABLE;
+
+    #[test]
+    fn the_recorded_display_scale_converts_the_pointer() {
+        // A Retina laptop (2x, 1512 points wide) with a 1x 1920 monitor on
+        // its right and a 2x one above it.
+        let d = [(0.0, 0.0, 2.0), (1512.0, 0.0, 1.0), (0.0, -1080.0, 2.0)];
+        // Recording the external 1x monitor: its origin is 1512 x 1 pixels.
+        let s = super::display_scale_for(&d, (1512, 0), true, 2.0);
+        assert_eq!(s, 1.0);
+        // A click 100 points into that monitor lands 100 pixels into the video.
+        let (pointer_x, origin_x) = (1512.0 + 100.0, 1512.0);
+        assert_eq!(pointer_x * s - origin_x, 100.0);
+        // The main display, and the one above (negative origin).
+        assert_eq!(super::display_scale_for(&d, (0, 0), true, 2.0), 2.0);
+        assert_eq!(super::display_scale_for(&d, (0, -2160), true, 2.0), 2.0);
+        // An area that happens to start where the 1x monitor would is still
+        // measured on the main display.
+        assert_eq!(super::display_scale_for(&d, (1512, 0), false, 2.0), 2.0);
+        // Unknown origin or no display list: the main scale, as before.
+        assert_eq!(super::display_scale_for(&d, (7, 7), true, 2.0), 2.0);
+        assert_eq!(super::display_scale_for(&[], (1512, 0), true, 2.0), 2.0);
+    }
     #[test]
     fn mac_key_codes_map_to_names_and_modifiers() {
         use super::mackeys;
