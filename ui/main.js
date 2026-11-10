@@ -90,7 +90,7 @@ function syncPanel() {
   const c = project.cursor;
   $('cur-visible').checked = c.visible; $('cur-size').value = c.size; $('cur-smooth').value = c.smoothing_ms; $('cur-ripple').checked = c.click_ripples;
   $('keys-on').checked = project.keys.enabled; $('keys-short').checked = project.keys.shortcuts_only; $('keys-sym').checked = project.keys.symbols !== false;
-  $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size;
+  $('cap-burn').checked = project.caption_style.burn_in; $('cap-size').value = project.caption_style.size; $('cap-look').value = project.caption_style.look || 'box'; $('cap-pos').value = project.caption_style.position || 'bottom'; $('cap-upper').checked = !!project.caption_style.uppercase;
   const w = project.webcam; $('cam-section').hidden = !w;
   if (w) { $('cam-visible').checked = w.visible; $('cam-shape').value = w.shape || (w.circle ? 'circle' : 'rounded-square'); $('cam-size').value = w.size; $('cam-corner').value = w.corner; $('cam-layout').value = baseLayout(); $('cam-mirror').checked = !!w.mirror; const L = project.layouts || {}; $('lay-trans').value = L.transition_ms ?? 450; $('lay-share').value = L.split_camera_fraction ?? 0.34; }
   $('lay-follow').checked = (project.layouts || {}).follow_cursor !== false;
@@ -154,7 +154,7 @@ function readPanel() {
   $('gl-opts').classList.toggle('off', !s.glass.enabled);
   Object.assign(project.cursor, { visible: $('cur-visible').checked, size: +$('cur-size').value, smoothing_ms: +$('cur-smooth').value, click_ripples: $('cur-ripple').checked });
   Object.assign(project.keys, { enabled: $('keys-on').checked, shortcuts_only: $('keys-short').checked, symbols: $('keys-sym').checked });
-  Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value });
+  Object.assign(project.caption_style, { burn_in: $('cap-burn').checked, size: +$('cap-size').value, look: $('cap-look').value, position: $('cap-pos').value, uppercase: $('cap-upper').checked });
   if (project.webcam) Object.assign(project.webcam, { visible: $('cam-visible').checked, shape: $('cam-shape').value, circle: $('cam-shape').value === 'circle', size: +$('cam-size').value, corner: $('cam-corner').value, layout: $('cam-layout').value === 'split' ? 'side' : 'bubble', mirror: $('cam-mirror').checked });
   { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; L.split_camera_fraction = +$('lay-share').value; $('lay-share-out').textContent = Math.round(L.split_camera_fraction * 100) + '%'; }
   if (project.webcam) { const L = project.layouts; L.base = $('cam-layout').value; L.transition_ms = +$('lay-trans').value; $('lay-trans-out').textContent = (L.transition_ms / 1000).toFixed(2) + ' s'; }
@@ -1542,7 +1542,7 @@ $('blur-draw').onclick = async () => {
     if (rs.length) { renderBlurList(); refresh(); checkpoint(); status(`Added ${rs.length} blur box(es).`, 'success'); }
   } catch (e) { fail(e); }
 };
-['frame-sel', 'card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cam-visible', 'cam-shape', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-share', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
+['frame-sel', 'card-len', 'in-title', 'in-sub', 'out-title', 'out-sub', 'zc-steady', 'wm-text', 'wm-corner', 'wm-opacity', 'cap-look', 'cap-pos', 'cam-visible', 'cam-shape', 'cam-size', 'cam-corner', 'cam-layout', 'cam-mirror', 'lay-trans', 'lay-share', 'lay-follow'].forEach(id => ($(id).oninput = $(id).onchange = () => { readPanel(); refresh(); }));
 
 // ---------- First run ----------
 // The permissions screen comes first (a Mac's first launch, or a permission that went off), then the privacy note.
