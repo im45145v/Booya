@@ -2,6 +2,10 @@
 
 Thanks for helping. Booya is a small project, so a clear bug report is worth as much as a pull request.
 
+## Finding your way around
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the crates, how a recording becomes a finished video, and where to start for common changes. [docs/SYNC.md](docs/SYNC.md) covers sound and picture sync, [docs/EDITING.md](docs/EDITING.md#auto-zoom-when-it-zooms) the auto zoom rules, and [docs/RELEASING.md](docs/RELEASING.md) how a release is cut.
+
 ## Reporting a bug
 
 Open an [issue](https://github.com/im45145v/Booya/issues/new/choose) and pick **Bug report**. The form asks for:
@@ -15,12 +19,27 @@ Security problems go through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Building
 
-You need Rust 1.88 or newer, plus ffmpeg and ffprobe on your `PATH` for development builds (release installers bundle their own copy). The per OS packages are listed under [Building](README.md#building) in the README.
+One command installs or checks what you need (Rust, the system libraries, ffmpeg, CMake, clang and `just`):
 
 ```sh
-cargo build --release                 # CLI: target/release/booya
-cargo build --release -p booya-app    # desktop app
+bash scripts/dev-setup.sh                                      # Linux and macOS
+powershell -ExecutionPolicy Bypass -File scripts\dev-setup.ps1  # Windows
 ```
+
+Add `--check` (or `-Check` on Windows) to only see what's missing. Release installers bundle their own ffmpeg; development builds use the one on your `PATH`.
+
+Then use the tasks in the `justfile`. Run `just` to see them all:
+
+```sh
+just app          # run the desktop app
+just cli doctor   # run the booya command line tool
+just test         # Rust, editor JS and Python tests
+just test-core zoom   # only the core tests whose name contains "zoom"
+just lint         # clippy, warnings are errors
+just ci           # what the CI build job runs
+```
+
+Every task is a plain cargo, node or python command, so you can copy it from the `justfile` if you'd rather not install `just`.
 
 The editor UI in `ui/` is plain HTML, CSS and JS with no bundler, so you can change it and rebuild the app without Node.
 
@@ -29,12 +48,10 @@ The editor UI in `ui/` is plain HTML, CSS and JS with no bundler, so you can cha
 Run what CI runs:
 
 ```sh
-cargo test -p booya-core -p booya-ai
-cargo clippy -p booya-core --all-targets -- -D warnings
-cargo clippy --workspace --all-targets
-for t in tests/js/*.test.js; do node "$t"; done
-python3 scripts/test_make_latest_json.py
+just ci
 ```
+
+That runs the Rust tests, builds everything, runs clippy with warnings as errors, then the JS and Python tests. It uses the `ci` profile from `Cargo.toml`, which compiles the dependencies once for all three Rust steps.
 
 CI builds and tests on Ubuntu, macOS and Windows. One OS failing doesn't cancel the others, so look at each result. If a job fails while installing packages, it's usually a slow mirror. Re-run it before digging in.
 

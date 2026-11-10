@@ -35,6 +35,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-ggml
+          # Pull requests restore main's cache but never save their own: the
+          # 10 GB repo limit was full of per PR copies that evicted main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux deps
         if: runner.os == 'Linux'
         # The Ubuntu mirror has been slow lately (libclang alone took minutes
@@ -44,16 +47,18 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config ffmpeg cmake clang libclang-dev
-      - name: Test the area picker snap geometry
-        run: node tests/js/snap.test.js
-      - name: Test the shortcut recorder
-        run: node tests/js/shortcuts.test.js
-      - name: Test caption editing
-        run: node tests/js/captions-edit.test.js
-      - name: Test touch on the timeline
-        run: node tests/js/timeline-touch.test.js
-      - name: Test the editor preview clock
-        run: node tests/js/avsync.test.js
+      - name: Editor JS tests (every tests/js/*.test.js)
+        run: node scripts/js-tests.mjs
+      - name: Dev setup script still parses and detects this OS
+        if: runner.os != 'Windows'
+        run: bash scripts/dev-setup.sh --dry-run
+      - name: Windows dev setup script parses
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\dev-setup.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs; exit 1 }
       - name: Test the updater manifest builder
         run: python3 scripts/test_make_latest_json.py
       - name: ffmpeg for the media tests and the sync probe
@@ -63,19 +68,22 @@ jobs:
             if [ "$RUNNER_OS" = macOS ]; then brew install ffmpeg; else choco install ffmpeg -y --no-progress; echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"; fi
           fi
           ffmpeg -version | head -1
+      # Test, build and clippy all use the `ci` profile from Cargo.toml, so the
+      # dependencies and whisper.cpp are compiled once instead of three times
+      # (dev for tests, fat LTO release for the build, dev again for clippy).
       - name: Test core and AI
-        run: cargo test -p booya-core -p booya-ai
+        run: cargo test --profile ci -p booya-core -p booya-ai
       - name: Build CLI and app
-        run: cargo build --workspace --release
+        run: cargo build --profile ci --workspace
       # Every crate, on every OS, so code behind a cfg for one platform is
       # linted on that platform. Warnings are errors.
       - name: Clippy (whole workspace, warnings are errors)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --profile ci --workspace --all-targets -- -D warnings
       - name: Sound against picture, every stage that works on files
         shell: bash
         run: |
           set +e
-          target/release/booya syncprobe | tee sync.txt
+          target/ci/booya syncprobe | tee sync.txt
           code=${PIPESTATUS[0]}
           { echo "### Sound vs picture on $RUNNER_OS"; echo; cat sync.txt; } >> "$GITHUB_STEP_SUMMARY"
           exit $code
@@ -97,7 +105,7 @@ jobs:
           Start-Sleep -Seconds 2
           ffmpeg -v error -y -f gdigrab -framerate 30 -t 14 -i desktop -c:v libx264 -preset ultrafast gdi.mp4
           Stop-Job $job; Remove-Job $job -Force
-          $r = & target/release/booya.exe syncprobe --flashes gdi.mp4
+          $r = & target/ci/booya.exe syncprobe --flashes gdi.mp4
           $code = $LASTEXITCODE
           "### Windows screen capture clock`n`n$r" | Out-File -Append $env:GITHUB_STEP_SUMMARY
           $r
@@ -108,7 +116,7 @@ jobs:
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = "$PWD\target\release\booya.exe"
+          $exe = "$PWD\target\ci\booya.exe"
           # A folder name with spaces: every path the app builds must survive them.
           $dir = Join-Path $env:RUNNER_TEMP 'demo lens rec'
           New-Item -ItemType Directory -Force $dir | Out-Null
@@ -159,7 +167,7 @@ jobs:
         run: |
           # The runner has no microphone, or a virtual one. Either way the
           # pipeline has to finish and say what happened, never stay silent.
-          $out = & "$PWD\target\release\booya.exe" doctor --audio --seconds 2 | Out-String
+          $out = & "$PWD\target\ci\booya.exe" doctor --audio --seconds 2 | Out-String
           $code = $LASTEXITCODE
           $out
           $r = $out | ConvertFrom-Json
@@ -183,8 +191,9 @@ jobs:
         timeout-minutes: 15
         run: |
           brew install ffmpeg
-          target/release/booya bench --seconds 8 | tee bench.txt
-          target/release/booya bench --seconds 8 --json > bench.json
+          target/ci/booya bench --seconds 8 | tee bench.txt
+          target/ci/booya bench --seconds 8 --json > bench.json
+          echo 'Built with the `ci` profile (thin LTO, debug assertions on), so installers are a little faster than this.' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"; cat bench.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
   capture-sync:
     # Real capture on Linux: Xvfb + x11grab for the screen, a PulseAudio null
@@ -198,6 +207,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: capture-sync-portable-ggml
+          # Pull requests restore main's cache but never save their own: the
+          # 10 GB repo limit was full of per PR copies that evicted main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Deps
         timeout-minutes: 15
         run: |
@@ -233,6 +245,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: subtitles-portable-ggml
+          # Pull requests restore main's cache but never save their own: the
+          # 10 GB repo limit was full of per PR copies that evicted main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Deps
         timeout-minutes: 15
         run: |
@@ -259,6 +274,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: editor-e2e-portable-ggml
+          # Pull requests restore main's cache but never save their own: the
+          # 10 GB repo limit was full of per PR copies that evicted main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Deps
         run: |
           sudo apt-get -o Acquire::Retries=3 update

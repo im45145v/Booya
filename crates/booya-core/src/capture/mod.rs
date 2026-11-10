@@ -211,7 +211,7 @@ fn drain_stderr(child: &mut Child) -> Arc<Mutex<String>> {
                 if n == 0 {
                     break;
                 }
-                let mut s = b.lock().unwrap();
+                let mut s = b.lock().unwrap_or_else(|p| p.into_inner());
                 if s.len() < 64 * 1024 {
                     s.push_str(&String::from_utf8_lossy(&chunk[..n]));
                 }
@@ -231,7 +231,7 @@ fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>,
     loop {
         if let Ok(Some(_)) = child.try_wait() {
             std::thread::sleep(Duration::from_millis(100));
-            let e = err.lock().unwrap().clone();
+            let e = err.lock().unwrap_or_else(|p| p.into_inner()).clone();
             return Err(if e.trim().is_empty() { "ffmpeg exited".into() } else { e });
         }
         let size = std::fs::metadata(video).map(|m| m.len()).unwrap_or(0);
@@ -249,7 +249,7 @@ fn wait_until_writing(child: &mut Child, video: &Path, err: &Arc<Mutex<String>>,
         if t.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("TIMEOUT {}", err.lock().unwrap()));
+            return Err(format!("TIMEOUT {}", err.lock().unwrap_or_else(|p| p.into_inner())));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -807,7 +807,7 @@ impl RecordingSession {
         let duration = self.armed_at.unwrap_or(self.started).elapsed();
         let size = std::fs::metadata(&self.video).map(|m| m.len()).unwrap_or(0);
         if size == 0 {
-            let e = self.stderr.lock().unwrap().clone();
+            let e = self.stderr.lock().unwrap_or_else(|p| p.into_inner()).clone();
             if self.created {
                 let _ = std::fs::remove_dir_all(&self.dir);
             }

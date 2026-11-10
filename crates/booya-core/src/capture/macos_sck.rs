@@ -341,7 +341,7 @@ fn stream_thread(target: CaptureTarget, fps: u32, max_height: Option<u32>, share
                     // Idle and blank frames carry no pixel buffer.
                     let Some(pb) = sample.pixel_buffer() else { return };
                     if pb.pixel_format() != BGRA {
-                        *sh.problem.lock().unwrap() = Some(format!("unexpected pixel format {:#x}", pb.pixel_format()));
+                        *sh.problem.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!("unexpected pixel format {:#x}", pb.pixel_format()));
                         return;
                     }
                     let Ok(guard) = pb.lock_read_only() else { return };
@@ -351,7 +351,7 @@ fn stream_thread(target: CaptureTarget, fps: u32, max_height: Option<u32>, share
                         return;
                     }
                     {
-                        let l = sh.latest.lock().unwrap();
+                        let l = sh.latest.lock().unwrap_or_else(|p| p.into_inner());
                         if l.seq > 0 && (l.w != w || l.h != h) {
                             return; // the size is fixed once ffmpeg has been told
                         }
@@ -365,7 +365,7 @@ fn stream_thread(target: CaptureTarget, fps: u32, max_height: Option<u32>, share
                             frame.extend_from_slice(&src[y * stride..y * stride + w * 4]);
                         }
                     }
-                    let mut l = sh.latest.lock().unwrap();
+                    let mut l = sh.latest.lock().unwrap_or_else(|p| p.into_inner());
                     l.data = Arc::new(frame);
                     l.w = w;
                     l.h = h;
@@ -415,14 +415,14 @@ pub fn open(target: &CaptureTarget, fps: u32, max_height: Option<u32>, timeout: 
     let mut cap = Capture { shared, stop: Some(stop_tx), width: w, height: h, origin, scale };
     loop {
         {
-            let l = cap.shared.latest.lock().unwrap();
+            let l = cap.shared.latest.lock().unwrap_or_else(|p| p.into_inner());
             if l.seq > 0 {
                 cap.width = l.w as u32;
                 cap.height = l.h as u32;
                 break;
             }
         }
-        if let Some(p) = cap.shared.problem.lock().unwrap().clone() {
+        if let Some(p) = cap.shared.problem.lock().unwrap_or_else(|p| p.into_inner()).clone() {
             return Err(p);
         }
         if t0.elapsed() > timeout {
@@ -465,7 +465,7 @@ pub fn feed(cap: Capture, mut stdin: ChildStdin, fps: u32) -> FeedGuard {
             let mut next = Instant::now();
             let (mut written, mut late) = (0u64, 0u64);
             while !flag.load(Ordering::SeqCst) {
-                let frame = shared.latest.lock().unwrap().data.clone();
+                let frame = shared.latest.lock().unwrap_or_else(|p| p.into_inner()).data.clone();
                 if stdin.write_all(&frame).is_err() {
                     break;
                 }
@@ -494,7 +494,7 @@ pub fn feed(cap: Capture, mut stdin: ChildStdin, fps: u32) -> FeedGuard {
 pub fn screenshot_png() -> Result<(Vec<u8>, u32, u32), String> {
     let cap = open(&CaptureTarget::Screen { display: 0 }, 5, Some(0), Duration::from_secs(8))?;
     let (w, h, rgba) = {
-        let l = cap.shared.latest.lock().unwrap();
+        let l = cap.shared.latest.lock().unwrap_or_else(|p| p.into_inner());
         let mut rgba = l.data.to_vec();
         for px in rgba.as_chunks_mut::<4>().0.iter_mut() {
             px.swap(0, 2);
@@ -672,7 +672,7 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
     if bundle.is_empty() || !bundle.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
         return None;
     }
-    if let Some(hit) = CACHE.lock().unwrap().get_or_insert_with(HashMap::new).get(bundle) {
+    if let Some(hit) = CACHE.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).get(bundle) {
         return hit.clone();
     }
     let find = || -> Option<Vec<u8>> {
@@ -693,7 +693,7 @@ fn app_icon(bundle: &str) -> Option<Vec<u8>> {
         bytes
     };
     let r = find();
-    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bundle.to_string(), r.clone());
+    CACHE.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(bundle.to_string(), r.clone());
     r
 }
 
@@ -727,7 +727,7 @@ fn push_audio(state: &Mutex<AudioState>, epoch: f64, interleaved: &[f32]) {
         return;
     }
     let now_ms = (unix_now() - epoch) * 1000.0;
-    let mut g = state.lock().unwrap();
+    let mut g = state.lock().unwrap_or_else(|p| p.into_inner());
     let pad = g.filler.before(now_ms, interleaved.len() / 2);
     let r = match g.writer.as_mut() {
         Some(w) => (|| {
@@ -833,7 +833,7 @@ impl AudioRec {
             let _ = j.join();
         }
         let (writer, first_ms, error) = {
-            let mut g = self.state.lock().unwrap();
+            let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
             (g.writer.take(), g.filler.first_ms(), g.error.take())
         };
         let frames = match writer {

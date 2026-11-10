@@ -27,7 +27,7 @@ Auto edit can be cancelled while it is running. Cancellation is checked between 
 
 ## Background and camera framing
 
-**Style tab > Background > None** removes the wallpaper and uses a plain black canvas (exports are opaque, not transparent). Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
+**Style tab > Background > None** exports just the recording and the camera: no wallpaper, and the padding, corners, shadow, glass and device frame are cleared so the recording fills the frame. Undo brings them back, and you can still add padding afterwards, which shows as black (exports are opaque, not transparent). The **No background** template does the same in one click. Use **Camera shape** for a circle, rounded square, square or rectangle. **Camera share** sets how much of a split layout is assigned to the camera.
 
 ## Callouts (short notes on the video)
 
@@ -124,3 +124,8 @@ The depth is never more than 2x and always keeps a margin round what was clicked
 - **Music** (Style > Music): pick an audio file. Set the volume, how far it ducks under your voice (and by how many dB), the fade in and out, where it starts and whether it loops. The editor plays it natively, the export mixes the same way.
 - **Mute a clip** (Edit tab): select a clip and tick Mute clip. The recorded sound (voice and system audio) in that clip goes silent and the picture stays. The music keeps playing.
 - **Camera position**: the camera bubble can sit in any of the four corners or the middle of any edge.
+
+## Cancelling an export
+
+While a video exports, the Export tab shows how far it is and, after the first few seconds, about how long is left. **Cancel** stops it within a frame, and the half written file is removed, so nothing broken is left in the folder. Auto edit has its own Cancel button in the Auto edit tab.
+
