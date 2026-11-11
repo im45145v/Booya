@@ -63,6 +63,9 @@ struct AppState {
     /// Exports running now. Installing an update restarts the app, which
     /// would kill them halfway.
     exports: std::sync::atomic::AtomicUsize,
+    /// Set while an update downloads and installs. The install ends with a
+    /// restart, so no take or export may start in that window.
+    updating: std::sync::atomic::AtomicBool,
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -420,9 +423,17 @@ async fn preview(app: tauri::AppHandle, project: Project, out_ms: f64, short_sid
 /// Counts an export as running for as long as it lives.
 struct ExportBusy(tauri::AppHandle);
 impl ExportBusy {
-    fn new(app: &tauri::AppHandle) -> Self {
-        app.state::<AppState>().exports.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self(app.clone())
+    /// Fails while an update is installing. The count goes up before the
+    /// flag is read, and `install_update` sets the flag before it reads the
+    /// count, so one of the two always sees the other.
+    fn new(app: &tauri::AppHandle) -> R<Self> {
+        let state = app.state::<AppState>();
+        state.exports.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let busy = Self(app.clone());
+        if state.updating.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(UPDATING_MSG.into());
+        }
+        Ok(busy)
     }
 }
 impl Drop for ExportBusy {
@@ -434,7 +445,7 @@ impl Drop for ExportBusy {
 #[tauri::command]
 async fn export_video(app: tauri::AppHandle, project: Project, out: String) -> R<String> {
     check_write(&app, &out, &["mp4", "gif", "webm"])?;
-    let _busy = ExportBusy::new(&app);
+    let _busy = ExportBusy::new(&app)?;
     let cancel = app.state::<AppState>().cancel_export.clone();
     cancel.store(false, std::sync::atomic::Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
@@ -503,6 +514,12 @@ async fn start_recording(
     {
         let state = app.state::<AppState>();
         let mut slot = state.recording.lock().unwrap_or_else(|p| p.into_inner());
+        // Checked under the slot lock. `install_update` sets the flag first
+        // and then takes this lock, so it either sees this take or this take
+        // sees the flag.
+        if state.updating.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(UPDATING_MSG.into());
+        }
         match &*slot {
             Some(RecSlot::Starting) => return Err("Recording is already starting".into()),
             Some(RecSlot::Running(_)) => return Err("Already recording".into()),
@@ -1101,7 +1118,7 @@ fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
 /// Deleting recordings under a running take removed the folder ffmpeg was
 /// writing into, and the take was lost.
 fn not_while_recording(app: &tauri::AppHandle) -> R<()> {
-    if app.state::<AppState>().recording.lock().unwrap().is_some() {
+    if app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
         return Err("Stop the recording first.".into());
     }
     Ok(())
@@ -2599,6 +2616,28 @@ async fn check_update(app: tauri::AppHandle) -> R<UpdateInfo> {
     })
 }
 
+const UPDATING_MSG: &str = "Booya is installing an update and will restart. Wait for it to finish.";
+
+/// Clears `AppState::updating` when an install stops early (an error, or
+/// the command being dropped). A successful install restarts the app.
+struct UpdatingFlag(tauri::AppHandle);
+impl Drop for UpdatingFlag {
+    fn drop(&mut self) {
+        self.0.state::<AppState>().updating.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Refuses while a take or an export is running, since installing restarts Booya.
+fn busy_for_update(state: &AppState) -> R<()> {
+    if state.recording.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
+        return Err("Stop the recording first. Installing the update restarts Booya.".into());
+    }
+    if state.exports.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        return Err("Wait for the export to finish. Installing the update restarts Booya.".into());
+    }
+    Ok(())
+}
+
 /// Download the update, verify its signature against the key in the app, install it and restart.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> R<()> {
@@ -2609,21 +2648,20 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
     }
     // The install ends with a restart. Doing that in the middle of a take
     // killed ffmpeg before it could finish the file, and the take was lost.
-    {
-        let state = app.state::<AppState>();
-        if state.recording.lock().unwrap().is_some() {
-            return Err("Stop the recording first. Installing the update restarts Booya.".into());
-        }
-        if state.exports.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-            return Err("Wait for the export to finish. Installing the update restarts Booya.".into());
-        }
+    // The download can take a while, so the `updating` flag keeps a new take
+    // or export from starting until the install is done or has failed.
+    let state = app.state::<AppState>();
+    if state.updating.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("An update is already being installed.".into());
     }
+    let _updating = UpdatingFlag(app.clone());
+    busy_for_update(&state)?;
     let Some(update) = app.updater().map_err(e)?.check().await.map_err(e)? else { return Err("Booya is already up to date.".into());
     };
     let mut got: u64 = 0;
     let handle = app.clone();
-    update
-        .download_and_install(
+    let bytes = update
+        .download(
             move |chunk, total| {
                 got += chunk as u64;
                 let _ = handle.emit("update-progress", serde_json::json!({ "got": got, "total": total }),
@@ -2633,6 +2671,11 @@ async fn install_update(app: tauri::AppHandle) -> R<()> {
         )
         .await
         .map_err(e)?;
+    // The flag should have kept everything out, but look again right before
+    // the step that restarts: losing a take is much worse than asking the
+    // user to click Install again.
+    busy_for_update(&state)?;
+    update.install(bytes).map_err(e)?;
     app.restart()
 }
 
