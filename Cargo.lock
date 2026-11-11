@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "booya-ai"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "booya-app"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "booya-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "booya-ai",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "booya-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "ab_glyph",
  "anyhow",
