@@ -59,11 +59,17 @@ async function relocateDialog(missing) {
 }
 
 // ---------- Recent projects (welcome screen) ----------
+let recentAll = false;
 async function renderRecent() {
   const box = $('w-recent'); if (!box) return;
   let list = []; try { list = await invoke('recent_projects'); } catch { }
   box.hidden = !list.length;
-  box.innerHTML = list.length ? '<h3 class="section">Recent projects</h3>' + list.map(r => `<div class="item"><button class="link" data-open="${esc(r.path)}" ${r.exists ? '' : 'disabled'}>${esc(r.name)}</button><small class="muted">${esc(r.exists ? r.folder : 'moved or deleted')}</small><button class="btn ghost sm" data-forget="${esc(r.path)}" aria-label="Remove from the list">Remove</button></div>`).join('') : '';
+  // Name and folder name only. The full path stays in the tooltip, so a
+  // username never shows up in a recording of this screen.
+  const shown = recentAll ? list : list.slice(0, 3);
+  box.innerHTML = list.length ? '<h3 class="overline">Recent</h3>' + shown.map(r => `<div class="recent-row"><button class="recent-item" data-open="${esc(r.path)}" title="${esc(r.path)}" ${r.exists ? '' : 'disabled'}>${icon('i-film')}<span class="name">${esc(r.name)}</span><span class="meta">${esc(r.exists ? baseName(r.folder) : 'Moved or deleted')}</span></button><button class="btn icon ghost sm forget" data-forget="${esc(r.path)}" aria-label="Remove from recent" title="Remove from recent">${icon('i-x')}</button></div>`).join('')
+    + (list.length > 3 && !recentAll ? '<button class="link show-all" id="w-recent-all">Show all</button>' : '') : '';
+  const all = $('w-recent-all'); if (all) all.onclick = () => { recentAll = true; renderRecent(); };
   box.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
     showBusy('Opening ' + baseName(b.dataset.open) + '...');
     try { await openProjectPath(b.dataset.open); status('Opened ' + baseName(b.dataset.open), 'success'); } catch (e) { fail(e); }

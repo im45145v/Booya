@@ -19,11 +19,22 @@ const dialog = {
 };
 
 // ---------- Status bar: info, busy, success and error states ----------
+let statusTimer = 0;
+const idleText = () => (project ? 'Ready' : 'Ready to record');
 function status(msg, kind = 'info') {
+  // While recording, busy messages show the record dot and the timer.
+  if (kind === 'busy' && recording) kind = 'recording';
   $('status').textContent = msg;
   const bar = document.querySelector('.statusbar');
   bar.className = 'statusbar ' + kind;
-  $('status-icon').innerHTML = `<use href="#${{ error: 'i-alert', busy: 'i-chip', success: 'i-check' }[kind] || 'i-check'}"/>`;
+  $('status-icon').innerHTML = `<use href="#${{ error: 'i-alert', busy: 'i-chip', success: 'i-check', info: 'i-info' }[kind] || 'i-check'}"/>`;
+  $('sb-rec-dot').hidden = $('sb-rec-time').hidden = kind !== 'recording';
+  // A long error gets a Details button that shows the whole text.
+  const det = $('status-details'); det.hidden = !(kind === 'error' && msg.length > 80);
+  det.onclick = () => modal('Details', `<p>${esc(msg)}</p>`);
+  // Success messages go back to the idle message after a few seconds.
+  clearTimeout(statusTimer);
+  if (kind === 'success') statusTimer = setTimeout(() => { if ($('status').textContent === msg) status(idleText(), 'idle'); }, 6000);
 }
 const fail = e => status(humanError(e), 'error');
 function humanError(e) {
@@ -52,6 +63,7 @@ function updTitle() {
   if (!project) { $('project-name').textContent = ''; return; }
   const dirty = saved !== null && history[hIdx] !== saved;
   $('project-name').innerHTML = esc(projectPath ? baseName(projectPath) : baseName(project.source) + ' (not saved)') + (dirty ? ' <span class="dirty" title="Unsaved changes">&bull;</span>' : '');
+  renderStatusSegs();
 }
 
 // ---------- Project lifecycle ----------
@@ -62,18 +74,34 @@ const tl = new Timeline($('timeline'), {
 });
 
 function setProject(p, path = null) {
+  // The timeline opens from a 44 px bar once, with a short ease (none under
+  // reduced motion). The class goes on first so the canvas has a size to draw at.
+  if (!document.body.classList.contains('has-project') && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.body.classList.add('tl-expanding'); setTimeout(() => document.body.classList.remove('tl-expanding'), 240);
+  }
+  document.body.classList.add('has-project');
   project = p; projectPath = path; tl.selectedZoom = -1; tl.selectedLayout = -1; tl.selectedClip = 0; tl.playhead = 0; tl.setProject(p);
   history = [JSON.stringify(p)]; hIdx = 0; saved = path ? history[0] : null; updUndo();
   markDone(1); $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
-  document.body.classList.add('has-project');
+  if (/^Ready/.test($('status').textContent)) status(idleText(), 'idle');
   enableControls(); syncPanel(); syncSelection(); refresh(); prepareProxy();
 }
 function applyResult(p) { const t = tl.playhead; project = p; tl.project = p; tl.playhead = Math.min(t, tl.outDur()); tl.fitted = true; syncPanel(); syncSelection(); tl.draw(); refresh(); checkpoint(); }
+const AUTO_STEPS = ['r-zoom', 'r-captions', 'r-cut', 'r-pauses', 'r-blur', 'r-denoise'];
 function enableControls() {
   document.querySelectorAll('.needs-project, .transport button').forEach(b => (b.disabled = !project || busy));
   $('ai-models').disabled = busy;
+  // Run auto edit says why it is off, or what it will do.
+  const ticked = AUTO_STEPS.some(id => $(id).checked);
+  if (project && !busy && !ticked) $('ready-btn').disabled = true;
+  $('ready-why').textContent = busy ? 'Working through the ticked steps. Progress shows in the status bar.'
+    : !project ? 'Record or open a video first. Then this runs the ticked steps in order.'
+    : !ticked ? 'Tick at least one step.'
+    : 'Runs on this computer. Nothing is applied until every step finishes.';
+  renderStatusSegs();
 }
+AUTO_STEPS.forEach(id => $(id).addEventListener('change', () => enableControls()));
 
 // ---------- Inspector <-> project ----------
 function syncPanel() {
@@ -290,7 +318,7 @@ let frameLatency = null; // smoothed round trip of a preview frame, ms
 async function refresh() {
   if (!project) return;
   if (!playing) scheduleCheckpoint();
-  $('time').textContent = `${fmt(tl.playhead)} / ${fmt(tl.outDur())}`;
+  $('time').innerHTML = `<b>${fmt(tl.playhead)}</b> / ${fmt(tl.outDur())}`;
   if (pending) { again = true; return; }
   pending = true;
   try {
@@ -431,7 +459,7 @@ async function save(as) {
     showBusy('Saving the project folder...');
     try { await invoke('save_project_bundle', { path: target, project }); } finally { hideBusy(); }
     projectPath = target;
-    saved = history[hIdx]; updTitle(); status('Saved. Nice one. ' + baseName(projectPath) + ' is a folder with the recording inside, so you can move or copy it.', 'success');
+    saved = history[hIdx]; updTitle(); status('Saved. ' + baseName(projectPath) + ' is a folder with the recording inside, so you can move or copy it.', 'success');
     if (typeof renderRecent === 'function') renderRecent();
   } catch (e) { fail(e); }
 }
@@ -474,30 +502,73 @@ $('rec-keys').addEventListener('click', async () => {
   status('Key capture is on. Only shortcuts and the timing of typing are kept, never the letters.' + (IS_MAC ? '' : ' Password fields are not special-cased, so turn it off while typing secrets.'), 'info');
 });
 if (localStorage.getItem('rec-keys') !== '0') setTimeout(() => keysPermissionCheck(false), 1500);
+// Record button: idle, preparing, countdown, recording (with a timer) and paused.
+const recClock = { start: 0, pausedAt: 0, paused: 0, timer: 0 };
+const fmtRec = ms => { const t = Math.max(0, ms) / 1000, h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = Math.floor(t % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}.${Math.floor((t * 10) % 10)}`; };
+function recLabel(kind, text) {
+  const b = $('rec-btn');
+  b.classList.toggle('preparing', kind === 'preparing'); b.classList.toggle('countdown', kind === 'countdown');
+  b.innerHTML = `<span class="glyph" aria-hidden="true"></span><span class="label">${text}</span>`;
+}
+function tickRec() {
+  const ms = Date.now() - recClock.start - recClock.paused - (recClock.pausedAt ? Date.now() - recClock.pausedAt : 0);
+  const t = fmtRec(ms); const el = $('rec-btn').querySelector('.rec-time'); if (el) el.textContent = t; $('sb-rec-time').textContent = t;
+}
+function blinkMark() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const u = document.querySelector('#brand-mark use'); if (!u) return;
+  u.setAttribute('href', '#g-blink'); setTimeout(() => u.setAttribute('href', '#g-mark'), 200);
+}
 function setRecUi(on) {
-  recording = on;
-  $('rec-btn').classList.toggle('recording', on);
-  $('rec-btn').innerHTML = icon(on ? 'i-stop' : 'i-record') + `<span>${on ? 'Stop' : 'Record'}</span>`;
+  const was = recording; recording = on;
+  const b = $('rec-btn');
+  b.classList.toggle('recording', on); b.classList.remove('paused');
+  recLabel('', on ? 'Stop' : 'Record');
+  clearInterval(recClock.timer);
+  if (on) {
+    Object.assign(recClock, { start: Date.now(), pausedAt: 0, paused: 0 });
+    b.insertAdjacentHTML('beforeend', '<span class="rec-time">0:00.0</span>');
+    recClock.timer = setInterval(tickRec, 100); tickRec();
+  }
+  if (was !== on) blinkMark(); renderStatusSegs();
   try { applyShortcutHints(); } catch { }
   $('rec-pause').hidden = !on; if (!on) setPausedUi(false);
 }
-function setPausedUi(p) { $('rec-pause').innerHTML = icon(p ? 'i-play' : 'i-pause') + `<span>${p ? 'Resume' : 'Pause'}</span>`; $('rec-pause').dataset.paused = p; }
+function setPausedUi(p) {
+  $('rec-pause').innerHTML = icon(p ? 'i-play' : 'i-pause') + `<span>${p ? 'Resume' : 'Pause'}</span>`; $('rec-pause').dataset.paused = p;
+  if (!recording) return;
+  $('rec-btn').classList.toggle('paused', !!p);
+  if (p && !recClock.pausedAt) recClock.pausedAt = Date.now();
+  if (!p && recClock.pausedAt) { recClock.paused += Date.now() - recClock.pausedAt; recClock.pausedAt = 0; }
+}
 $('rec-pause').onclick = () => invoke('pause_recording', { paused: $('rec-pause').dataset.paused !== 'true' }).catch(fail);
 window.__TAURI__.event.listen('rec-paused', e => { setPausedUi(!!e.payload); if (recording) status(e.payload ? 'Paused. Input capture is stopped and this part will be cut.' : 'Recording.', 'busy'); });
+let countdownTimer = 0;
 window.__TAURI__.event.listen('rec-phase', e => {
-  if (e.payload === 'countdown') status('Starting in 3 seconds. Click the number to cancel.', 'busy');
+  if (e.payload !== 'countdown' || recording) return;
+  status('Starting in 3 seconds. Press Esc or click the number to cancel.', 'busy');
+  // The button turns into the countdown, and a click or Esc cancels it.
+  let n = 3; const b = $('rec-btn');
+  recLabel('countdown', 'Starting in <span class="num">3</span>'); b.disabled = false;
+  clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => { n -= 1; const el = b.querySelector('.num'); if (n < 1 || !el) return clearInterval(countdownTimer); el.textContent = n; }, 1000);
 });
+const inCountdown = () => $('rec-btn').classList.contains('countdown');
+const cancelCountdown = () => invoke('cancel_countdown').catch(() => { });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && inCountdown() && !document.querySelector('dialog[open]')) { cancelCountdown(); e.preventDefault(); } });
 $('rec-btn').onclick = async () => {
+  if (inCountdown()) return cancelCountdown();
   if ($('rec-btn').disabled) return;
   try {
     if (!recording) {
       const target = recSource.target;
-      $('rec-btn').disabled = true; status('Getting the recorder ready. The countdown starts once the screen is actually coming through.', 'busy');
+      $('rec-btn').disabled = true; recLabel('preparing', 'Getting ready'); status('Getting the recorder ready. The countdown starts when the screen comes through.', 'busy');
       await meterStopAndWait();
       showRecWarn([]);
       let warn;
       try { warn = await invoke('start_recording', { target, mic: $('rec-mic').getAttribute('aria-pressed') === 'true', systemAudio: $('rec-sys').getAttribute('aria-pressed') === 'true', keys: $('rec-keys').getAttribute('aria-pressed') === 'true' ? 'on' : 'off', webcam: $('rec-cam').getAttribute('aria-pressed') === 'true', micDevice: $('rec-mic-dev').value || null, maxHeight: $('rec-res').value === '' ? null : +$('rec-res').value, countdown: 3 }); }
-      finally { $('rec-btn').disabled = false; }
+      finally { $('rec-btn').disabled = false; clearInterval(countdownTimer); }
       setRecUi(true); localStorage.setItem('mic-ok', '1');
       if (!IS_WIN && $('rec-mic').getAttribute('aria-pressed') === 'true') meterStart();
       const w = warn.filter(x => x !== 'recording without audio');
@@ -512,10 +583,10 @@ $('rec-btn').onclick = async () => {
         micWatch = 0;
         if (ins) { applySplice(p, ins); } else setProject(p, null);
       } finally { $('rec-btn').disabled = false; }
-      if (!ins && $('rec-warn').hidden) status('Recording loaded. Try Run auto edit.', 'success'); setTimeout(() => meterStart(), 500);
-      hideBusy();
+      if (!ins && $('rec-warn').hidden) status('Recording loaded. Run auto edit when you are ready.', 'success'); setTimeout(() => meterStart(), 500);
+      hideBusy(); $('play').focus();
     }
-  } catch (e) { setRecUi(false); hideBusy(); if (typeof clearTakePlan === 'function') clearTakePlan(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
+  } catch (e) { clearInterval(countdownTimer); setRecUi(false); hideBusy(); if (typeof clearTakePlan === 'function') clearTakePlan(); if (!/cancelled/i.test(String(e))) fail(e); else status('Recording cancelled.', 'info'); }
 };
 
 // Selecting a zoom or a note on the timeline opens its settings (the Edit tab),
@@ -534,7 +605,10 @@ function selectTab(name) {
 }
 document.querySelectorAll('.tab').forEach((t, i, all) => {
   t.onclick = () => selectTab(t.id.slice(4));
-  t.onkeydown = e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = all[(i + (e.key === 'ArrowRight' ? 1 : all.length - 1)) % all.length]; n.click(); n.focus(); } };
+  t.onkeydown = e => {
+    const j = e.key === 'ArrowRight' ? (i + 1) % all.length : e.key === 'ArrowLeft' ? (i + all.length - 1) % all.length : e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : -1;
+    if (j >= 0) { e.preventDefault(); all[j].click(); all[j].focus(); }
+  };
 });
 
 // ---------- Templates ----------
@@ -582,14 +656,26 @@ function markDestination() {
   document.querySelectorAll('#destinations button').forEach(x => x.setAttribute('aria-pressed', !!first && x.dataset.d === first.id));
 }
 // First-run checklist on the welcome card. Remembered on this computer only.
+// The strip shows done, current and next, and hides once all three are done
+// or the person hides it (Settings > Appearance brings it back).
+const lsGet = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
 function markDone(n) { try { localStorage.setItem('dl.step' + n, '1'); } catch (_) {} renderSteps(); }
 function renderSteps() {
-  document.querySelectorAll('.steps li').forEach((li, i) => {
-    let d = false; try { d = localStorage.getItem('dl.step' + (i + 1)) === '1'; } catch (_) {}
-    li.classList.toggle('done', d); const b = li.querySelector('b'); if (b) b.textContent = d ? '\u2713' : String(i + 1);
+  const items = [...document.querySelectorAll('#steps li:not(.x)')];
+  const done = items.map((_, i) => lsGet('dl.step' + (i + 1)) === '1');
+  const cur = done.indexOf(false);
+  items.forEach((li, i) => {
+    li.className = done[i] ? 'done' : i === cur ? 'current' : 'next';
+    if (i === cur) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    li.querySelector('.n').innerHTML = done[i] ? icon('i-check') : String(i + 1);
   });
+  $('steps').hidden = cur === -1 || lsGet('dl.steps.hidden') === '1';
 }
+$('steps-hide').onclick = () => { try { localStorage.setItem('dl.steps.hidden', '1'); } catch (_) {} renderSteps(); };
 renderSteps();
+// Shortcut hints on the welcome and the empty timeline use the platform's key.
+document.querySelectorAll('.kbd-mod').forEach(k => (k.textContent = /Mac/i.test(navigator.platform) ? '\u2318' : 'Ctrl'));
+$('tl-empty-open').onclick = () => $('open-btn').click();
 
 async function doExport() {
   if (!project || busy) return;
@@ -775,9 +861,32 @@ async function refreshModels() {
   loadAiStatus();
   try { models = (await invoke('models_list')).models; } catch { return; }
   const has = k => models.some(m => m.kind === k && m.installed);
-  const ocr = models.filter(m => m.kind === 'ocr').every(m => m.installed);
-  const pill = (el, ok, label) => { el.className = 'pill ' + (ok ? 'ok' : 'missing'); el.textContent = ok ? 'ready' : label; el.title = ok ? 'Model installed' : 'Click to download the model'; el.onclick = ok ? null : e => { e.preventDefault(); showModels(); }; };
-  pill($('pill-speech'), has('speech'), 'needs model'); pill($('pill-ocr'), ocr, 'needs model');
+  // An empty list is not "ready": every() is true for no models at all.
+  const ocrModels = models.filter(m => m.kind === 'ocr');
+  const ocr = ocrModels.length > 0 && ocrModels.every(m => m.installed);
+  const tag = (el, ok) => { el.className = 'tag ' + (ok ? 'ok' : 'missing'); el.textContent = ok ? 'Ready' : 'Needs model'; el.title = ok ? 'Model installed' : 'Click to download the model'; el.onclick = ok ? null : e => { e.preventDefault(); showModels(); }; };
+  tag($('pill-speech'), has('speech')); tag($('pill-ocr'), ocr);
+  renderStatusSegs();
+}
+// Status bar context on the right: models, mic and version, or the project's save state.
+var appVersion = '';
+invoke('ffmpeg_status').then(st => { appVersion = (st && st.app_version) || ''; renderStatusSegs(); }).catch(() => { });
+function renderStatusSegs() {
+  const box = $('sb-segs'); if (!box) return;
+  const inst = models.filter(m => m.installed);
+  const bytes = inst.reduce((a, m) => a + (m.size || 0), 0);
+  const seg = (txt, cls = '', ic = '') => `<span class="seg-i ${cls}">${ic ? icon(ic) : ''}${esc(txt)}</span>`;
+  const mdl = inst.length ? seg(`${inst.length} model${inst.length === 1 ? '' : 's'}${bytes ? ', ' + (bytes / 1e6).toFixed(0) + ' MB' : ''}`, '', 'i-chip') : '';
+  let html = '';
+  if (recording) html = seg((/Mac/i.test(navigator.platform) ? 'Cmd' : 'Ctrl') + '+R to stop');
+  else if (project) {
+    const dirty = saved === null || history[hIdx] !== saved;
+    html = seg(dirty ? 'Unsaved changes' : 'Saved', dirty ? 'warn' : '') + mdl;
+  } else {
+    const mic = $('rec-mic-dev').selectedOptions[0];
+    html = mdl + (mic ? seg(mic.textContent, 'mic', 'i-mic') : '') + (appVersion ? seg('v' + appVersion, 'mono') : '');
+  }
+  box.innerHTML = html;
 }
 async function showModels(note) {
   const m = await invoke('models_list');
@@ -1306,18 +1415,29 @@ async function loadAiStatus() {
 }
 function renderAiStatus() {
   const s = aiState; if (!s) return;
-  $('ai-status').innerHTML = s.features.map(f => {
-    const [label, cls] = STATE_LABEL[f.state] || [f.state, ''];
-    const dl = f.needs.length ? `<button class="btn sm" data-dl="${f.needs.map(n => n.id).join(',')}">${f.state === 'error' ? 'Fix' : 'Download'} ${esc(f.needs.reduce((a, n) => a + n.size, 0) > 1e6 ? (f.needs.reduce((a, n) => a + n.size, 0) / 1e6).toFixed(0) + ' MB' : '')}</button>` : '';
+  const mb = n => n > 1e6 ? (n / 1e6).toFixed(0) + ' MB' : '';
+  // One card per feature. The state picks the tag, the border and the action.
+  $('ai-status').innerHTML = s.features.length ? s.features.map(f => {
+    const size = mb(f.needs.reduce((a, n) => a + n.size, 0));
+    const tag = f.state === 'ready' ? '<span class="tag ok">Ready</span>'
+      : f.state === 'needs_model' ? '<span class="tag warn">Needs model</span>'
+      : f.state === 'needs_cloud' ? '<span class="tag warn">Needs cloud provider</span>'
+      : f.state === 'error' ? '<span class="tag err">Needs a fix</span>'
+      : f.state === 'cloud' ? `<span class="tag">${esc('Using ' + (f.provider || 'cloud'))}</span>` : `<span class="tag">${esc(f.state)}</span>`;
+    const dl = f.needs.length ? `<button class="btn sm" data-dl="${f.needs.map(n => n.id).join(',')}">${icon('i-down')}<span>${f.state === 'error' ? 'Download again' : 'Download'}${size ? ', ' + size : ''}</span></button>` : '';
     const test = f.can_test && f.state !== 'error' ? `<button class="btn ghost sm" data-test="${f.id}" title="Run a quick check with the installed model">Test</button>` : '';
-    return `<div class="feat"><div class="feat-h"><b>${esc(f.title)}</b><span class="pill ${cls}">${esc(f.provider && f.state === 'cloud' ? 'Using ' + f.provider : label)}</span></div>
-      <small>${esc(f.detail)}</small><div class="row feat-a">${dl}${test}<small class="muted" data-res="${f.id}"></small></div></div>`;
-  }).join('');
+    const body = f.state === 'error' ? `<p class="err">${esc(f.detail)}</p>` : `<p class="meta">${esc(f.detail)}</p>`;
+    return `<div class="model ${f.state === 'error' ? 'error' : ''}" data-feat="${f.id}"><div class="model-h"><b>${esc(f.title)}</b>${tag}</div>${body}<div class="actions">${dl}${test}<small class="muted" data-res="${f.id}"></small></div></div>`;
+  }).join('') : '<p class="muted small">No model features to show.</p>';
   $('ai-dl-all').hidden = !s.recommended_missing.length;
   const total = s.recommended_missing.reduce((a, m) => a + m.size, 0);
   $('ai-dl-all').querySelector('span').textContent = `Download recommended models (${(total / 1e6).toFixed(0)} MB)`;
   document.querySelectorAll('#ai-status [data-dl]').forEach(b => (b.onclick = async () => {
+    // Downloading: the card shows a bar (indeterminate until per model progress exists) and the word.
+    const card = b.closest('.model'); const tagEl = card.querySelector('.tag');
+    if (tagEl) { tagEl.className = 'tag'; tagEl.textContent = 'Downloading'; }
     b.disabled = true; b.textContent = 'Downloading...';
+    card.querySelector('.actions').insertAdjacentHTML('beforebegin', '<div class="bar indet"><div></div></div>');
     try { for (const id of b.dataset.dl.split(',')) await invoke('model_download', { id }); status('Model downloaded. It is ready to use.', 'success'); } catch (e) { fail(e); }
     loadAiStatus(); refreshModels();
   }));
@@ -1335,6 +1455,7 @@ $('ai-dl-all').onclick = async () => {
   $('ai-dl-all').disabled = false; setTimeout(() => ($('ai-dl-wrap').hidden = true), 1200); loadAiStatus(); refreshModels();
 };
 $('ai-cloud-link').onclick = () => showSettings('cloud');
+$('rec-mic-dev').addEventListener('change', () => renderStatusSegs());
 window.__TAURI__.event.listen('ai-progress', e => {
   const p = e.payload;
   if (p.task === 'download:all') { $('ai-dl-bar').style.width = (p.progress * 100) + '%'; $('ai-dl-text').textContent = p.message; }
@@ -1372,7 +1493,7 @@ async function loadCloud() {
   try { cloudState = await invoke('cloud_status'); } catch { }
   try { const s = await invoke('s3_get'); storageReady = !!(s.config.bucket && s.secret_set); } catch { }
   const on = Object.keys(cloudState.choice || {});
-  $('ai-badge').textContent = on.length ? 'cloud: ' + on.join(', ') : 'offline';
+  $('ai-badge').textContent = on.length ? 'Cloud: ' + on.join(', ') : 'On this computer';
   $('ai-badge').title = on.length ? 'Some tasks use a cloud provider you turned on in Settings. You will see what is sent first.' : 'Models run on this computer. Nothing is uploaded.';
 }
 
@@ -1451,7 +1572,9 @@ async function showSettings(tab = 'privacy') {
       <p class="muted small">A frosted, translucent look for the toolbar, sidebar and dialogs. ${IS_MAC ? 'On a Mac the window itself is see-through and macOS blurs what is behind it.' : 'Here it is a blur drawn in the page, so it only shows over other content, such as behind dialogs.'}</p>
       ${g.reduce ? '<p class="warn-note">Reduce Transparency is on in your system settings, so the glass look is paused. Turn that off in the system accessibility settings to see it.</p>' : ''}
       ${IS_MAC || /Win/i.test(navigator.platform) ? `<label class="switch"><input type="checkbox" id="set-tray" ${st.menu_bar !== false ? 'checked' : ''} /> Show Booya in the ${IS_MAC ? 'menu bar' : 'system tray'} for quick recording</label>` : ''}
-      <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>`;
+      <p class="muted small">The exported video has its own glass frame: open the Style tab and turn on Glass.</p>
+      <label class="switch"><input type="checkbox" id="set-steps" ${lsGet('dl.steps.hidden') !== '1' ? 'checked' : ''} /> Show getting started steps</label>
+      <p class="muted small">The three steps on the welcome screen. They hide by themselves once you have done all three.</p>`;
   }
   if (tab === 'shortcuts') body = '<div id="sc-body"><p class="muted small">Loading...</p></div>';
   if (tab === 'audio') body = `<p class="muted small">What the editor's sound is doing right now. Copy this into a bug report. It is also written to a log file.</p><pre id="ad-body" class="diag">Reading...</pre><div class="row"><button class="btn sm" id="ad-refresh">Refresh</button><button class="btn sm ghost" id="ad-copy">Copy</button><button class="btn sm ghost" id="ad-test">Play 2 seconds</button></div>`;
@@ -1471,6 +1594,7 @@ async function showSettings(tab = 'privacy') {
   if (tab === 'permissions') Permissions.mount($('perm-body'), { embedded: true });
   if (tab === 'shortcuts') renderShortcutsPage();
   if ($('set-glass')) $('set-glass').onchange = async () => { glassPref = $('set-glass').checked; await invoke('set_glass_ui', { enabled: glassPref }).catch(fail); await applyGlassUi(); status(glassPref ? 'Glass look on.' : 'Glass look off.', 'success'); };
+  if ($('set-steps')) $('set-steps').onchange = () => { try { localStorage.setItem('dl.steps.hidden', $('set-steps').checked ? '0' : '1'); } catch (_) {} renderSteps(); };
   if ($('set-tray')) $('set-tray').onchange = () => invoke('set_menu_bar', { enabled: $('set-tray').checked }).then(() => status('Saved.', 'success'), fail);
   const again = () => showSettings(tab);
   if ($('set-ret')) $('set-ret').onchange = async () => { const n = await invoke('set_retention', { days: +$('set-ret').value || null }); status(n ? `Deleted ${n} old recording(s).` : 'Saved.', 'success'); again(); };

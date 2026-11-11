@@ -339,8 +339,10 @@ class Timeline {
     let acc = 0; const [ca, cb] = this.L.clips;
     this.project.clips.forEach((c, i) => {
       const len = (c.src_end_ms - c.src_start_ms) / c.speed, a = this.x(acc), b = this.x(acc + len);
-      ctx.fillStyle = i === this.selectedClip ? C('--tl-clip-sel') : C('--tl-clip');
+      // Every clip has the clip grey; the selected one gets a 1.5 px text-colour edge.
+      ctx.fillStyle = C('--tl-clip');
       rr(ctx, a + 1, ca, Math.max(2, b - a - 2), cb - ca, 6); ctx.fill();
+      if (i === this.selectedClip) { ctx.strokeStyle = C('--tl-clip-sel'); ctx.lineWidth = 1.5; rr(ctx, a + 1.75, ca + .75, Math.max(2, b - a - 3.5), cb - ca - 1.5, 5.5); ctx.stroke(); ctx.lineWidth = 1; }
       if (b - a > 40) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`Clip ${i + 1}${c.speed !== 1 ? '  ' + c.speed + 'x' : ''}`, a + 8, (ca + cb) / 2); }
       acc += len;
     });
