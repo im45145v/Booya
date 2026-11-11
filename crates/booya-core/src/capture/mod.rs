@@ -821,6 +821,14 @@ impl RecordingSession {
         if let Some(w) = self.mic_verdict.as_ref().and_then(|v| v.message()) {
             warnings.push(w);
         }
+        // Written down for `booya verify` and bug reports: where the voice
+        // really started against where its file says, and how its clock ran.
+        // This has to happen before the system audio is folded in, because
+        // that mix replaces the microphone file and deletes the packet log.
+        let side = crate::finalize::mic_sidecar(&self.video);
+        if let (Some(c), Some((file_start, _))) = (crate::finalize::mic_clock(&side), crate::finalize::stream_times(&side, "a:0")) {
+            mic::log_line(&audio_log, &format!("microphone clock: first sample at {:.3}s (first packet read at {file_start:.3}s), {:.5} s of samples per second over {:.1}s", c.start_s, c.ratio, c.span_s));
+        }
         // Fold the system audio into the sound file the remux joins to the screen.
         match sys_result {
             Some(Err(e)) => warnings.push(format!("System audio not recorded: {e}")),
@@ -833,12 +841,6 @@ impl RecordingSession {
                 }
             },
             None => {}
-        }
-        // Written down for `booya verify` and bug reports: where the voice
-        // really started against where its file says, and how its clock ran.
-        let side = crate::finalize::mic_sidecar(&self.video);
-        if let (Some(c), Some((file_start, _))) = (crate::finalize::mic_clock(&side), crate::finalize::stream_times(&side, "a:0")) {
-            mic::log_line(&audio_log, &format!("microphone clock: first sample at {:.3}s (first packet read at {file_start:.3}s), {:.5} s of samples per second over {:.1}s", c.start_s, c.ratio, c.span_s));
         }
         let remuxed = crate::finalize::remux_to_mp4_info(&self.video);
         let (video, video_start_s) = match remuxed {
