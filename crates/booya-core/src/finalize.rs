@@ -310,6 +310,14 @@ pub fn sys_sidecar(mkv: &Path) -> PathBuf {
 /// clipping. A start far outside the recording's clock (over 30 s apart) is
 /// treated as unaligned and starts with the other.
 pub fn system_mix_filter(mic_start: f64, sys_start: f64) -> String {
+    system_mix_filter_rate(mic_start, sys_start, None)
+}
+
+/// Like [`system_mix_filter`], with an optional rate correction applied to
+/// the microphone (input 0) before it is delayed and mixed. The correction
+/// is the same filter [`clock_rate_filter`] builds, so a slow or fast
+/// microphone clock is stretched over the wall-clock time it really took.
+pub fn system_mix_filter_rate(mic_start: f64, sys_start: f64, mic_rate: Option<&str>) -> String {
     let (mut m, mut s) = (mic_start, sys_start);
     if (m - s).abs() > 30.0 {
         if m < s { s = m } else { m = s }
@@ -317,7 +325,8 @@ pub fn system_mix_filter(mic_start: f64, sys_start: f64) -> String {
     let base = m.min(s);
     let ms = |t: f64| ((t - base).max(0.0) * 1000.0).round() as i64;
     let fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=N/SR/TB";
-    format!("[0:a]{fmt},adelay={}:all=1[m];[1:a]{fmt},volume=0.8,adelay={}:all=1[s];[m][s]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[o]", ms(m), ms(s))
+    let rate = mic_rate.filter(|r| !r.is_empty()).map(|r| format!(",{r}")).unwrap_or_default();
+    format!("[0:a]{fmt}{rate},adelay={}:all=1[m];[1:a]{fmt},volume=0.8,adelay={}:all=1[s];[m][s]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[o]", ms(m), ms(s))
 }
 
 /// Folds the system audio sidecar into the microphone sidecar, so the remux
@@ -339,10 +348,14 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     }
     let (m, s) = (stream_times(&mic, "a:0"), stream_times(&sys, "a:0"));
     let (Some(mut m), Some(s)) = (m, s) else { bail!("the {} file could not be read", if m.is_none() { "microphone" } else { "system audio" }) };
-    // The voice's real start from its packet log. The mixed file replaces
-    // the microphone file, so the log no longer describes it afterwards.
+    // The voice's real start and rate from its packet log. The mixed file
+    // replaces the microphone file, so the log no longer describes it
+    // afterwards. The rate used to be ignored here, and the log was
+    // deleted, so the remux could not correct it either.
+    let mut rate = None;
     if let Some(c) = mic_clock(&mic).filter(|c| (c.start_s - m.0).abs() < 5.0) {
         m.0 = c.start_s;
+        rate = clock_rate_filter(c.ratio);
     }
     let tmp = mic.with_extension("mkv.part");
     let base = m.0.min(s.0);
@@ -351,7 +364,7 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
         .arg(&mic)
         .arg("-i")
         .arg(&sys)
-        .args(["-filter_complex", &system_mix_filter(m.0, s.0), "-map", "[o]", "-c:a", "pcm_f32le", "-output_ts_offset", &format!("{:.3}", if (m.0 - s.0).abs() > 30.0 { m.0 } else { base }), "-f", "matroska"])
+        .args(["-filter_complex", &system_mix_filter_rate(m.0, s.0, rate.as_deref()), "-map", "[o]", "-c:a", "pcm_f32le", "-output_ts_offset", &format!("{:.3}", if (m.0 - s.0).abs() > 30.0 { m.0 } else { base }), "-f", "matroska"])
         .arg(&tmp)
         .stdin(Stdio::null())
         .output()
@@ -955,5 +968,47 @@ mod tests {
         assert!(f.contains("adelay=1000:all=1[m]") && f.contains("adelay=0:all=1[s]"), "{f}");
         let far = system_mix_filter(1.0, 5000.0);
         assert!(far.contains("adelay=0:all=1[m]") && far.contains("adelay=0:all=1[s]"), "an unaligned clock starts with the other: {far}");
+    }
+
+    #[test]
+    fn the_mix_stretches_a_drifting_microphone_clock() {
+        let rate = clock_rate_filter(0.98).unwrap();
+        let f = system_mix_filter_rate(0.5, 1.0, Some(&rate));
+        assert!(f.contains(&rate) && f.contains("adelay=0:all=1[m]") && f.contains("adelay=500:all=1[s]"), "{f}");
+        // The rate sits on the microphone branch only, before the delay.
+        let mic_branch = f.split("[m];").next().unwrap();
+        assert!(mic_branch.contains(&rate), "{f}");
+        assert!(!f.split("[m];").nth(1).unwrap().contains(&rate), "the system sound is not stretched: {f}");
+        let exact = system_mix_filter_rate(0.5, 1.0, clock_rate_filter(1.0).as_deref());
+        assert!(!exact.contains("atempo") && !exact.contains("asetrate"), "{exact}");
+    }
+
+    #[test]
+    fn a_slow_microphone_is_stretched_when_mixed_with_system_audio() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("sysmix-rate");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| {
+            crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success()
+        };
+        // Voice and system sound both stamped from 1.0 s, matching the
+        // packet log's start. 2 s of voice at a 10% slow clock really took
+        // 2 / 0.9 s of wall time; the 1 s of system sound is shorter, so
+        // the mix should last that stretched voice.
+        assert!(run(&["-itsoffset", "1.0", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=2", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        assert!(run(&["-itsoffset", "1.0", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:d=1", "-c:a", "pcm_f32le"], &sys_sidecar(&mkv)));
+        // A 40 s log so the rate fit is used (takes under 30 s are treated as exact).
+        let c = parse_mic_timing(&timing_text(1.0 / 0.9, 40.0)).unwrap();
+        assert!((c.ratio - 0.9).abs() < 0.005, "{c:?}");
+        assert!((c.start_s - 1.0).abs() < 0.05, "{c:?}");
+        std::fs::write(mic_timing(&mic_sidecar(&mkv)), timing_text(1.0 / 0.9, 40.0)).unwrap();
+        assert!(merge_system_audio(&mkv).unwrap());
+        assert!(!mic_timing(&mic_sidecar(&mkv)).exists(), "the log goes with the raw microphone file");
+        let (start, dur) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
+        assert!((start - 1.0).abs() < 0.06, "keeps the shared start: {start}");
+        assert!((dur - (2.0 / 0.9)).abs() < 0.12, "2 s of voice at 0.9 samples/s becomes {:.3}s, got {dur}", 2.0 / 0.9);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
