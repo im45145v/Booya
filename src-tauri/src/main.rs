@@ -517,8 +517,8 @@ async fn start_recording(
     // Recordings go to Videos/Booya/<timestamp>. The folder is only
     // created once capture really starts (see capture::start).
     let base = recordings_dir(&app)?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let out_dir = base.join(format!("recording-{stamp}"));
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let out_dir = booya_core::storage::new_recording_dir(&base, stamp);
     let mic_device = mic_device.filter(|m| !m.is_empty());
     // Nothing may hold the microphone when the recorder opens it: stop the
     // level meter here, in Rust, rather than trusting the page to have done it.
