@@ -276,7 +276,7 @@ fn start_ffmpeg(device: Option<&str>, epoch: f64, out: &Path, log: &Path,
     cmd.args(["-copyts", "-thread_queue_size", "2048", "-use_wallclock_as_timestamps", "1", "-itsoffset", &format!("-{epoch:.3}"),
     ]);
     cmd.args(&input);
-    cmd.args(["-map", "0:a:0", "-af", super::mic_timeline_filter(), "-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).arg(out);
+    cmd.args(["-map", "0:a:0", "-af", super::mic_timeline_filter(), "-vn", "-c:a", "pcm_f32le", "-flush_packets", "1"]).args(super::LIVE_MKV_ARGS).arg(out);
     // A second, tiny output lists every packet as it was read: its wall-clock
     // time and its size. The audio file above is laid out by sample count,
     // so this is what tells, at the end, where the first sample really was
