@@ -2,6 +2,8 @@
 //
 //  * #split-v  between the preview and the side panel (panel 260 to 520 px).
 //  * #split-h  between the preview and the timeline (timeline 96 to 252 px).
+//    The timeline opens at 232 px. A height is remembered only once the person
+//    has dragged the splitter (saved.tlUser), so older saved heights do not stick.
 //
 // Sizes are saved in localStorage. What is saved is what the user chose; what
 // is applied is that choice clamped to the window as it is now, so a small
@@ -10,8 +12,8 @@
 // arrow keys, and reset on double click (or double tap), Home or Enter.
 (() => {
   const KEY = 'booya.layout.v1';
-  const PANEL = { min: 260, max: 520, def: 300 };
-  const TL = { min: 96, max: 252, def: 252 };
+  const PANEL = { min: 260, max: 520, def: 320 };
+  const TL = { min: 96, max: 252, def: 232 };
   // The preview never gets smaller than this because of a splitter.
   const PREVIEW_MIN_W = 360, PREVIEW_MIN_H = 150;
   const root = document.documentElement;
@@ -40,7 +42,7 @@
   function apply() {
     const lim = limits();
     const panel = Math.round(clamp(saved.panel, PANEL.min, lim.panelMax));
-    const tl = Math.round(clamp(saved.tl, TL.min, lim.tlMax));
+    const tl = Math.round(clamp(saved.tlUser ? saved.tl : TL.def, TL.min, lim.tlMax));
     root.style.setProperty('--panel-w', panel + 'px');
     root.style.setProperty('--tl-h', tl + 'px');
     const v = document.getElementById('split-v'), h = document.getElementById('split-h');
@@ -58,10 +60,10 @@
     const set = px => {
       const lim = limits();
       if (axis === 'x') saved.panel = Math.round(clamp(px, PANEL.min, lim.panelMax));
-      else saved.tl = Math.round(clamp(px, TL.min, lim.tlMax));
+      else { saved.tl = Math.round(clamp(px, TL.min, lim.tlMax)); saved.tlUser = true; }
       apply();
     };
-    const reset = () => { saved[axis === 'x' ? 'panel' : 'tl'] = axis === 'x' ? PANEL.def : TL.def; apply(); persist(); };
+    const reset = () => { if (axis === 'x') saved.panel = PANEL.def; else { saved.tl = TL.def; delete saved.tlUser; } apply(); persist(); };
     el.addEventListener('pointerdown', e => {
       if (e.button !== undefined && e.button > 0) return;
       // Double click or double tap resets. (dblclick does not fire for touch.)
@@ -115,5 +117,6 @@
   wire(document.getElementById('split-h'), 'y');
   apply();
   // For tests and for other scripts that need the numbers.
-  window.BooyaLayout = { apply, limits, saved: () => ({ ...saved }), KEY, PANEL, TL };
+  const setPref = (k, v) => { saved[k] = v; persist(); };
+  window.BooyaLayout = { apply, limits, saved: () => ({ ...saved }), setPref, KEY, PANEL, TL };
 })();

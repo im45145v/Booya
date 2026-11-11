@@ -125,11 +125,12 @@ Put `assets/social/readme-header-light.png` and `readme-header-dark.png` in `doc
 5. Replace hard coded colours. Search for `#E9E4FB`, `#7C5CFA`, `#F7B6C8`, `lavender`, `violet`, `purple` and `pink`, plus any old font family, and map each to a `--by-*` variable.
 
 Rules that matter in code:
-- **Signal (#FF5A1F / #FF6A33) is for the record dot, the Stop button, the ripple and the focus frame.** Keep it under 10% of any screen.
+- **Signal fill is for Record and Stop only.** The app's Record button is a Signal fill in idle and while recording, with Ink text. Signal also marks record dots, the recording timer, the playhead, the ripple and the ghost's arc. Primary actions (Run auto edit, Export, Save) are Paper on Night or Ink on Paper, never orange. Keep Signal under 2% of any screen.
+- The app UI uses the `--by-ui-*` layer in `tokens.css` (surfaces, borders, text tiers, actions). Its contrast pairs are listed at the end of `tokens/CONTRAST.md`.
 - Never use Signal for body text on Paper (2.81:1). For orange text on light backgrounds use `--by-signal-text` (#BF4317, 4.69:1 on Paper).
 - Text on a Signal fill is Ink, never white (white is 3.12:1).
 - Put the record dot on Surface (the toolbar), not directly on Paper.
-- Focus ring: `--by-focus` with a 2 px outline and 2 px offset, already set on `:focus-visible` in tokens.css.
+- Focus ring: `--by-focus` with a 2 px outline and 2 px offset, already set on `:focus-visible` in tokens.css. Never orange, never a glow.
 - Motion: ripple 400 ms, blink 120 ms, UI 150 to 200 ms. `prefers-reduced-motion` is handled in tokens.css. Keep that path working.
 - Full contrast results are in `tokens/CONTRAST.md`.
 
@@ -167,3 +168,9 @@ Rules that matter in code:
 - `fonts/`: Geist and Geist Mono variable TTFs with OFL licences
 - `guideline/`: booya-brand-guideline.pdf, .html, page PNGs
 - `src/`: the Python generators. Run `python3 src/build_all.py` (or each `build_*.py`) to rebuild everything after a geometry change in `src/geom.py`
+
+## App UI v2: ink on paper
+
+`ui/styles/booya-v2.css` loads after `ui/style.css` and layers Ludo's v2 spec on top of the v1 build. It retunes the dark `--by-ui-*` values to a warm ink, adds the `--by-ui-sheet-*`, `--by-ui-well` and `--by-ui-clip*` tokens, and styles the paper sheet stage, the hero, the instrument timeline, the field notebook panel and the readout status bar. The paper grain is `ui/assets/grain.png`, used on the empty sheet only.
+
+Signal is a live colour. It fills Record, the Stop segment and the playhead tab, and marks live dots, the click ripple, zoom brackets and the one headline underline. It is never used for links, tabs or selected states. Contrast for the v2 pairs is in `tokens/CONTRAST-v2.md`.
