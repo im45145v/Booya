@@ -5,7 +5,7 @@ default-members = ["crates/booya-core", "crates/booya-ai", "crates/booya-cli", "
 
 [workspace.package]
 rust-version = "1.88"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 license = "MIT"
 authors = ["Ashish Malla <im45145v@users.noreply.github.com>"]
