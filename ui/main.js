@@ -10,6 +10,9 @@ const icon = (id, cls = 'ico') => `<svg class="${cls}" aria-hidden="true"><use h
 const VIDEO_EXT = ['mkv', 'mp4', 'mov', 'webm', 'avi'];
 
 let project = null, projectPath = null, playing = false, recording = false, busy = false, saved = null;
+// The state a never-saved project was loaded in (a new take, a video file).
+// Edits since then are unsaved even though `saved` is null.
+let pristine = null;
 let pending = false, again = false, lastExport = null, models = [];
 
 // File dialogs run in Rust, which then allows writes to exactly the chosen path.
@@ -59,9 +62,22 @@ const scheduleCheckpoint = () => { clearTimeout(cpTimer); cpTimer = setTimeout(c
 function restore() { const t = tl.playhead; const prevSrc = project?.source; project = JSON.parse(history[hIdx]); tl.project = project; if (project.source !== prevSrc) { tl.setProject(project); prepareProxy(); } tl.playhead = Math.min(t, tl.outDur()); syncPanel(); tl.draw(); refresh(); updUndo(); }
 function undo() { clearTimeout(cpTimer); checkpoint(); if (hIdx > 0) { hIdx--; restore(); status('Undone'); } }
 function redo() { if (hIdx < history.length - 1) { hIdx++; restore(); status('Redone'); } }
+// True when the open project has edits that would be lost. A project that
+// was never saved counts as soon as it differs from how it was loaded.
+function isDirty() {
+  if (!project) return false;
+  return history[hIdx] !== (saved !== null ? saved : pristine);
+}
+// Asks before something replaces a project with unsaved edits. Resolves true
+// when it is fine to go ahead.
+async function okToReplace(what) {
+  clearTimeout(cpTimer); checkpoint();
+  if (!isDirty()) return true;
+  return confirmBox('Discard unsaved changes?', `<p>${esc(what)} replaces the project you are editing, and its unsaved changes will be lost. Cancel and press Save to keep them.</p>`, 'Discard changes', 'Cancel');
+}
 function updTitle() {
   if (!project) { $('project-name').textContent = ''; return; }
-  const dirty = saved !== null && history[hIdx] !== saved;
+  const dirty = isDirty();
   $('project-name').innerHTML = esc(projectPath ? baseName(projectPath) : baseName(project.source) + ' (not saved)') + (dirty ? ' <span class="dirty" title="Unsaved changes">&bull;</span>' : '');
   renderStatusSegs();
 }
@@ -81,7 +97,7 @@ function setProject(p, path = null) {
   }
   document.body.classList.add('has-project');
   project = p; projectPath = path; tl.selectedZoom = -1; tl.selectedLayout = -1; tl.selectedClip = 0; tl.playhead = 0; tl.setProject(p);
-  history = [JSON.stringify(p)]; hIdx = 0; saved = path ? history[0] : null; updUndo();
+  history = [JSON.stringify(p)]; hIdx = 0; saved = path ? history[0] : null; pristine = history[0]; updUndo();
   markDone(1); $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
   if (/^Ready/.test($('status').textContent)) status(idleText(), 'idle');
@@ -431,6 +447,7 @@ $('play').onclick = () => project && setPlaying(!playing);
 
 // ---------- Open, save, sample ----------
 async function openAny(path) {
+  if (!(await okToReplace('Opening another file'))) return;
   try {
     if (!path) path = await dialog.open({ multiple: false, filters: [{ name: 'Video or Booya project', extensions: [...VIDEO_EXT, 'json'] }] });
     if (!path) return;
@@ -464,6 +481,7 @@ async function save(as) {
   } catch (e) { fail(e); }
 }
 async function trySample() {
+  if (!(await okToReplace('Loading the sample'))) return;
   showBusy('Building the sample recording...');
   try { const r = await invoke('make_sample'); setProject(r.project, r.path); status('Sample loaded. Press Run auto edit to try it.', 'success'); selectTab('magic'); }
   catch (e) { fail(e); }
@@ -562,6 +580,10 @@ $('rec-btn').onclick = async () => {
   if ($('rec-btn').disabled) return;
   try {
     if (!recording) {
+      // A take recorded into the project (Record here or Record over) keeps
+      // the edits. Any other take replaces the project when it stops.
+      const intoProject = typeof takePlan !== 'undefined' && takePlan;
+      if (!intoProject && !(await okToReplace('A new recording'))) return;
       const target = recSource.target;
       $('rec-btn').disabled = true; recLabel('preparing', 'Getting ready'); status('Getting the recorder ready. The countdown starts when the screen comes through.', 'busy');
       await meterStopAndWait();
