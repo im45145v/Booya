@@ -59,6 +59,10 @@ function isDirty() {
 }
 // Asks before something replaces a project with unsaved edits. Resolves true
 // when it is fine to go ahead.
+// Set by the Restart recording shortcut: the take it throws away already
+// passed okToReplace (or was a Record here take), so the new one must not ask
+// again, and its take plan must survive the discard.
+let restartingTake = false;
 async function okToReplace(what) {
   clearTimeout(cpTimer); checkpoint();
   if (!isDirty()) return true;
@@ -512,7 +516,8 @@ $('rec-btn').onclick = async () => {
       // A take recorded into the project (Record here or Record over) keeps
       // the edits. Any other take replaces the project when it stops.
       const intoProject = typeof takePlan !== 'undefined' && takePlan;
-      if (!intoProject && !(await okToReplace('A new recording'))) return;
+      const restarted = restartingTake; restartingTake = false;
+      if (!intoProject && !restarted && !(await okToReplace('A new recording'))) return;
       const target = recSource.target;
       $('rec-btn').disabled = true; status('Getting the recorder ready. The countdown starts once the screen is actually coming through.', 'busy');
       await meterStopAndWait();
@@ -925,7 +930,9 @@ async function runShortcut(id) {
         setRecSource({ type: 'screen', display: 0 }, 'Entire screen', 'screen'); return $('rec-btn').click();
       case 'restart':
         if (!recording) return status('Nothing to restart. Start a recording first.', 'info');
-        await invoke('discard_recording'); setRecUi(false); $('rec-btn').disabled = false;
+        restartingTake = true;
+        try { await invoke('discard_recording'); } catch (err) { restartingTake = false; throw err; }
+        setRecUi(false); $('rec-btn').disabled = false;
         return setTimeout(() => $('rec-btn').click(), 300);
       case 'discard':
         if (!recording) return;
@@ -960,7 +967,10 @@ if (reduceMq.addEventListener) reduceMq.addEventListener('change', applyGlassUi)
 window.addEventListener('focus', async () => { try { const v = !!(await invoke('os_reduce_transparency')); if (v !== osReduce) { osReduce = v; applyGlassUi(); } } catch { } });
 loadGlassUi();
 
-window.__TAURI__.event.listen('rec-discarded', () => { setRecUi(false); hideBusy(); status('Recording discarded. Nothing was saved.', 'info'); });
+// A discarded Record here or Record over take must not leave its plan behind,
+// or the next ordinary recording would be spliced into the project at the old
+// spot. A restart keeps it: the replacement take goes to the same place.
+window.__TAURI__.event.listen('rec-discarded', () => { if (!restartingTake && typeof clearTakePlan === 'function') clearTakePlan(); setRecUi(false); hideBusy(); status('Recording discarded. Nothing was saved.', 'info'); });
 
 window.addEventListener('keydown', e => {
   const el = document.activeElement, typing = isTyping(el);
