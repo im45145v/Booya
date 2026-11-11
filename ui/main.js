@@ -902,7 +902,7 @@ function renderStatusSegs() {
   let html = '';
   if (recording) html = seg((/Mac/i.test(navigator.platform) ? 'Cmd' : 'Ctrl') + '+R to stop');
   else if (project) {
-    const dirty = saved === null || history[hIdx] !== saved;
+    const dirty = isDirty();
     html = seg(dirty ? 'Unsaved changes' : 'Saved', dirty ? 'warn' : '') + mdl;
   } else {
     const mic = $('rec-mic-dev').selectedOptions[0];
