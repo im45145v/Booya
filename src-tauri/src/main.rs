@@ -985,6 +985,8 @@ fn get_settings() -> Settings {
 
 #[tauri::command]
 fn set_retention(app: tauri::AppHandle, days: Option<u32>) -> R<usize> {
+    // Saving a shorter limit deletes old recordings right away.
+    not_while_recording(&app)?;
     let mut st = load_settings();
     st.retention_days = days.filter(|d| *d > 0);
     save_settings(&st)?;
@@ -1116,10 +1118,15 @@ fn delete_recording(app: tauri::AppHandle, path: String) -> R<()> {
 }
 
 /// Deleting recordings under a running take removed the folder ffmpeg was
-/// writing into, and the take was lost.
+/// writing into, and the take was lost. An export reads its recording until
+/// the last frame, so deleting one under it broke the export the same way.
 fn not_while_recording(app: &tauri::AppHandle) -> R<()> {
-    if app.state::<AppState>().recording.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
+    let state = app.state::<AppState>();
+    if state.recording.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
         return Err("Stop the recording first.".into());
+    }
+    if state.exports.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        return Err("Wait for the export to finish first.".into());
     }
     Ok(())
 }
@@ -1475,6 +1482,8 @@ async fn ai_docs(app: tauri::AppHandle, project: Project, use_llm: bool, cloud: 
 async fn export_interactive(app: tauri::AppHandle, project: Project, out: String, title: Option<String>, cta_text: Option<String>, cta_url: Option<String>, badge: Option<bool>,
 ) -> R<String> {
     let outp = check_write(&app, &out, &["html"])?;
+    // Counted like a video export, so an update or a delete waits for it.
+    let _busy = ExportBusy::new(&app)?;
     blocking(move || {
         let log = project.events.as_ref().and_then(|p| EventLog::load(p).ok());
         let o = booya_ai::interactive::Options {
