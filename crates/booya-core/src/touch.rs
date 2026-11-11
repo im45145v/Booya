@@ -42,6 +42,31 @@ const STALE: Duration = Duration::from_millis(1500);
 /// Movements under this many pixels are not worth an event.
 const JITTER_PX: f64 = 2.0;
 
+/// A monitor rectangle in virtual-desktop pixels: left, top, width, height.
+/// Left and top can be negative when a monitor sits left of or above the
+/// primary one (whose origin is (0, 0)).
+pub type ScreenRect = (f64, f64, f64, f64);
+
+/// Map a 0-1 point on a digitizer surface onto a monitor rectangle.
+pub fn map_to_rect(nx: f64, ny: f64, (x, y, w, h): ScreenRect) -> (f64, f64) {
+    (x + nx.clamp(0.0, 1.0) * w.max(1.0), y + ny.clamp(0.0, 1.0) * h.max(1.0))
+}
+
+/// The monitor to map every touch onto when we cannot tell devices apart.
+/// One touch device, or several that share a monitor, use that monitor.
+/// Several devices on different monitors fall back to the primary screen,
+/// which is what the old code always used.
+pub fn pick_shared_rect(rects: &[ScreenRect], primary: ScreenRect) -> ScreenRect {
+    match rects {
+        [] => primary,
+        [one] => *one,
+        more => {
+            let first = more[0];
+            if more.iter().all(|r| *r == first) { first } else { primary }
+        }
+    }
+}
+
 /// Turns samples into down/move/up changes, per contact.
 #[derive(Default)]
 pub struct Tracker {
@@ -190,7 +215,12 @@ mod platform {
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{
         HidP_GetCaps, HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_Input, HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS,
     };
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::UI::Controls::{
+        POINTER_DEVICE_INFO, POINTER_DEVICE_TYPE_EXTERNAL_PEN, POINTER_DEVICE_TYPE_INTEGRATED_PEN, POINTER_DEVICE_TYPE_TOUCH,
+        POINTER_DEVICE_TYPE_TOUCH_PAD,
+    };
+    use windows_sys::Win32::UI::Input::Pointer::{GetPointerDeviceRects, GetPointerDevices};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::{
         GetRawInputData, GetRawInputDeviceInfoW, RegisterRawInputDevices, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_INPUTSINK, RIDI_PREPARSEDDATA, RID_INPUT, RIM_TYPEHID,
@@ -226,7 +256,8 @@ mod platform {
         devs: std::collections::HashMap<isize, Option<Dev>>,
         tracker: Tracker,
         sink: Sink,
-        screen: (f64, f64),
+        /// Destination monitor in virtual-desktop pixels (left, top, width, height).
+        screen: ScreenRect,
     }
 
     thread_local! {
@@ -356,7 +387,7 @@ mod platform {
                         id = v;
                     }
                 }
-                let (px, py) = if x == 0 && y == 0 { (0.0, 0.0) } else { (norm(x as f64, slot.x) * st.screen.0, norm(y as f64, slot.y) * st.screen.1) };
+                let (px, py) = if x == 0 && y == 0 { (0.0, 0.0) } else { map_to_rect(norm(x as f64, slot.x), norm(y as f64, slot.y), st.screen) };
                 samples.push(Sample { id, down, x: px, y: py });
             }
             let sink = &mut st.sink;
@@ -373,6 +404,58 @@ mod platform {
             });
         }
         DefWindowProcW(h, m, w, l)
+    }
+
+    /// The primary monitor, whose origin in the virtual desktop is (0, 0).
+    fn primary_rect() -> ScreenRect {
+        unsafe { (0.0, 0.0, GetSystemMetrics(SM_CXSCREEN).max(1) as f64, GetSystemMetrics(SM_CYSCREEN).max(1) as f64) }
+    }
+
+    /// Display rectangles of touch screens and pens, from the digitizer-to-
+    /// monitor mapping Windows keeps. Touch pads are skipped: a trackpad tap
+    /// is already a mouse click.
+    fn touch_device_rects() -> Vec<ScreenRect> {
+        unsafe {
+            let mut n = 0u32;
+            if GetPointerDevices(&mut n, std::ptr::null_mut()) == 0 || n == 0 {
+                return Vec::new();
+            }
+            let mut devs: Vec<POINTER_DEVICE_INFO> = vec![std::mem::zeroed(); n as usize];
+            if GetPointerDevices(&mut n, devs.as_mut_ptr()) == 0 {
+                return Vec::new();
+            }
+            devs.truncate(n as usize);
+            let mut out = Vec::new();
+            for d in devs {
+                if d.pointerDeviceType == POINTER_DEVICE_TYPE_TOUCH_PAD {
+                    continue;
+                }
+                if d.pointerDeviceType != POINTER_DEVICE_TYPE_TOUCH
+                    && d.pointerDeviceType != POINTER_DEVICE_TYPE_INTEGRATED_PEN
+                    && d.pointerDeviceType != POINTER_DEVICE_TYPE_EXTERNAL_PEN
+                {
+                    continue;
+                }
+                let mut _dev = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let mut disp = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                if GetPointerDeviceRects(d.device, &mut _dev, &mut disp) == 0 {
+                    continue;
+                }
+                let (w, h) = ((disp.right - disp.left) as f64, (disp.bottom - disp.top) as f64);
+                if w > 0.0 && h > 0.0 {
+                    out.push((disp.left as f64, disp.top as f64, w, h));
+                }
+            }
+            out
+        }
+    }
+
+    /// The monitor the touch watcher maps 0-1 digitizer coordinates onto.
+    /// A touch device that is not the primary screen used to be mapped onto
+    /// the primary monitor's size at (0, 0), so a tap landed in the wrong
+    /// place.
+    fn digitizer_rect() -> ScreenRect {
+        pick_shared_rect(&touch_device_rects(), primary_rect())
     }
 
     pub fn run(stop: Arc<AtomicBool>, sink: Sink, ready: &std::sync::mpsc::Sender<bool>) -> bool {
@@ -404,7 +487,7 @@ mod platform {
                 UnregisterClassW(class.as_ptr(), hinst);
                 return false;
             }
-            let screen = (GetSystemMetrics(SM_CXSCREEN).max(1) as f64, GetSystemMetrics(SM_CYSCREEN).max(1) as f64);
+            let screen = digitizer_rect();
             STATE.with(|s| *s.borrow_mut() = Some(State { devs: Default::default(), tracker: Tracker::default(), sink, screen }));
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
@@ -594,6 +677,33 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tap_on_a_side_monitor_lands_on_that_monitor() {
+        // A 1920x1080 primary with a 1920x1080 touch monitor on its right.
+        let side = (1920.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(map_to_rect(0.0, 0.0, side), (1920.0, 0.0));
+        assert_eq!(map_to_rect(0.5, 0.5, side), (2880.0, 540.0));
+        assert_eq!(map_to_rect(1.0, 1.0, side), (3840.0, 1080.0));
+        // The same monitor to the left of the primary (negative origin).
+        let left = (-1920.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(map_to_rect(0.5, 0.5, left), (-960.0, 540.0));
+        // And on the primary itself, as before.
+        let primary = (0.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(map_to_rect(0.5, 0.5, primary), (960.0, 540.0));
+    }
+
+    #[test]
+    fn one_touch_monitor_is_used_even_when_it_is_not_the_primary() {
+        let primary = (0.0, 0.0, 1920.0, 1080.0);
+        let side = (1920.0, 0.0, 1920.0, 1200.0);
+        assert_eq!(pick_shared_rect(&[], primary), primary);
+        assert_eq!(pick_shared_rect(&[side], primary), side);
+        assert_eq!(pick_shared_rect(&[side, side], primary), side);
+        // Two different touch screens: we cannot tell them apart, so keep
+        // the old primary mapping rather than guess.
+        assert_eq!(pick_shared_rect(&[side, primary], primary), primary);
+    }
 
     fn run(t: &mut Tracker, now: Instant, s: &[Sample]) -> Vec<(Phase, i64, i64)> {
         let mut v = Vec::new();
