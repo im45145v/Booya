@@ -39,7 +39,7 @@ const updateCaveat = () => IS_MAC ? '<p class="hint">After an update macOS may a
 async function installUpdate(u) {
   if (!u.can_install) return modal('Update Booya', '<p>This copy was installed from a .deb or .rpm package, so it cannot replace itself. Update it with your package manager, or get the new version from <a href="https://github.com/im45145v/Booya/releases/latest" target="_blank">github.com/im45145v/Booya/releases/latest</a>. The AppImage updates itself.</p>');
   if (typeof recording !== 'undefined' && recording) return status('Finish the recording before updating.', 'error');
-  if (saved !== null && history[hIdx] !== saved) {
+  if (isDirty()) {
     const ok = await confirmBox('Update with unsaved changes?', '<p>You have unsaved changes. Save first, or they will be lost when Booya restarts.</p>');
     if (!ok) return;
   }
