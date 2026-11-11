@@ -44,7 +44,7 @@ body:
     attributes:
       label: Booya version
       description: Settings > About and updates, or `booya --version`.
-      placeholder: v0.8.0
+      placeholder: v0.9.0
     validations:
       required: true
   - type: dropdown
