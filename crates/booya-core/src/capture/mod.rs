@@ -827,7 +827,7 @@ impl RecordingSession {
         // that mix replaces the microphone file and deletes the packet log.
         let side = crate::finalize::mic_sidecar(&self.video);
         if let (Some(c), Some((file_start, _))) = (crate::finalize::mic_clock(&side), crate::finalize::stream_times(&side, "a:0")) {
-            mic::log_line(&audio_log, &format!("microphone clock: first sample at {:.3}s (first packet read at {file_start:.3}s), {:.5} s of samples per second over {:.1}s", c.start_s, c.ratio, c.span_s));
+            mic::log_line(&audio_log, &format!("microphone clock: first sample at {:.3}s (first packet read at {file_start:.3}s), {:.5} s of samples per second over {:.1}s, {} stalls losing {:.3}s{}", c.start_s, c.ratio, c.span_s, c.gaps.len(), c.lost_s(), c.gaps.iter().take(8).map(|g| format!(" [{:.2}s +{:.3}s]", g.0, g.1)).collect::<String>()));
         }
         // Fold the system audio into the sound file the remux joins to the screen.
         match sys_result {
