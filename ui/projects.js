@@ -12,13 +12,14 @@ async function openProjectPath(path) {
     if (use) p = r.recovered; else invoke('discard_autosave', { path: r.path }).catch(() => { });
   }
   setProject(p, r.path);
-  if (r.recovered && p === r.recovered) { saved = null; status('Restored the unsaved edits. Press Save to keep them.', 'info'); updTitle(); }
+  if (r.recovered && p === r.recovered) { saved = null; pristine = null; status('Restored the unsaved edits. Press Save to keep them.', 'info'); updTitle(); }
   if (r.missing.length) await relocateDialog(r.missing);
   renderRecent();
   return r;
 }
 
 async function openProjectFolder() {
+  if (!(await okToReplace('Opening another project'))) return;
   try {
     const dir = await invoke('pick_folder');
     if (!dir) return;
@@ -65,6 +66,7 @@ async function renderRecent() {
   box.hidden = !list.length;
   box.innerHTML = list.length ? '<h3 class="section">Recent projects</h3>' + list.map(r => `<div class="item"><button class="link" data-open="${esc(r.path)}" ${r.exists ? '' : 'disabled'}>${esc(r.name)}</button><small class="muted">${esc(r.exists ? r.folder : 'moved or deleted')}</small><button class="btn ghost sm" data-forget="${esc(r.path)}" aria-label="Remove from the list">Remove</button></div>`).join('') : '';
   box.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
+    if (!(await okToReplace('Opening ' + baseName(b.dataset.open)))) return;
     showBusy('Opening ' + baseName(b.dataset.open) + '...');
     try { await openProjectPath(b.dataset.open); status('Opened ' + baseName(b.dataset.open), 'success'); } catch (e) { fail(e); }
     hideBusy();
