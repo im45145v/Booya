@@ -404,16 +404,33 @@ pub fn system_mix_filter(mic_start: f64, sys_start: f64) -> String {
     system_mix_filter_rate(mic_start, sys_start, None)
 }
 
+/// The microphone and system audio starts the mix uses. Starts more than
+/// 30 s apart are treated as unaligned and both take the earlier one, so the
+/// two tracks are overlaid from the start of each file.
+fn system_mix_starts(mic_start: f64, sys_start: f64) -> (f64, f64) {
+    if (mic_start - sys_start).abs() > 30.0 {
+        let t = mic_start.min(sys_start);
+        (t, t)
+    } else {
+        (mic_start, sys_start)
+    }
+}
+
+/// Where the mixed file starts on the recording clock: the earlier of the
+/// two starts the filter used. The mixed file is stamped with this, so a
+/// mix that collapsed unaligned starts is not then pushed to the later one.
+pub fn system_mix_start(mic_start: f64, sys_start: f64) -> f64 {
+    let (m, s) = system_mix_starts(mic_start, sys_start);
+    m.min(s)
+}
+
 /// Like [`system_mix_filter`], with an optional rate correction applied to
 /// the microphone (input 0) before it is delayed and mixed. The correction
 /// is the same filter [`clock_rate_filter`] builds, so a slow or fast
 /// microphone clock is stretched over the wall-clock time it really took.
 pub fn system_mix_filter_rate(mic_start: f64, sys_start: f64, mic_rate: Option<&str>) -> String {
-    let (mut m, mut s) = (mic_start, sys_start);
-    if (m - s).abs() > 30.0 {
-        if m < s { s = m } else { m = s }
-    }
-    let base = m.min(s);
+    let (m, s) = system_mix_starts(mic_start, sys_start);
+    let base = system_mix_start(mic_start, sys_start);
     let ms = |t: f64| ((t - base).max(0.0) * 1000.0).round() as i64;
     let fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=N/SR/TB";
     let rate = mic_rate.filter(|r| !r.is_empty()).map(|r| format!(",{r}")).unwrap_or_default();
@@ -433,8 +450,10 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     }
     let mic = mic_sidecar(mkv);
     if !big(&mic) {
-        let _ = std::fs::remove_file(mic_timing(&mic));
+        // Move the system audio in first. If that fails, the microphone file
+        // and its log are left as they were.
         std::fs::rename(&sys, &mic).context("could not move the system audio into place")?;
+        let _ = std::fs::remove_file(mic_timing(&mic));
         return Ok(true);
     }
     let (m, s) = (stream_times(&mic, "a:0"), stream_times(&sys, "a:0"));
@@ -444,18 +463,19 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     // afterwards. The rate used to be ignored here, and the log was
     // deleted, so the remux could not correct it either.
     let mut rate = None;
+    let mut clock_used = false;
     if let Some(c) = mic_clock(&mic).filter(|c| (c.start_s - m.0).abs() < 5.0) {
         m.0 = c.start_s;
         rate = mic_fix_filter(&c);
+        clock_used = true;
     }
     let tmp = mic.with_extension("mkv.part");
-    let base = m.0.min(s.0);
     let out = crate::proc::command(ffmpeg_bin())
         .args(["-v", "error", "-nostdin", "-y", "-i"])
         .arg(&mic)
         .arg("-i")
         .arg(&sys)
-        .args(["-filter_complex", &system_mix_filter_rate(m.0, s.0, rate.as_deref()), "-map", "[o]", "-c:a", "pcm_f32le", "-output_ts_offset", &format!("{:.3}", if (m.0 - s.0).abs() > 30.0 { m.0 } else { base }), "-f", "matroska"])
+        .args(["-filter_complex", &system_mix_filter_rate(m.0, s.0, rate.as_deref()), "-map", "[o]", "-c:a", "pcm_f32le", "-output_ts_offset", &format!("{:.3}", system_mix_start(m.0, s.0)), "-f", "matroska"])
         .arg(&tmp)
         .stdin(Stdio::null())
         .output()
@@ -466,7 +486,13 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     }
     std::fs::rename(&tmp, &mic)?;
     let _ = std::fs::remove_file(&sys);
-    let _ = std::fs::remove_file(mic_timing(&mic));
+    // The log describes the raw microphone file. Once its start, gaps and
+    // rate are in the mix it no longer matches, so it goes. When it was
+    // rejected (its start too far from the file's), it is kept, so it is
+    // still there for `audio.log` and for the remux to judge again.
+    if clock_used {
+        let _ = std::fs::remove_file(mic_timing(&mic));
+    }
     Ok(true)
 }
 
@@ -1059,6 +1085,67 @@ mod tests {
         assert!(f.contains("adelay=1000:all=1[m]") && f.contains("adelay=0:all=1[s]"), "{f}");
         let far = system_mix_filter(1.0, 5000.0);
         assert!(far.contains("adelay=0:all=1[m]") && far.contains("adelay=0:all=1[s]"), "an unaligned clock starts with the other: {far}");
+    }
+
+    #[test]
+    fn an_unaligned_mix_is_stamped_where_the_filter_put_it() {
+        assert_eq!(system_mix_start(0.5, 1.0), 0.5);
+        assert_eq!(system_mix_start(2.0, 1.0), 1.0);
+        // More than 30 s apart: the filter overlays both from their file
+        // starts, so the mix starts at the earlier start, whichever track
+        // has the far one. It used to take the microphone's start here.
+        assert_eq!(system_mix_start(40.0, 0.0), 0.0);
+        assert_eq!(system_mix_start(0.0, 40.0), 0.0);
+    }
+
+    #[test]
+    fn an_unaligned_mix_is_not_pushed_to_the_late_microphone_start() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("sysmix-far");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=2", "-output_ts_offset", "40", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        assert!(run(&["-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:d=2", "-c:a", "pcm_f32le"], &sys_sidecar(&mkv)));
+        assert!(merge_system_audio(&mkv).unwrap());
+        let (start, _) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
+        assert!(start.abs() < 0.06, "the collapsed mix starts at 0 s, not 40 s: {start}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_rejected_microphone_log_survives_the_mix() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("sysmix-keeplog");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=2", "-output_ts_offset", "1.0", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        assert!(run(&["-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:d=2", "-output_ts_offset", "1.0", "-c:a", "pcm_f32le"], &sys_sidecar(&mkv)));
+        // The log says the first sample was at 9 s, 8 s from the file's own
+        // start, so the mix does not use it and must not delete it.
+        std::fs::write(mic_timing(&mic_sidecar(&mkv)), stall_log(9.0, 18.0, &[])).unwrap();
+        assert!(merge_system_audio(&mkv).unwrap());
+        assert!(mic_timing(&mic_sidecar(&mkv)).exists(), "an unused log is kept");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_tiny_microphone_keeps_its_log_when_the_system_audio_cannot_move_in() {
+        let d = tmpdir("sysmix-tiny");
+        let mkv = d.join("recording.mkv");
+        let mic = mic_sidecar(&mkv);
+        std::fs::write(mic_timing(&mic), "log").unwrap();
+        std::fs::write(sys_sidecar(&mkv), vec![9u8; 20_000]).unwrap();
+        // A non-empty folder where the microphone file goes: it is not a big
+        // audio file, and a file cannot be renamed over it on any platform.
+        std::fs::create_dir_all(mic.join("busy")).unwrap();
+        assert!(merge_system_audio(&mkv).is_err());
+        assert!(mic_timing(&mic).exists(), "the log stays when the move failed");
+        assert!(sys_sidecar(&mkv).exists(), "the system audio is left where it was");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
