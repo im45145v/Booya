@@ -28,6 +28,9 @@ jobs:
             name: macos-arm64
           - os: windows-latest
             name: windows-x64
+    # A normal build takes 10 to 25 minutes. The limit stops a stuck one from
+    # holding the release for GitHub's default of 6 hours.
+    timeout-minutes: 90
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -42,9 +45,12 @@ jobs:
           node-version: 20
       - name: Linux deps
         if: runner.os == 'Linux'
+        # This step normally takes under a minute. On 11 November 2026 the
+        # runner's Ubuntu mirror stopped answering and it hung for close to an
+        # hour, so it now gives up and retries on another mirror instead.
+        timeout-minutes: 25
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev libayatana-appindicator3-dev pkg-config cmake clang libclang-dev patchelf file
+          bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev libayatana-appindicator3-dev pkg-config cmake clang libclang-dev patchelf file
       - name: Fetch static ffmpeg to bundle
         shell: bash
         run: bash scripts/fetch-ffmpeg.sh
@@ -182,6 +188,7 @@ jobs:
     permissions:
       contents: write
     if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
