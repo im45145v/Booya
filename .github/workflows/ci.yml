@@ -25,6 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    timeout-minutes: 90
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -48,6 +49,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev libssl-dev libx11-dev libxtst-dev libxi-dev libdbus-1-dev pkg-config ffmpeg cmake clang libclang-dev
       - name: Editor JS tests (every tests/js/*.test.js)
+        timeout-minutes: 10
         run: node scripts/js-tests.mjs
       - name: Dev setup script still parses and detects this OS
         if: runner.os != 'Windows'
@@ -72,14 +74,20 @@ jobs:
       # dependencies and whisper.cpp are compiled once instead of three times
       # (dev for tests, fat LTO release for the build, dev again for clippy).
       - name: Test core and AI
+        # A macOS run hung here for over an hour on 11 November 2026 and held
+        # the main queue. Normal runs take 2 to 8 minutes, more on a cold cache.
+        timeout-minutes: 25
         run: cargo test --profile ci -p booya-core -p booya-ai
       - name: Build CLI and app
+        timeout-minutes: 30
         run: cargo build --profile ci --workspace
       # Every crate, on every OS, so code behind a cfg for one platform is
       # linted on that platform. Warnings are errors.
       - name: Clippy (whole workspace, warnings are errors)
+        timeout-minutes: 20
         run: cargo clippy --profile ci --workspace --all-targets -- -D warnings
       - name: Sound against picture, every stage that works on files
+        timeout-minutes: 10
         shell: bash
         run: |
           set +e
@@ -198,6 +206,7 @@ jobs:
   capture-sync:
     # Real capture on Linux: Xvfb + x11grab for the screen, a PulseAudio null
     # sink for the sound, through the same record and finish code the app uses.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -236,6 +245,7 @@ jobs:
           exit $code
   subtitles:
     # Real speech (espeak-ng) through the shipped CLI and a real whisper model.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -265,6 +275,7 @@ jobs:
   editor-e2e:
     # The real editor UI in Chrome (with AAC): the preview sound plays and is
     # not muted, and the editor screens render. Screenshots are kept.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -309,6 +320,7 @@ jobs:
           name: editor-screenshots
           path: ${{ runner.temp }}/shots
   audit:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
