@@ -175,6 +175,23 @@ pub fn low_space_warning(free: Option<u64>) -> Option<String> {
     (free < 2 * GB).then(|| format!("Only {:.1} GB is free on the disk this records to, so a long recording may fill it.", free as f64 / GB as f64))
 }
 
+/// A folder name for a new take inside `root` that is not in use:
+/// `recording-<unix milliseconds>`, or with `-2`, `-3`, ... added when that
+/// already exists. The folder is not created here. Capture creates it, and
+/// because the name is new, it also removes it again if the start fails.
+/// Names used to be whole seconds, so a second start in the same second (or
+/// a folder left behind by a crash) wrote into the earlier take's folder.
+pub fn new_recording_dir(root: &Path, unix_ms: u128) -> PathBuf {
+    let first = root.join(format!("recording-{unix_ms}"));
+    if !first.exists() {
+        return first;
+    }
+    (2u32..)
+        .map(|n| root.join(format!("recording-{unix_ms}-{n}")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -248,5 +265,20 @@ mod tests {
         assert!(!root.join("recording-9").exists());
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_new_take_never_reuses_a_folder() {
+        let root = tmp("newdir");
+        let a = new_recording_dir(&root, 1_794_380_709_123);
+        assert_eq!(a, root.join("recording-1794380709123"));
+        std::fs::create_dir_all(&a).unwrap();
+        let b = new_recording_dir(&root, 1_794_380_709_123);
+        assert_eq!(b, root.join("recording-1794380709123-2"));
+        std::fs::create_dir_all(&b).unwrap();
+        assert_eq!(new_recording_dir(&root, 1_794_380_709_123), root.join("recording-1794380709123-3"));
+        // A different millisecond gets its own plain name.
+        assert_eq!(new_recording_dir(&root, 1_794_380_709_124), root.join("recording-1794380709124"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
