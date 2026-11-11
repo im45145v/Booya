@@ -393,6 +393,18 @@ pub(crate) fn take_lead_ms(armed_after_start_ms: f64, video_shift_ms: f64) -> f6
     (armed_after_start_ms - video_shift_ms).max(0.0)
 }
 
+/// How far, in ms, the event log moves earlier for a video whose first frame
+/// was stamped `video_start_s` after the shared recording clock started.
+///
+/// A slow encoder (or a long recorder warm-up) can put that first frame more
+/// than ten seconds in, and clicks and zooms must still move with it. A value
+/// far beyond any warm-up (such as a raw Unix time) means the clock cannot be
+/// trusted, and the events are left alone. Thirty seconds matches the audio
+/// side's "far from the recording" check.
+pub(crate) fn event_shift_ms(video_start_s: f64) -> f64 {
+    if video_start_s.is_finite() && video_start_s > 0.0 && video_start_s <= 30.0 { video_start_s * 1000.0 } else { 0.0 }
+}
+
 /// Moves everything logged on the recording clock earlier by `shift_ms`, for
 /// a video whose first frame was stamped that long after the clock started.
 /// Times never go below zero.
@@ -922,7 +934,10 @@ impl RecordingSession {
         // Every lead-in counts: the first frame of a screen recorder usually
         // comes 50 to 300 ms after the clock started, and zoom that lands
         // that late is visible.
-        let shift_ms = if video_start_s > 0.0 && video_start_s < 10.0 { video_start_s * 1000.0 } else { 0.0 };
+        let shift_ms = event_shift_ms(video_start_s);
+        if shift_ms == 0.0 && video_start_s > 0.0 {
+            mic::log_line(&audio_log, &format!("events not shifted: the first video frame is at {video_start_s:.3}s, too far from the recording clock to trust"));
+        }
         let mut log = EventLog::new(self.region.w, self.region.h);
         log.header.origin_x = self.region.x;
         log.header.origin_y = self.region.y;
@@ -1164,6 +1179,22 @@ mod tests {
         assert_eq!(screen_index(&v, 0), Some(2));
         assert_eq!(screen_index(&v, 1), Some(3));
         assert_eq!(screen_index(&v, 2), None);
+    }
+
+    #[test]
+    fn events_follow_a_late_first_frame() {
+        assert_eq!(event_shift_ms(0.0), 0.0);
+        assert_eq!(event_shift_ms(-1.0), 0.0);
+        assert_eq!(event_shift_ms(0.25), 250.0);
+        // Ten seconds or more used to be ignored, leaving clicks late.
+        assert_eq!(event_shift_ms(13.0), 13_000.0);
+        assert_eq!(event_shift_ms(30.0), 30_000.0);
+        // A clock this far off is not a warm-up.
+        assert_eq!(event_shift_ms(30.5), 0.0);
+        assert_eq!(event_shift_ms(1_731_312_000.0), 0.0);
+        assert_eq!(event_shift_ms(f64::NAN), 0.0);
+        // The take start is measured on the same shifted clock.
+        assert_eq!(take_lead_ms(14_000.0, event_shift_ms(13.0)), 1_000.0);
     }
 
     #[test]
