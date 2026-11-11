@@ -188,6 +188,17 @@ pub struct Recording {
 /// macOS this is what happens while the Screen Recording permission is
 /// missing or its prompt is still open.
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(8);
+/// Output options for every Matroska file written while recording.
+///
+/// The Matroska muxer holds a cluster in memory until it closes, and by
+/// default an audio-only cluster closes only every 5 seconds (a video one at
+/// each keyframe, which for x264 can also be 5 seconds). `-flush_packets`
+/// does not change that. Starting a recording waits for each recorder's file
+/// to grow past its header, so a microphone added 5 s to every start. Short
+/// clusters make the file grow within a quarter second of the first packet,
+/// and a killed recording loses at most that much.
+pub(crate) const LIVE_MKV_ARGS: [&str; 2] = ["-cluster_time_limit", "250"];
+
 /// How long `stop` waits for ffmpeg to finish the file after "q".
 const STOP_TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -396,11 +407,36 @@ pub(crate) fn shift_timeline(events: &mut [crate::events::Event], pauses: &mut [
     }
 }
 
+fn ms_since(t: Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1000.0
+}
+
+/// How long each step of `start` took, in ms. None for a recorder that was not used.
+pub(crate) struct StartTiming {
+    pub plan_ms: f64,
+    pub screen_ms: f64,
+    pub camera_ms: Option<f64>,
+    pub mic_ms: Option<f64>,
+    pub system_audio_ms: Option<f64>,
+    pub total_ms: f64,
+}
+
+/// The `audio.log` line that says where the wait before the countdown went.
+/// The screen is measured from its launch; the microphone and system audio
+/// open after the screen is writing, and the camera alongside the screen.
+pub(crate) fn start_timing_line(t: &StartTiming) -> String {
+    let opt = |v: Option<f64>| v.map(|v| format!("{v:.0} ms")).unwrap_or_else(|| "off".into());
+    format!("start timing: plan {:.0} ms, screen {:.0} ms, camera {}, microphone {}, system audio {}, ready after {:.0} ms",
+        t.plan_ms, t.screen_ms, opt(t.camera_ms), opt(t.mic_ms), opt(t.system_audio_ms), t.total_ms)
+}
+
 pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     // Work out the capture plan first (it needs the permissions and can
     // fail), and only then create the folder, so a failed start leaves nothing
     // behind.
+    let begin = Instant::now();
     let mut plan = plan(opts)?;
+    let plan_ms = ms_since(begin);
     let mut fresh = FreshDir::create(&opts.out_dir)?;
     let video = opts.out_dir.join("recording.mkv");
     let events = opts.out_dir.join("recording.events.jsonl");
@@ -408,6 +444,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     // The camera warms up slowly, so it opens alongside the screen, not after
     // it. Both are stamped on the wall clock and aligned from those stamps.
     let cam_job = if opts.webcam { Some(CamJob::spawn(opts.out_dir.clone())) } else { None };
+    let cam_begin = Instant::now();
     #[allow(clippy::type_complexity)]
     let spawn = |plan: &mut CapturePlan| -> Result<(Child, Arc<Mutex<String>>, Option<Box<dyn Send>>, f64)> {
         let _ = std::fs::remove_file(&video);
@@ -423,7 +460,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         cmd.args(crate::ffmpeg::best_encoder().capture_args()).args(["-pix_fmt", "yuv420p", "-c:a", "aac"]);
         // Matroska is written as it goes, so even a killed recording keeps
         // what it has; flush packets so the file grows from the first second.
-        cmd.args(["-flush_packets", "1"]);
+        cmd.args(["-flush_packets", "1"]).args(LIVE_MKV_ARGS);
         cmd.arg(&video);
         cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         #[cfg(windows)]
@@ -468,6 +505,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
             return Err(start_error(&e));
         }
     }
+    let screen_ms = ms_since(started);
     let mut warnings = plan.warnings;
     warnings.extend(crate::storage::low_space_warning(crate::storage::free_bytes(&opts.out_dir)));
     // The microphone and system audio each open their own recorder. Doing
@@ -480,14 +518,20 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
                 std::env::var("BOOYA_MIC").ok().filter(|v| !v.trim().is_empty())
             });
             let (file, log, clock) = (mic_file.clone(), audio_log.clone(), epoch);
-            Some(std::thread::spawn(move || mic::MicRec::start(device.as_deref(), clock, &file, &log)))
+            Some(std::thread::spawn(move || {
+                let t = Instant::now();
+                (mic::MicRec::start(device.as_deref(), clock, &file, &log), ms_since(t))
+            }))
         }
         None => None,
     };
     let sys_file = crate::finalize::sys_sidecar(&video);
     let sys_job = if opts.system_audio && sysaudio::supported() && !audio_dropped {
         let (file, log, clock) = (sys_file.clone(), audio_log.clone(), epoch);
-        Some(std::thread::spawn(move || sysaudio::SysAudio::start(clock, &file, &log)))
+        Some(std::thread::spawn(move || {
+            let t = Instant::now();
+            (sysaudio::SysAudio::start(clock, &file, &log), ms_since(t))
+        }))
     } else {
         None
     };
@@ -497,8 +541,13 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         Some(j) => j.finish(),
         None => (None, Vec::new()),
     };
+    let cam_ms = opts.webcam.then(|| ms_since(cam_begin));
     warnings.extend(cam_warnings);
-    let mic = match mic_job.and_then(|j| j.join().ok()) {
+    let (mic_res, mic_ms) = match mic_job.and_then(|j| j.join().ok()) {
+        Some((r, ms)) => (Some(r), Some(ms)),
+        None => (None, None),
+    };
+    let mic = match mic_res {
         Some(Ok(m)) => Some(m),
         Some(Err(reason)) => {
             mic::log_line(&audio_log, &format!("microphone could not start: {reason}"));
@@ -507,7 +556,11 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
         }
         None => None,
     };
-    let sys = match sys_job.and_then(|j| j.join().ok()) {
+    let (sys_res, sys_ms) = match sys_job.and_then(|j| j.join().ok()) {
+        Some((r, ms)) => (Some(r), Some(ms)),
+        None => (None, None),
+    };
+    let sys = match sys_res {
         Some(Ok(s)) => Some(s),
         Some(Err(reason)) => {
             mic::log_line(&audio_log, &format!("system audio could not start: {reason}"));
@@ -519,6 +572,7 @@ pub fn start(opts: &RecordOptions) -> Result<RecordingSession> {
     if opts.keys == crate::input::KeyLogging::On && crate::input::key_permission_missing(true) {
         warnings.push("Key capture is on, but macOS has not allowed Booya to monitor the keyboard, so shortcuts such as Cmd+Tab will not be shown. Open System Settings > Privacy & Security > Input Monitoring, switch Booya on, then quit and reopen Booya.".into());
     }
+    mic::log_line(&audio_log, &start_timing_line(&StartTiming { plan_ms, screen_ms, camera_ms: cam_ms, mic_ms, system_audio_ms: sys_ms, total_ms: ms_since(begin) }));
     let logger = InputLogger::start_for(plan.region, opts.keys, matches!(opts.target, CaptureTarget::Screen { .. }))?;
     logger.set_epoch(started);
     let (webcam, webcam_epoch) = match webcam {
@@ -614,7 +668,7 @@ fn start_webcam(dir: &Path, warnings: &mut Vec<String>) -> Option<(Child, f64)> 
     // to 1/frame rate, which rounds the real frame times onto a 30 fps grid
     // and gives two frames one time.
     cmd.args(["-vf", &timeline, "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000"]);
-    cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).arg(&out);
+    cmd.args(crate::ffmpeg::best_encoder().webcam_capture_args()).args(["-pix_fmt", "yuv420p", "-an", "-flush_packets", "1"]).args(LIVE_MKV_ARGS).arg(&out);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     match cmd.spawn() {
         Ok(mut c) => {
@@ -737,7 +791,9 @@ impl RecordingSession {
     /// Nothing recorded before this is part of the take.
     pub fn arm(&mut self) {
         if self.armed_at.is_none() {
-            self.armed_at = Some(Instant::now());
+            let now = Instant::now();
+            self.armed_at = Some(now);
+            mic::log_line(&self.dir.join("audio.log"), &format!("take armed {:.0} ms after the screen recorder started (the rest after \"ready\" is the countdown)", now.duration_since(self.started).as_secs_f64() * 1000.0));
         }
     }
 
@@ -1129,6 +1185,45 @@ mod tests {
         assert!(r.unwrap_err().starts_with("TIMEOUT"));
         assert!(t.elapsed() < Duration::from_secs(5));
         assert!(start_error("TIMEOUT").to_string().contains("did not start"));
+    }
+
+    /// A live microphone recorder writes audio-only Matroska. Without short
+    /// clusters its file did not grow for 5 s, and every recording start
+    /// waited for that before the countdown.
+    #[test]
+    fn audio_only_mkv_is_seen_writing_within_two_seconds() {
+        if !crate::ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("dl-live-mkv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("mic.mkv");
+        let _ = std::fs::remove_file(&out);
+        let mut child = crate::proc::command(crate::ffmpeg::ffmpeg_bin())
+            .args(["-hide_banner", "-nostats", "-v", "error", "-y", "-re", "-f", "lavfi", "-i", "sine=r=48000", "-t", "8"])
+            .args(["-c:a", "pcm_f32le", "-flush_packets", "1"])
+            .args(LIVE_MKV_ARGS)
+            .arg(&out)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let err = drain_stderr(&mut child);
+        let t = Instant::now();
+        let r = wait_until_writing(&mut child, &out, &err, Duration::from_secs(8));
+        let took = t.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        r.unwrap();
+        assert!(took < Duration::from_secs(2), "took {took:?}");
+    }
+
+    #[test]
+    fn start_timing_line_names_every_step() {
+        let line = start_timing_line(&StartTiming { plan_ms: 812.4, screen_ms: 1490.0, camera_ms: Some(2100.0), mic_ms: None, system_audio_ms: Some(1350.0), total_ms: 3801.0 });
+        assert_eq!(line, "start timing: plan 812 ms, screen 1490 ms, camera 2100 ms, microphone off, system audio 1350 ms, ready after 3801 ms");
     }
 
     #[cfg(unix)]

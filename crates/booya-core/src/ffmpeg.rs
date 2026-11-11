@@ -716,7 +716,7 @@ mod probe_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("p.mkv");
         let ok = crate::proc::command(ffmpeg_bin())
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=96x54:r=10:d=2", "-pix_fmt", "yuv420p"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=96x54:r=10:d=2,hue=h=t*720", "-pix_fmt", "yuv420p"])
             .arg(&f)
             .status()
             .unwrap()
@@ -724,12 +724,27 @@ mod probe_tests {
         assert!(ok);
         let mut plain = FrameReader::open(&f, 0.0, 10.0, 96, 54).unwrap();
         let mut ahead = PrefetchReader::new(FrameReader::open(&f, 0.0, 10.0, 96, 54).unwrap());
+        // On macOS both readers decode with VideoToolbox, and two hardware
+        // sessions can round the colour conversion a little differently, so
+        // the frames are compared closely rather than byte for byte. Frames
+        // in this clip turn the hue 72 degrees each, so neighbours differ by
+        // about 40 per byte on average and a frame out of order still fails.
+        let close = |a: &[u8], b: &[u8]| {
+            a.len() == b.len() && a.iter().zip(b).map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64).sum::<u64>() as f64 / (a.len().max(1) as f64) < 4.0
+        };
         let mut n = 0;
+        let mut last: Option<Vec<u8>> = None;
         loop {
             let (a, b) = (plain.next().unwrap(), ahead.next().unwrap());
             assert_eq!(plain.index, ahead.index);
             match (a, b) {
-                (Some(a), Some(b)) => assert_eq!(a.data, b.data, "frame {n}"),
+                (Some(a), Some(b)) => {
+                    assert!(close(&a.data, &b.data), "frame {n} differs");
+                    if let Some(prev) = &last {
+                        assert!(!close(prev, &b.data), "frame {n} repeats the one before it");
+                    }
+                    last = Some(b.data);
+                }
                 (None, None) => break,
                 _ => panic!("the readers ended at different frames"),
             }
