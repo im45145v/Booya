@@ -168,3 +168,9 @@ Rules that matter in code:
 - `fonts/`: Geist and Geist Mono variable TTFs with OFL licences
 - `guideline/`: booya-brand-guideline.pdf, .html, page PNGs
 - `src/`: the Python generators. Run `python3 src/build_all.py` (or each `build_*.py`) to rebuild everything after a geometry change in `src/geom.py`
+
+## App UI v2: ink on paper
+
+`ui/styles/booya-v2.css` loads after `ui/style.css` and layers Ludo's v2 spec on top of the v1 build. It retunes the dark `--by-ui-*` values to a warm ink, adds the `--by-ui-sheet-*`, `--by-ui-well` and `--by-ui-clip*` tokens, and styles the paper sheet stage, the hero, the instrument timeline, the field notebook panel and the readout status bar. The paper grain is `ui/assets/grain.png`, used on the empty sheet only.
+
+Signal is a live colour. It fills Record, the Stop segment and the playhead tab, and marks live dots, the click ripple, zoom brackets and the one headline underline. It is never used for links, tabs or selected states. Contrast for the v2 pairs is in `tokens/CONTRAST-v2.md`.

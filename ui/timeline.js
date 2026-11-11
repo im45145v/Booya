@@ -12,7 +12,7 @@ class Timeline {
     this.project = null; this.playhead = 0; this.selectedZoom = -1; this.selectedClip = 0; this.drag = null;
     this.view = [0, 1]; // visible output range in ms; [0, dur] when fitted
     this.fitted = true;
-    this.gutter = 64; this.selectedLayout = -1;
+    this.gutter = 86; this.selectedLayout = -1;
     this.selItem = null; this.keyTrack = [];
     // Waveform of the sound: { data: 0..255 per bucket, bucket: ms } and what state the sound is in.
     this.peaks = null; this.audioState = 'none';
@@ -322,97 +322,128 @@ class Timeline {
     this.c.setAttribute('aria-valuenow', Math.round(this.playhead));
     this.c.setAttribute('aria-valuetext', fmt(this.playhead));
 
-    // Lane labels
-    ctx.fillStyle = C('--faint'); ctx.font = font(10); ctx.textBaseline = 'middle';
-    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['layout', 'LAYOUT'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'SPEECH'], ['audio', 'AUDIO']]) if (this.L[k]) ctx.fillText(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
+    // v2 "instrument" look: mono caps labels in a gutter, hairline lanes,
+    // paper clip strips, Signal zoom brackets, words as text, a Signal playhead.
+    const MONO = getComputedStyle(document.documentElement).getPropertyValue('--by-font-mono').trim() || 'monospace';
+    const mono = (s, w = 500) => `${w} ${s}px ${MONO}`;
+    const spaced = (txt, x, y, track = 0.9) => { // letter spacing without ctx.letterSpacing support
+      if ('letterSpacing' in ctx) { ctx.letterSpacing = track + 'px'; ctx.fillText(txt, x, y); ctx.letterSpacing = '0px'; return; }
+      ctx.fillText(txt, x, y);
+    };
+    ctx.textBaseline = 'middle';
+    // Lane rules and labels
+    ctx.fillStyle = C('--by-ui-border-subtle');
+    for (const k of ['clips', 'zoom', 'layout', 'marks', 'blur', 'keys', 'words', 'audio']) if (this.L[k]) ctx.fillRect(0, this.L[k][1] + 3, W, 1);
+    ctx.fillRect(0, this.L.ruler[1] + 3, W, 1);
+    ctx.fillStyle = C('--by-ui-text-3'); ctx.font = mono(9.5);
+    for (const [k, label] of [['clips', 'CLIPS'], ['zoom', 'ZOOM'], ['layout', 'LAYOUT'], ['marks', 'NOTES'], ['blur', 'BLUR'], ['keys', 'KEYS'], ['words', 'CAPTIONS'], ['audio', 'AUDIO']]) if (this.L[k]) spaced(label, 10, (this.L[k][0] + this.L[k][1]) / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(x0 - 2, 0, x1 - x0 + 10, H); ctx.clip();
 
-    // Ruler with nice tick spacing
+    // Ruler: a minor tick per second (or per label step / 5 when zoomed in or out), labelled major ticks
     const span = v1 - v0, steps = [100, 250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
     const step = steps.find(s => (s / span) * (x1 - x0) >= 70) || 600000;
-    ctx.strokeStyle = C('--line'); ctx.fillStyle = C('--tl-ruler'); ctx.font = font(10);
+    const minor = [1000, step / 5].find(m => (m / span) * (x1 - x0) >= 5 && step % m === 0) || step;
+    const rb = this.L.ruler[1];
+    ctx.fillStyle = C('--by-ui-border');
+    for (let t = Math.ceil(v0 / minor) * minor; t <= v1; t += minor) { const x = Math.round(this.x(t)); ctx.fillRect(x, rb - 3, 1, 3); }
+    ctx.font = mono(9, 400);
     for (let t = Math.ceil(v0 / step) * step; t <= v1; t += step) {
-      const x = this.x(t); ctx.beginPath(); ctx.moveTo(x + .5, 14); ctx.lineTo(x + .5, H); ctx.globalAlpha = .5; ctx.stroke(); ctx.globalAlpha = 1;
-      ctx.fillText(fmt(t, step < 1000), x + 4, 9);
+      const x = Math.round(this.x(t));
+      ctx.fillStyle = C('--by-ui-text-3'); ctx.fillRect(x, rb - 8, 1, 8);
+      spaced(fmt(t, step < 1000), x + 4, 9, 0.4);
     }
-    // Clips
+    // Clips: paper strips with sprocket dashes along both edges
     let acc = 0; const [ca, cb] = this.L.clips;
     this.project.clips.forEach((c, i) => {
-      const len = (c.src_end_ms - c.src_start_ms) / c.speed, a = this.x(acc), b = this.x(acc + len);
-      // Every clip has the clip grey; the selected one gets a 1.5 px text-colour edge.
-      ctx.fillStyle = C('--tl-clip');
-      rr(ctx, a + 1, ca, Math.max(2, b - a - 2), cb - ca, 6); ctx.fill();
-      if (i === this.selectedClip) { ctx.strokeStyle = C('--tl-clip-sel'); ctx.lineWidth = 1.5; rr(ctx, a + 1.75, ca + .75, Math.max(2, b - a - 3.5), cb - ca - 1.5, 5.5); ctx.stroke(); ctx.lineWidth = 1; }
-      if (b - a > 40) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`Clip ${i + 1}${c.speed !== 1 ? '  ' + c.speed + 'x' : ''}`, a + 8, (ca + cb) / 2); }
+      const len = (c.src_end_ms - c.src_start_ms) / c.speed, a = this.x(acc), b = this.x(acc + len), w = Math.max(2, b - a - 3);
+      ctx.fillStyle = C('--by-ui-clip'); rr(ctx, a + 1.5, ca, w, cb - ca, 2); ctx.fill();
+      if (w > 12) {
+        ctx.fillStyle = 'rgba(18, 16, 13, .18)';
+        for (let sx = a + 6; sx < a + w - 4; sx += 7) { ctx.fillRect(sx, ca + 2, 3, 2); ctx.fillRect(sx, cb - 4, 3, 2); }
+      }
+      if (i === this.selectedClip) { ctx.strokeStyle = C('--by-ui-text'); ctx.lineWidth = 1.5; rr(ctx, a + 2.25, ca + .75, w - 1.5, cb - ca - 1.5, 2); ctx.stroke(); ctx.lineWidth = 1; }
+      if (w > 48) {
+        ctx.fillStyle = C('--by-ui-clip-ink'); ctx.font = mono(9.5);
+        spaced(`CLIP ${String(i + 1).padStart(2, '0')}`, a + 8, (ca + cb) / 2 - 5);
+        ctx.fillStyle = 'rgba(18, 16, 13, .62)'; ctx.font = mono(9, 400);
+        ctx.fillText(c.speed !== 1 ? c.speed + 'x speed' : fmt(len, false), a + 8, (ca + cb) / 2 + 7);
+      }
       acc += len;
     });
-    // Proposed cuts waiting for review: red bands over the clips lane.
+    // Proposed cuts waiting for review: danger bands over the clips lane.
     if (this.proposed && this.proposed.length) {
-      ctx.save(); ctx.fillStyle = 'rgba(232, 77, 77, .55)'; ctx.strokeStyle = '#e84d4d';
+      ctx.save(); const dg = C('--by-ui-danger'); ctx.fillStyle = dg; ctx.strokeStyle = dg;
       for (const [s0, e0] of this.proposed) {
         const a = this.x(this.srcToOut(s0)), b = this.x(this.srcToOut(e0));
-        ctx.fillRect(a, ca - 2, Math.max(3, b - a), cb - ca + 4); ctx.strokeRect(a + .5, ca - 1.5, Math.max(3, b - a) - 1, cb - ca + 3);
+        ctx.globalAlpha = .45; ctx.fillRect(a, ca - 2, Math.max(3, b - a), cb - ca + 4); ctx.globalAlpha = 1; ctx.strokeRect(a + .5, ca - 1.5, Math.max(3, b - a) - 1, cb - ca + 3);
       }
       ctx.restore();
     }
-    // Zoom segments
-    const [za, zb] = this.L.zoom;
+    // Zoom ranges: Signal brackets with the factor in the middle
+    const [za, zb] = this.L.zoom, sig = C('--by-ui-signal');
     this.project.zoom.forEach((z, i) => {
-      const a = this.x(this.srcToOut(z.start_ms)), b = this.x(this.srcToOut(z.end_ms)), sel = i === this.selectedZoom;
-      ctx.fillStyle = sel ? C('--tl-zoom-sel') : C('--tl-zoom');
-      rr(ctx, a, za, Math.max(3, b - a), zb - za, 6); ctx.fill();
-      if (sel) { ctx.fillStyle = '#fff'; ctx.fillRect(a + 2, za + 9, 2, zb - za - 18); ctx.fillRect(b - 4, za + 9, 2, zb - za - 18); }
-      if (b - a > 50) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText(`${z.scale.toFixed(1)}x ${z.reason}`, a + 8, (za + zb) / 2); }
+      const a = Math.round(this.x(this.srcToOut(z.start_ms))) + .5, b = Math.round(this.x(this.srcToOut(z.end_ms))) - .5, sel = i === this.selectedZoom;
+      const ya = za + 6, yb = zb - 6, arm = Math.min(5, (b - a) / 3);
+      if (sel) { ctx.fillStyle = C('--by-ui-hover'); ctx.fillRect(a, ya, b - a, yb - ya); }
+      ctx.strokeStyle = sig; ctx.lineWidth = sel ? 2 : 1.5; ctx.beginPath();
+      ctx.moveTo(a + arm, ya); ctx.lineTo(a, ya); ctx.lineTo(a, yb); ctx.lineTo(a + arm, yb);
+      ctx.moveTo(b - arm, ya); ctx.lineTo(b, ya); ctx.lineTo(b, yb); ctx.lineTo(b - arm, yb); ctx.stroke(); ctx.lineWidth = 1;
+      const label = `${z.scale.toFixed(1)}\u00d7`; ctx.font = mono(9, 400); const tw = ctx.measureText(label).width;
+      if (b - a > tw + 16) {
+        const m = (a + b) / 2, y = (ya + yb) / 2;
+        ctx.strokeStyle = C('--by-ui-border-input'); ctx.setLineDash([1, 3]); ctx.beginPath(); ctx.moveTo(a + 6, y + .5); ctx.lineTo(m - tw / 2 - 4, y + .5); ctx.moveTo(m + tw / 2 + 4, y + .5); ctx.lineTo(b - 6, y + .5); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = sel ? C('--by-ui-text') : C('--by-ui-text-3'); ctx.textAlign = 'center'; ctx.fillText(label, m, y); ctx.textAlign = 'left';
+      }
     });
-    // Layout changes: each block is a stretch of the recording with its own layout.
+    // Layout changes: outline bars with a mono label
     if (this.hasLayoutLane) {
       const [la, lb] = this.L.layout;
-      ctx.globalAlpha = .35; ctx.fillStyle = C('--line'); rr(ctx, x0, la, x1 - x0, lb - la, 5); ctx.fill(); ctx.globalAlpha = 1;
-      const names = { screen: 'Screen only', bubble: 'Camera bubble', split: 'Side by side', camera: 'Camera full' };
+      const names = { screen: 'SCREEN ONLY', bubble: 'CAMERA BUBBLE', split: 'SIDE BY SIDE', camera: 'CAMERA FULL' };
       ((this.project.layouts && this.project.layouts.segments) || []).forEach((g, i) => {
         const a = this.x(this.srcToOut(g.start_ms)), b = this.x(this.srcToOut(g.end_ms)), sel = i === this.selectedLayout;
-        ctx.fillStyle = sel ? C('--tl-layout-sel') : C('--tl-layout');
-        rr(ctx, a, la, Math.max(3, b - a), lb - la, 6); ctx.fill();
-        if (sel) { ctx.fillStyle = '#fff'; ctx.fillRect(a + 2, la + 6, 2, lb - la - 12); ctx.fillRect(b - 4, la + 6, 2, lb - la - 12); }
-        if (b - a > 50) { ctx.fillStyle = '#fff'; ctx.font = font(11); ctx.fillText((names[g.kind] || g.kind).slice(0, Math.floor((b - a) / 6)), a + 8, (la + lb) / 2); }
+        if (sel) { ctx.fillStyle = C('--by-ui-hover'); rr(ctx, a, la + 3, Math.max(3, b - a), lb - la - 6, 2); ctx.fill(); }
+        ctx.strokeStyle = sel ? C('--by-ui-text') : C('--by-ui-border-input'); ctx.lineWidth = sel ? 1.5 : 1;
+        rr(ctx, a + .5, la + 3.5, Math.max(3, b - a - 1), lb - la - 7, 2); ctx.stroke(); ctx.lineWidth = 1;
+        if (b - a > 50) { ctx.fillStyle = C('--by-ui-text-2'); ctx.font = mono(9); spaced((names[g.kind] || g.kind.toUpperCase()).slice(0, Math.floor((b - a) / 7)), a + 8, (la + lb) / 2); }
       });
-      if (!((this.project.layouts && this.project.layouts.segments) || []).length) { ctx.font = font(11); ctx.fillStyle = C('--faint'); ctx.fillText('The whole recording uses the base layout. Double click here to change it for a stretch.', x0 + 8, (la + lb) / 2); }
+      if (!((this.project.layouts && this.project.layouts.segments) || []).length) { ctx.font = mono(10, 400); ctx.fillStyle = C('--by-ui-text-3'); ctx.fillText('The whole recording uses the base layout. Double click here to change it for a stretch.', x0 + 8, (la + lb) / 2); }
     }
-    // Lane backgrounds so empty lanes still read as lanes
-    ctx.globalAlpha = .35; ctx.fillStyle = C('--line');
-    for (const k of ['marks', 'blur', 'keys', 'words', 'audio']) { const [a, b] = this.L[k]; rr(ctx, x0, a, x1 - x0, b - a, 5); ctx.fill(); }
-    ctx.globalAlpha = 1;
     // Notes (callouts and shapes) and blur boxes
     for (const lane of ['marks', 'blur']) for (const it of this.items(lane)) {
       const [a, b, ya, yb] = this.itemBox(lane, it), sel = it.o === this.selItem;
       ctx.fillStyle = it.hex || C(it.color); ctx.globalAlpha = sel ? 1 : .8;
-      rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.fill(); ctx.globalAlpha = 1;
-      if (sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 5); ctx.stroke(); ctx.lineWidth = 1; }
-      if (b - a > 36 && yb - ya > 10) { ctx.fillStyle = it.hex ? '#111' : '#fff'; ctx.font = font(10); ctx.fillText(it.label.slice(0, Math.floor((b - a) / 6)), a + 6, (ya + yb) / 2); }
+      rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 2); ctx.fill(); ctx.globalAlpha = 1;
+      if (sel) { ctx.strokeStyle = C('--by-ui-text'); ctx.lineWidth = 1.5; rr(ctx, a, ya, Math.max(4, b - a), yb - ya, 2); ctx.stroke(); ctx.lineWidth = 1; }
+      if (b - a > 36 && yb - ya > 10) { ctx.fillStyle = it.hex ? '#111' : '#fff'; ctx.font = mono(9.5); ctx.fillText(it.label.slice(0, Math.floor((b - a) / 6)), a + 6, (ya + yb) / 2); }
     }
-    // Keystrokes (what the overlay shows)
-    { const [ka, kb] = this.L.keys; ctx.font = font(10);
+    // Keystrokes: outlined chips. Overlapping chips move right, never stack.
+    { const [ka, kb] = this.L.keys; ctx.font = mono(8.5); let lastEnd = -1e9;
       for (const k of this.keyTrack || []) {
-        const a = this.x(this.srcToOut(k.start_ms)), b = this.x(this.srcToOut(k.end_ms));
-        if (b < x0 || a > x1) continue;
-        ctx.fillStyle = C('--tl-key'); rr(ctx, a, ka + 2, Math.max(3, b - a - 1), kb - ka - 4, 4); ctx.fill();
-        if (b - a > ctx.measureText(k.text).width + 8) { ctx.fillStyle = '#fff'; ctx.fillText(k.text, a + 4, (ka + kb) / 2); }
+        const a0 = this.x(this.srcToOut(k.start_ms));
+        const w = ctx.measureText(k.text).width + 10, a = Math.max(a0, lastEnd + 3);
+        if (a > x1 || a + w < x0) { lastEnd = a + w; continue; }
+        ctx.strokeStyle = C('--by-ui-border-input'); rr(ctx, a + .5, ka + 3.5, w, kb - ka - 7, 2); ctx.stroke();
+        ctx.fillStyle = C('--by-ui-text-2'); ctx.fillText(k.text, a + 5, (ka + kb) / 2 + .5);
+        lastEnd = a + w;
       } }
-    // Speech: one bar per visible word, filler words highlighted
-    const [wa, wb] = this.L.words;
+    // Captions: the words as text at their start time. Filler words that will be cut are struck through.
+    const [wa, wb] = this.L.words, wy = (wa + wb) / 2;
     const visible = w => [w.start_ms + 40, (w.start_ms + w.end_ms) / 2, w.end_ms - 40].some(t => this.project.clips.some(c => t >= c.src_start_ms && t < c.src_end_ms));
+    ctx.font = mono(9.5, 400); let wEnd = -1e9;
     for (const cap of this.project.captions || []) for (const w of cap.words) {
       if (!visible(w)) continue;
-      const a = this.x(this.srcToOut(w.start_ms)), b = this.x(this.srcToOut(w.end_ms));
-      ctx.fillStyle = FILLER.test(w.text) ? C('--tl-filler') : C('--tl-word');
-      rr(ctx, a, wa, Math.max(2, b - a - 1), wb - wa, 3); ctx.fill();
-      if (b - a > ctx.measureText(w.text).width + 6) { ctx.fillStyle = '#fff'; ctx.font = font(10); ctx.fillText(w.text, a + 3, (wa + wb) / 2); }
+      const a = this.x(this.srcToOut(w.start_ms)), tw = ctx.measureText(w.text).width;
+      if (a < wEnd + 4 || a > x1) continue;
+      const fill = FILLER.test(w.text);
+      ctx.fillStyle = fill ? C('--by-ui-warning') : C('--by-ui-text-2'); ctx.fillText(w.text, a, wy);
+      if (fill) ctx.fillRect(a - 1, Math.round(wy), tw + 2, 1);
+      wEnd = a + tw;
     }
     // Waveform of the sound, laid out the way it will be heard (after cuts and speed changes)
     { const [aa, ab] = this.L.audio, mid = (aa + ab) / 2, amp = (ab - aa) / 2 - 2;
-      ctx.font = font(11); ctx.fillStyle = C('--faint');
+      ctx.font = mono(10, 400); ctx.fillStyle = C('--by-ui-text-3');
       if (this.peaks && this.peaks.data.length) {
-        ctx.fillStyle = C('--tl-clip');
+        ctx.fillStyle = C('--by-ui-text-3');
         let acc = 0;
         for (const c of this.project.clips) {
           const len = (c.src_end_ms - c.src_start_ms) / c.speed, a = this.x(acc), b = this.x(acc + len), pk = this.peaks.data, bk = this.peaks.bucket;
@@ -428,25 +459,29 @@ class Timeline {
         if (msg) ctx.fillText(msg, x0 + 8, mid);
       } }
     // Hints in lanes that are still empty
-    ctx.font = font(11); ctx.fillStyle = C('--faint');
+    ctx.font = mono(10, 400); ctx.fillStyle = C('--by-ui-text-3');
     if (!this.project.zoom.length) ctx.fillText('No zooms yet. Double click here to add one, or run Auto edit.', x0 + 8, (this.L.zoom[0] + this.L.zoom[1]) / 2);
-    if (!(this.project.captions || []).length) ctx.fillText('No captions yet. Use Transcribe on the Auto edit tab.', x0 + 8, (wa + wb) / 2);
-    // Playhead
-    const p = this.x(this.playhead);
-    ctx.fillStyle = C('--tl-playhead'); ctx.fillRect(p - 1, 12, 2, H - 12);
-    ctx.beginPath(); ctx.moveTo(p - 6, 2); ctx.lineTo(p + 6, 2); ctx.lineTo(p + 6, 8); ctx.lineTo(p, 14); ctx.lineTo(p - 6, 8); ctx.closePath(); ctx.fill();
+    if (!(this.project.captions || []).length) ctx.fillText('No captions yet. Use Transcribe on the Auto edit tab.', x0 + 8, wy);
+    // Playhead: a 1px Signal hairline with a timecode tab on the ruler
+    const p = Math.round(this.x(this.playhead));
+    ctx.fillStyle = sig; ctx.fillRect(p, 16, 1, H - 16);
+    ctx.font = mono(9.5); const tc = fmt(this.playhead), tabW = Math.max(40, ctx.measureText(tc).width + 8);
+    const tx = Math.min(Math.max(p - tabW / 2, x0 - 2), x1 + 8 - tabW);
+    rr(ctx, tx, 1, tabW, 16, 2); ctx.fill();
+    ctx.fillStyle = C('--by-ui-on-signal'); ctx.textAlign = 'center'; ctx.fillText(tc, tx + tabW / 2, 9.5); ctx.textAlign = 'left';
     ctx.restore();
     // Scrollbar when zoomed in
     const dur = this.outDur();
     if (span < dur - 1) {
       const a = x0 + (v0 / dur) * (x1 - x0), b = x0 + (v1 / dur) * (x1 - x0);
-      ctx.fillStyle = C('--line-strong'); rr(ctx, a, H - 6, Math.max(12, b - a), 4, 2); ctx.fill();
+      ctx.fillStyle = C('--by-ui-border-input'); rr(ctx, a, H - 6, Math.max(12, b - a), 4, 2); ctx.fill();
     }
   }
 }
 const SHAPE_LABEL = { arrow: 'Arrow', box: 'Box', ellipse: 'Ellipse', highlight: 'Highlight' };
 function rr(ctx, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
 function fmt(ms, tenths = true) {
-  const s = Math.max(0, ms) / 1000, m = Math.floor(s / 60), r = s - m * 60;
-  return `${m}:${(tenths ? r.toFixed(1) : Math.floor(r).toString()).padStart(tenths ? 4 : 2, '0')}`;
+  const s = Math.max(0, ms) / 1000; let m = Math.floor(s / 60), r = s - m * 60;
+  if (tenths && r.toFixed(1) === '60.0') { m += 1; r = 0; }
+  return `${String(m).padStart(2, '0')}:${(tenths ? r.toFixed(1) : Math.floor(r).toString()).padStart(tenths ? 4 : 2, '0')}`;
 }

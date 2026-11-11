@@ -67,9 +67,11 @@ async function renderRecent() {
   box.hidden = !list.length;
   // Name and folder name only. The full path stays in the tooltip, so a
   // username never shows up in a recording of this screen.
-  const shown = recentAll ? list : list.slice(0, 3);
-  box.innerHTML = list.length ? '<h3 class="overline">Recent</h3>' + shown.map(r => `<div class="recent-row"><button class="recent-item" data-open="${esc(r.path)}" title="${esc(r.path)}" ${r.exists ? '' : 'disabled'}>${icon('i-film')}<span class="name">${esc(r.name)}</span><span class="meta">${esc(r.exists ? baseName(r.folder) : 'Moved or deleted')}</span></button><button class="btn icon ghost sm forget" data-forget="${esc(r.path)}" aria-label="Remove from recent" title="Remove from recent">${icon('i-x')}</button></div>`).join('')
-    + (list.length > 3 && !recentAll ? '<button class="link show-all" id="w-recent-all">Show all</button>' : '') : '';
+  // A ledger: name, folder name and how long ago, at most four rows.
+  const ago = t => { if (!t) return ''; const d = Date.now() / 1000 - t; if (d < 3600) return 'Just now'; if (d < 86400) return Math.floor(d / 3600) + ' h ago'; if (d < 86400 * 60) return Math.floor(d / 86400) + ' d ago'; return Math.floor(d / (86400 * 30)) + ' mo ago'; };
+  const shown = recentAll ? list : list.slice(0, 4);
+  box.innerHTML = list.length ? '<h3 class="cap">Recent</h3>' + shown.map(r => `<div class="ledger-row"><button class="recent-item" data-open="${esc(r.path)}" title="${esc(r.path)}" ${r.exists ? '' : 'disabled'}><span class="name">${esc(r.name)}</span><span class="m">${esc(r.exists ? baseName(r.folder) : 'Moved or deleted')}</span><span class="m">${esc(ago(r.opened))}</span></button><button class="forget" data-forget="${esc(r.path)}" aria-label="Remove ${esc(r.name)} from recent" title="Remove from recent">${icon('i-x')}</button></div>`).join('')
+    + (list.length > 4 && !recentAll ? '<button class="link show-all" id="w-recent-all">All projects</button>' : '') : '';
   const all = $('w-recent-all'); if (all) all.onclick = () => { recentAll = true; renderRecent(); };
   box.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
     if (!(await okToReplace('Opening ' + baseName(b.dataset.open)))) return;

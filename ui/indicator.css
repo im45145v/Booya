@@ -48,3 +48,23 @@ body.mac .pill { background: rgba(var(--ink), .52); }
 .txt.danger { background: var(--rec); color: #111110; }
 .txt.danger:hover { background: #FF8A5C; }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } .pill { transition: none; } }
+
+/* v2: the pill is solid warm ink, no blur or sheen. A steady live dot that
+   blinks in steps, a mono timer, a 26 px Signal Stop circle with an ink
+   square, and Discard in a quieter tone. */
+.pill, body.mac .pill { background: #12100D; background-image: none; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: #3B372F; box-shadow: none; }
+.dot { width: 8px; height: 8px; box-shadow: none; animation: rec-live 1.6s steps(1, end) infinite; }
+@keyframes rec-live { 0%, 62% { opacity: 1; } 63%, 100% { opacity: .25; } }
+.time { font-weight: 500; font-size: 13px; letter-spacing: .02em; color: #EDEBE5; }
+.state { font: 500 10.5px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: .1em; }
+.meter i { border-radius: 0; background: #3B372F; }
+.ib { background: transparent; color: #B8B3A8; }
+.ib:hover { background: #2B2822; color: #EDEBE5; }
+.ib.stop { width: 26px; height: 26px; margin: 0 3px; background: var(--rec); color: #12100D; }
+.ib.stop svg { width: 11px; height: 11px; }
+.ib.stop:hover { background: #FF8150; }
+.ib.ghost { color: #9A958A; }
+.ib.ghost:hover { background: #2B2822; color: #EDEBE5; }
+.sep { background: #3B372F; }
+.confirm { background: #12100D; }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }

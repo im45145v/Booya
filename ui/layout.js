@@ -2,7 +2,7 @@
 //
 //  * #split-v  between the preview and the side panel (panel 260 to 520 px).
 //  * #split-h  between the preview and the timeline (timeline 96 to 252 px).
-//    The timeline opens at 216 px. A height is remembered only once the person
+//    The timeline opens at 232 px. A height is remembered only once the person
 //    has dragged the splitter (saved.tlUser), so older saved heights do not stick.
 //
 // Sizes are saved in localStorage. What is saved is what the user chose; what
@@ -13,7 +13,7 @@
 (() => {
   const KEY = 'booya.layout.v1';
   const PANEL = { min: 260, max: 520, def: 320 };
-  const TL = { min: 96, max: 252, def: 216 };
+  const TL = { min: 96, max: 252, def: 232 };
   // The preview never gets smaller than this because of a splitter.
   const PREVIEW_MIN_W = 360, PREVIEW_MIN_H = 150;
   const root = document.documentElement;
@@ -117,5 +117,6 @@
   wire(document.getElementById('split-h'), 'y');
   apply();
   // For tests and for other scripts that need the numbers.
-  window.BooyaLayout = { apply, limits, saved: () => ({ ...saved }), KEY, PANEL, TL };
+  const setPref = (k, v) => { saved[k] = v; persist(); };
+  window.BooyaLayout = { apply, limits, saved: () => ({ ...saved }), setPref, KEY, PANEL, TL };
 })();

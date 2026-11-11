@@ -73,9 +73,9 @@ with sync_playwright() as pw:
     box = lambda sel: p.evaluate("s => { const b = document.querySelector(s).getBoundingClientRect(); return [b.x, b.y, b.width, b.height]; }", sel)
     panel_w = lambda: box(".inspector")[2]
     tl_h = lambda: box(".timeline-wrap")[3]
-    # 0.9 defaults: a 320 px side panel and a 216 px timeline once a recording is open.
+    # 0.9 defaults: a 320 px side panel and a 232 px timeline once a recording is open.
     assert abs(panel_w() - 320) <= 1, panel_w()
-    assert abs(tl_h() - 216) <= 1, tl_h()
+    assert abs(tl_h() - 232) <= 1, tl_h()
 
     def mouse_drag(sel, dx, dy):
         x, y, w, h = box(sel)
@@ -99,7 +99,7 @@ with sync_playwright() as pw:
     # horizontal
     pre_h = box("#preview-wrap")[3]
     mouse_drag("#split-h", 0, 100)
-    assert abs(tl_h() - 116) <= 2, tl_h()
+    assert abs(tl_h() - 132) <= 2, tl_h()
     assert box("#preview-wrap")[3] > pre_h + 90, "preview takes the room"
     mouse_drag("#split-h", 0, 500)
     assert abs(tl_h() - 96) <= 1, ("timeline min", tl_h())
@@ -109,15 +109,15 @@ with sync_playwright() as pw:
     assert tl_h() <= 252 + 1, tl_h()
     p.reload(); p.wait_for_selector("#welcome")
     assert abs(panel_w() - 260) <= 1, ("saved panel width after reload", panel_w())
-    # With no recording the timeline is a 44 px bar and the splitter is hidden.
-    assert abs(tl_h() - 44) <= 1, ("collapsed timeline", tl_h())
+    # With no recording the timeline is a 36 px ruler bar and the splitter is hidden.
+    assert abs(tl_h() - 36) <= 1, ("collapsed timeline", tl_h())
     assert not p.is_visible("#split-h") and not p.is_visible(".transport")
     s.load_sample()
     # double click resets both
     p.dblclick("#split-v"); p.dblclick("#split-h")
     p.wait_for_timeout(100)
-    assert abs(panel_w() - 320) <= 1 and abs(tl_h() - 216) <= 1, (panel_w(), tl_h())
-    assert p.evaluate("JSON.parse(localStorage.getItem('booya.layout.v1'))") == {"panel": 320, "tl": 216}
+    assert abs(panel_w() - 320) <= 1 and abs(tl_h() - 232) <= 1, (panel_w(), tl_h())
+    assert p.evaluate("JSON.parse(localStorage.getItem('booya.layout.v1'))") == {"panel": 320, "tl": 232}
     # keyboard
     p.focus("#split-v"); p.keyboard.press("ArrowLeft")
     assert abs(panel_w() - 330) <= 1, panel_w()
