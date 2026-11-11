@@ -155,7 +155,7 @@ pub fn mic_timing(mic: &Path) -> PathBuf {
 }
 
 /// Where a microphone recording really sits on the recording clock.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MicClock {
     /// Seconds after the recording clock started at which the first sample
     /// was taken.
@@ -166,6 +166,92 @@ pub struct MicClock {
     pub ratio: f64,
     /// Wall-clock seconds the packets cover.
     pub span_s: f64,
+    /// Stretches where the microphone delivered nothing and the sound was
+    /// lost (a stalled device, or buffers dropped while the reader was
+    /// busy): where in the samples each one sits (seconds of samples from
+    /// the first one) and how long it lasted on the wall clock. The file is
+    /// laid out by sample count, so without putting these back every word
+    /// after a stall plays that much early.
+    pub gaps: Vec<(f64, f64)>,
+}
+
+impl MicClock {
+    /// Wall-clock seconds lost to stalls in total.
+    pub fn lost_s(&self) -> f64 {
+        self.gaps.iter().map(|g| g.1).sum()
+    }
+}
+
+/// A stall shorter than this is read jitter, not lost sound (the same limit
+/// the in-process recorders use, see `capture::audiosink::GapFiller`).
+const MIC_GAP_S: f64 = 0.15;
+/// At most this many stalls are put back; more means a broken device and
+/// the filter would get unwieldy.
+const MIC_MAX_GAPS: usize = 200;
+
+/// Stalls in a packet log, from `(seconds of samples up to the end of the
+/// packet, read time)` points. `read - samples` is the start of the
+/// recording plus that packet's delay plus all the sound lost so far. Delays
+/// come and go, lost sound stays: the smallest value from each packet on
+/// (a lower envelope from the right) only rises where sound was lost, and
+/// each rise of more than [`MIC_GAP_S`] between two packets is one stall
+/// that sits just before the later packet's samples. A rise in the last
+/// second is not trusted (the reads on stop are late, nothing follows them).
+fn find_mic_gaps(xy: &[(f64, f64)], sizes_s: &[f64]) -> Vec<(f64, f64)> {
+    let n = xy.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut env = vec![0.0; n];
+    let mut m = f64::INFINITY;
+    for i in (0..n).rev() {
+        m = m.min(xy[i].1 - xy[i].0);
+        env[i] = m;
+    }
+    let x_end = xy[n - 1].0;
+    let mut gaps = Vec::new();
+    let mut seg = 0;
+    for i in 1..n {
+        let at = xy[i].0 - sizes_s[i];
+        if env[i] - env[i - 1] > MIC_GAP_S && x_end - at >= 1.0 {
+            // How much was lost is measured from the quickest read in the
+            // second before the stall, not from the one packet right before
+            // it, which may have been read a little late itself.
+            let before = (seg..i).rev().take_while(|&j| at - xy[j].0 < 1.0).map(|j| xy[j].1 - xy[j].0).fold(f64::INFINITY, f64::min);
+            gaps.push((at, env[i] - before.min(env[i - 1])));
+            seg = i;
+        }
+    }
+    if gaps.len() > MIC_MAX_GAPS {
+        gaps.sort_by(|a, b| b.1.total_cmp(&a.1));
+        gaps.truncate(MIC_MAX_GAPS);
+        gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    gaps
+}
+
+/// Wall-clock seconds lost before `x` seconds of samples.
+fn lost_before(gaps: &[(f64, f64)], x: f64) -> f64 {
+    gaps.iter().filter(|g| g.0 < x).map(|g| g.1).sum()
+}
+
+/// The filter that puts the stalls of a microphone back as silence, for
+/// audio laid out by sample count from 0 at 48 kHz (after `ALIGN_BASE`).
+/// Every sample after a stall is moved later by the sound lost before it,
+/// and the resampler fills the holes that leaves with silence.
+pub fn mic_gap_filter(gaps: &[(f64, f64)]) -> Option<String> {
+    if gaps.is_empty() {
+        return None;
+    }
+    let terms: String = gaps.iter().map(|(at, len)| format!("+{len:.4}*gte(N/SR,{at:.4})")).collect();
+    Some(format!("asetpts='(N/SR{terms})/TB',aresample=48000:async=1:first_pts=0,{ALIGN_REBASE}"))
+}
+
+/// Everything the packet log says to fix in a microphone file, in order:
+/// its stalls, then its clock rate. None when nothing needs fixing.
+pub fn mic_fix_filter(c: &MicClock) -> Option<String> {
+    let parts: Vec<String> = [mic_gap_filter(&c.gaps), clock_rate_filter(c.ratio)].into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| parts.join(","))
 }
 
 fn pcm_bytes(codec: &str) -> Option<usize> {
@@ -239,11 +325,16 @@ pub fn parse_mic_timing(text: &str) -> Option<MicClock> {
     }
     // x: seconds of samples up to the end of each packet; y: its read time.
     let mut cum = 0.0;
-    let xy: Vec<(f64, f64)> = pts.iter().zip(&sizes).map(|(p, sz)| {
-        cum += sz / frame / rate;
+    let sizes_s: Vec<f64> = sizes.iter().map(|sz| sz / frame / rate).collect();
+    let raw: Vec<(f64, f64)> = pts.iter().zip(&sizes_s).map(|(p, sz)| {
+        cum += sz;
         (cum, p * tb)
     }).collect();
-    let span = xy[xy.len() - 1].1 - xy[0].1;
+    let span = raw[raw.len() - 1].1 - raw[0].1;
+    // Sound lost to stalls comes out first: it is a step, not a rate, and a
+    // straight line through a step is wrong on both sides of it.
+    let gaps = find_mic_gaps(&raw, &sizes_s);
+    let xy: Vec<(f64, f64)> = raw.iter().map(|&(x, y)| (x, y - lost_before(&gaps, x))).collect();
     // Wall seconds per second of samples, from the lower edge of the delays:
     // the quickest read in each tenth of the take. Read delays come and go
     // (a busy machine adds tens of ms), the quickest read in a stretch does
@@ -273,7 +364,7 @@ pub fn parse_mic_timing(text: &str) -> Option<MicClock> {
         slope = 1.0;
     }
     let start = xy.iter().map(|(x, y)| y - x * slope).fold(f64::INFINITY, f64::min);
-    start.is_finite().then_some(MicClock { start_s: start, ratio: 1.0 / slope, span_s: span })
+    start.is_finite().then_some(MicClock { start_s: start, ratio: 1.0 / slope, span_s: span, gaps })
 }
 
 /// The clock of a microphone file from its packet log, when there is one.
@@ -355,7 +446,7 @@ pub fn merge_system_audio(mkv: &Path) -> Result<bool> {
     let mut rate = None;
     if let Some(c) = mic_clock(&mic).filter(|c| (c.start_s - m.0).abs() < 5.0) {
         m.0 = c.start_s;
-        rate = clock_rate_filter(c.ratio);
+        rate = mic_fix_filter(&c);
     }
     let tmp = mic.with_extension("mkv.part");
     let base = m.0.min(s.0);
@@ -459,7 +550,7 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
         // the microphone's clock ran; the file's own start is only the
         // moment its first packet was read.
         let clock = mic_clock(&side).filter(|c| (c.start_s - a.0).abs() < 5.0);
-        let a = match clock { Some(c) => (c.start_s, a.1), None => a };
+        let a = match &clock { Some(c) => (c.start_s, a.1), None => a };
         let a_start = if (a.0 - v.0).abs() > 30.0 + v.1 { v.0 } else { a.0 };
         let mut f = audio_align_filter(v, (a_start, a.1)).unwrap_or_else(audio_plain_filter);
         if join == Join::Plain {
@@ -468,7 +559,7 @@ fn remux_inner(mkv: &Path, join: Join) -> Result<Remuxed> {
             f = format!("{ALIGN_BASE},atrim=start={:.3},{ALIGN_REBASE},apad", v.0 - a_start);
         }
         align = Some(match clock {
-            Some(c) if join == Join::Aligned => with_rate(f, clock_rate_filter(c.ratio)),
+            Some(c) if join == Join::Aligned => with_rate(f, mic_fix_filter(&c)),
             Some(_) => f,
             None => {
                 let tempo = sample_duration(&side, "0:a:0").and_then(|n| track_drift_tempo(n, v, a_start));
@@ -1009,6 +1100,103 @@ mod tests {
         let (start, dur) = stream_times(&mic_sidecar(&mkv), "a:0").unwrap();
         assert!((start - 1.0).abs() < 0.06, "keeps the shared start: {start}");
         assert!((dur - (2.0 / 0.9)).abs() < 0.12, "2 s of voice at 0.9 samples/s becomes {:.3}s, got {dur}", 2.0 / 0.9);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A mono float microphone packet log (1024 samples a packet at 48 kHz)
+    /// whose first sample is at `start` and that lost `stalls` (where in the
+    /// samples, wall seconds lost), with read jitter of up to 40 ms.
+    fn stall_log(start: f64, secs: f64, stalls: &[(f64, f64)]) -> String {
+        let mut t = String::from("#tb 0: 1/1000000\n#codec_id 0: pcm_f32le\n#sample_rate 0: 48000\n#channel_layout_name 0: mono\n");
+        let (mut cum, mut k) = (0.0f64, 0u64);
+        while cum < secs {
+            let begin = cum;
+            cum += 1024.0 / 48_000.0;
+            k += 1;
+            let lost: f64 = stalls.iter().filter(|s| s.0 <= begin + 1e-9).map(|s| s.1).sum();
+            let jitter = 0.002 + 0.038 * (((k * 7919) % 101) as f64 / 100.0);
+            let read = start + cum + lost + jitter;
+            t.push_str(&format!("0, {0}, {0}, 21333, 4096, 0x0\n", (read * 1e6).round() as i64));
+        }
+        t
+    }
+
+    /// Issue #7 on a Mac: the avfoundation microphone stopped delivering for
+    /// 9 s a few seconds in. The file is laid out by sample count, so every
+    /// word after that played 9 s early. A straight line through the packet
+    /// log cannot describe a step: it gave a wrong rate and a wrong start,
+    /// and a seconds-long offset was left on both sides of the stall.
+    #[test]
+    fn a_stalled_microphone_is_found_in_the_packet_log() {
+        let c = parse_mic_timing(&stall_log(1.5, 62.0, &[(12.0, 9.0)])).unwrap();
+        assert_eq!(c.gaps.len(), 1, "{:?}", c.gaps);
+        let (at, len) = c.gaps[0];
+        assert!((at - 12.0).abs() < 0.03 && (len - 9.0).abs() < 0.05, "{:?}", c.gaps);
+        assert!((c.ratio - 1.0).abs() < 0.001, "the stall is not mistaken for a slow clock: {c:?}");
+        assert!((c.start_s - 1.502).abs() < 0.01, "{c:?}");
+        // Many short drops (a busy reader) add up the same way.
+        let drops: Vec<(f64, f64)> = (1..30).map(|i| (i as f64 * 2.0, 0.25)).collect();
+        let c = parse_mic_timing(&stall_log(0.8, 62.0, &drops)).unwrap();
+        assert_eq!(c.gaps.len(), drops.len(), "{:?}", c.gaps);
+        assert!((c.lost_s() - 7.25).abs() < 0.05, "{}", c.lost_s());
+        assert!((c.ratio - 1.0).abs() < 0.001, "{c:?}");
+        // Read jitter alone, a slow clock, and a slow first read are not stalls.
+        assert!(parse_mic_timing(&stall_log(1.0, 62.0, &[])).unwrap().gaps.is_empty());
+        assert!(parse_mic_timing(&timing_text(1.002, 120.0)).unwrap().gaps.is_empty());
+        assert!(parse_mic_timing(&timing_text(1.0, 8.0)).unwrap().gaps.is_empty());
+    }
+
+    #[test]
+    fn the_fix_filter_puts_stalls_back_before_the_rate() {
+        let c = MicClock { start_s: 1.0, ratio: 0.98, span_s: 60.0, gaps: vec![(12.0, 9.0), (30.5, 0.25)] };
+        let f = mic_fix_filter(&c).unwrap();
+        assert!(f.starts_with("asetpts='(N/SR+9.0000*gte(N/SR,12.0000)+0.2500*gte(N/SR,30.5000))/TB',aresample=48000:async=1"), "{f}");
+        assert!(f.ends_with(&clock_rate_filter(0.98).unwrap()), "{f}");
+        assert_eq!(mic_fix_filter(&MicClock { start_s: 1.0, ratio: 1.0, span_s: 60.0, gaps: vec![] }), None);
+    }
+
+    /// The whole path, with the system audio mixed in (as on Ashish's Mac):
+    /// a beep before the stall and one after it both land where they were
+    /// said, not 6 s early.
+    #[test]
+    fn a_stalled_microphone_is_lined_up_after_the_system_audio_mix() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("micstall");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=25", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"], &mkv));
+        // 18 s of samples, beeps at 2 s and 14 s of them; 6 s were lost at 8 s.
+        assert!(run(&["-f", "lavfi", "-i", "aevalsrc='0.6*sin(2*PI*1000*t)*(between(t,2,2.1)+between(t,14,14.1))':s=48000:d=18", "-output_ts_offset", "1.03", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        assert!(run(&["-f", "lavfi", "-i", "anoisesrc=a=0.001:r=48000:d=24", "-output_ts_offset", "1.0", "-c:a", "pcm_f32le"], &sys_sidecar(&mkv)));
+        std::fs::write(mic_timing(&mic_sidecar(&mkv)), stall_log(1.0, 18.0, &[(8.0, 6.0)])).unwrap();
+        assert!(merge_system_audio(&mkv).unwrap());
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        let beeps = crate::syncprobe::beep_times(&r.path).unwrap();
+        assert_eq!(beeps.len(), 2, "{beeps:?}");
+        assert!((beeps[0] - 3.0).abs() < 0.06, "the beep before the stall belongs at 3 s: {beeps:?}");
+        assert!((beeps[1] - 21.0).abs() < 0.06, "the beep after the stall belongs at 21 s, not 15 s: {beeps:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The same stall with only the microphone.
+    #[test]
+    fn a_stalled_microphone_is_lined_up_in_the_remux() {
+        if !ffmpeg::ffmpeg_found() {
+            return;
+        }
+        let d = tmpdir("micstall-only");
+        let mkv = d.join("recording.mkv");
+        let run = |args: &[&str], out: &Path| crate::proc::command(ffmpeg_bin()).args(["-v", "error", "-y"]).args(args).arg(out).status().unwrap().success();
+        assert!(run(&["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=25", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"], &mkv));
+        assert!(run(&["-f", "lavfi", "-i", "aevalsrc='0.6*sin(2*PI*1000*t)*(between(t,2,2.1)+between(t,14,14.1))':s=48000:d=18", "-output_ts_offset", "1.03", "-c:a", "pcm_f32le"], &mic_sidecar(&mkv)));
+        std::fs::write(mic_timing(&mic_sidecar(&mkv)), stall_log(1.0, 18.0, &[(8.0, 6.0)])).unwrap();
+        let r = remux_to_mp4_info(&mkv).unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        let beeps = crate::syncprobe::beep_times(&r.path).unwrap();
+        assert_eq!(beeps.len(), 2, "{beeps:?}");
+        assert!((beeps[0] - 3.0).abs() < 0.06 && (beeps[1] - 21.0).abs() < 0.06, "{beeps:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
