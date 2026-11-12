@@ -561,6 +561,9 @@ pub struct Renderer {
     /// The glass panel in the main layout.
     pub panel: Option<Layout>,
     glass: crate::project::Glass,
+    /// Audio offset plus any track lead. Caption times are on the decoded
+    /// audio clock; this moves them onto the video clock used as `src_t`.
+    caption_shift_ms: f64,
 }
 
 fn lerp3(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
@@ -618,7 +621,8 @@ impl Renderer {
         let (layout, panel) = (scenes[0].layout, scenes[0].panel);
         let scene_runs = project.scene_runs();
         let zoom_on_output = project.zoom_on_output();
-        Self { project, out_w, out_h, track, clicks, touches, labels, scene_runs, zoom_on_output, card_bg, scenes, layout, panel, glass,
+        let caption_shift_ms = crate::export::effective_audio_offset_ms(&project);
+        Self { project, out_w, out_h, track, clicks, touches, labels, scene_runs, zoom_on_output, card_bg, scenes, layout, panel, glass, caption_shift_ms,
         }
     }
 
@@ -979,30 +983,36 @@ impl Renderer {
         }
     }
 
+    fn caption_clock(&self, src_t: f64) -> f64 {
+        src_t - self.caption_shift_ms
+    }
+
     fn caption_at(&self, src_t: f64) -> Option<&crate::project::Caption> {
         if !self.project.caption_style.burn_in {
             return None;
         }
+        let t = self.caption_clock(src_t);
         // The latest caption that has started wins, so one with odd times
         // can never hide the ones after it.
-        self.project.captions.iter().filter(|c| src_t >= c.start_ms && src_t < c.end_ms).max_by(|a, b| a.start_ms.total_cmp(&b.start_ms))
+        self.project.captions.iter().filter(|c| t >= c.start_ms && t < c.end_ms).max_by(|a, b| a.start_ms.total_cmp(&b.start_ms))
     }
 
     fn draw_caption(&self, out: &mut Frame, c: &crate::project::Caption, src_t: f64) {
         use crate::project::{CaptionLook, CaptionPosition};
         let st = &self.project.caption_style;
+        let t = self.caption_clock(src_t);
         let short = self.out_w.min(self.out_h) as f64;
         let base_px = (st.size * short).max(12.0) as f32;
         let max_w = self.out_w as f32 * 0.84;
         // Words removed by cuts (fillers) are not shown.
-        let words: Vec<&crate::project::CaptionWord> = c.words.iter().filter(|w| crate::captions::word_visible(&self.project, w)).collect();
+        let words: Vec<&crate::project::CaptionWord> = c.words.iter().filter(|w| crate::captions::word_visible_shifted(&self.project, w, self.caption_shift_ms)).collect();
         let case = |t: &str| if st.uppercase { t.to_uppercase() } else { t.to_string() };
         // Which word is being spoken now (by index into the caption's words).
-        let active = words.iter().position(|w| src_t >= w.start_ms && src_t < w.end_ms);
+        let active = words.iter().position(|w| t >= w.start_ms && t < w.end_ms);
         // The words to show, and which of them is being spoken.
         let pop = st.look == CaptionLook::Pop && !words.is_empty();
         let (shown, active, px): (Vec<String>, Option<usize>, f32) = if pop {
-            let r = pop_chunk(&words, src_t, POP_WORDS);
+            let r = pop_chunk(&words, t, POP_WORDS);
             let a = active.filter(|i| r.contains(i)).map(|i| i - r.start);
             (words[r].iter().map(|w| case(&w.text)).collect(), a, base_px * 1.35)
         } else if c.words.is_empty() {
@@ -1017,8 +1027,8 @@ impl Renderer {
         // The spoken word in the pop look grows a little as it starts.
         let grow = match (pop, active) {
             (true, Some(_)) => {
-                let w = words.iter().find(|w| src_t >= w.start_ms && src_t < w.end_ms).expect("active word");
-                let k = ((src_t - w.start_ms) / 90.0).clamp(0.0, 1.0) as f32;
+                let w = words.iter().find(|w| t >= w.start_ms && t < w.end_ms).expect("active word");
+                let k = ((t - w.start_ms) / 90.0).clamp(0.0, 1.0) as f32;
                 1.0 + 0.14 * k * k * (3.0 - 2.0 * k)
             }
             _ => 1.0,
@@ -1926,6 +1936,20 @@ mod tests {
         let (a, b, text) = &cues[1];
         assert_eq!(text, "Then click save");
         assert!((b - a - 900.0).abs() < 120.0, "{a} {b}");
+    }
+
+    #[test]
+    fn burned_in_captions_follow_the_audio_offset() {
+        let (mut p, _src) = caption_project(crate::project::CaptionLook::Box, crate::project::CaptionPosition::Bottom);
+        // Words start at 1000 ms on the audio clock.
+        assert!(Renderer::new(p.clone(), None, 640, 360, None).caption_at(1000.0).is_some());
+        p.audio.offset_ms = 200.0;
+        let r = Renderer::new(p, None, 640, 360, None);
+        assert!(r.caption_at(1000.0).is_none(), "the voice is heard 200 ms later");
+        assert!(r.caption_at(1200.0).is_some());
+        // SRT must use the same shift so burn-in and the sidecar agree.
+        let srt = crate::captions::to_srt(&r.project);
+        assert!(srt.contains("00:00:01,200 --> "), "{srt}");
     }
 
     #[test]

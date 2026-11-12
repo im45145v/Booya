@@ -59,7 +59,7 @@ function checkpoint() {
   hIdx = history.length - 1; updUndo();
 }
 const scheduleCheckpoint = () => { clearTimeout(cpTimer); cpTimer = setTimeout(checkpoint, 350); };
-function restore() { const t = tl.playhead; const prevSrc = project?.source; project = JSON.parse(history[hIdx]); tl.project = project; if (project.source !== prevSrc) { tl.setProject(project); prepareProxy(); } tl.playhead = Math.min(t, tl.outDur()); syncPanel(); tl.draw(); refresh(); updUndo(); }
+function restore() { const t = tl.playhead; const prevSrc = project?.source; project = JSON.parse(history[hIdx]); tl.project = project; if (project.source !== prevSrc) { tl.setProject(project); prepareProxy(); refreshAudioClock(); } applyClockOffset(); tl.playhead = Math.min(t, tl.outDur()); syncPanel(); tl.draw(); refresh(); updUndo(); }
 function undo() { clearTimeout(cpTimer); checkpoint(); if (hIdx > 0) { hIdx--; restore(); status('Undone'); } }
 function redo() { if (hIdx < history.length - 1) { hIdx++; restore(); status('Redone'); } }
 // True when the open project has edits that would be lost. A project that
@@ -107,9 +107,23 @@ function setProject(p, path = null) {
   markDone(1); $('welcome').hidden = true; $('preview').hidden = false; $('tl-empty').hidden = true;
   $('ready-report').innerHTML = '';
   if (/^Ready/.test($('status').textContent)) status(idleText(), 'idle');
-  enableControls(); syncPanel(); syncSelection(); refresh(); prepareProxy();
+  enableControls(); syncPanel(); syncSelection(); refreshAudioClock(); refresh(); prepareProxy();
 }
-function applyResult(p) { const t = tl.playhead; project = p; tl.project = p; tl.playhead = Math.min(t, tl.outDur()); tl.fitted = true; syncPanel(); syncSelection(); tl.draw(); refresh(); checkpoint(); }
+function applyResult(p) { const t = tl.playhead; project = p; tl.project = p; tl.playhead = Math.min(t, tl.outDur()); tl.fitted = true; syncPanel(); syncSelection(); refreshAudioClock(); tl.draw(); refresh(); checkpoint(); }
+// Lead of the audio track over the video, folded into the same clock as export.
+// The user's offset is in project.audio.offset_ms; the two are added in clockOffsetMs.
+let audioLeadMs = 0;
+function clockOffsetMs() { return ((project && project.audio && project.audio.offset_ms) || 0) + audioLeadMs; }
+function applyClockOffset() { if (tl) tl.clockOffsetMs = clockOffsetMs(); }
+async function refreshAudioClock() {
+  const src = project && project.source;
+  if (!src) { audioLeadMs = 0; applyClockOffset(); return; }
+  try {
+    const r = await invoke('audio_clock_offset', { source: src, offsetMs: (project.audio && project.audio.offset_ms) || 0 });
+    audioLeadMs = r.lead_ms || 0;
+  } catch (_) { audioLeadMs = 0; }
+  applyClockOffset();
+}
 const AUTO_STEPS = ['r-zoom', 'r-captions', 'r-cut', 'r-pauses', 'r-blur', 'r-denoise'];
 // The meta row under the video in the well: zoom at the playhead and the time.
 function updStageMeta() {
@@ -219,6 +233,7 @@ function readPanel() {
   { const L = project.layouts = project.layouts || { segments: [] }; L.follow_cursor = $('lay-follow').checked; L.split_camera_fraction = +$('lay-share').value; $('lay-share-out').textContent = Math.round(L.split_camera_fraction * 100) + '%'; }
   if (project.webcam) { const L = project.layouts; L.base = $('cam-layout').value; L.transition_ms = +$('lay-trans').value; $('lay-trans-out').textContent = (L.transition_ms / 1000).toFixed(2) + ' s'; }
   Object.assign(project.audio, { denoise: $('aud-denoise').checked, mute: $('aud-mute').checked, normalize: $('aud-normalize').checked, gain_db: +$('aud-gain').value, volume: +$('aud-volume').value, fade_in_ms: +$('aud-fadein').value, fade_out_ms: +$('aud-fadeout').value, offset_ms: +$('aud-offset').value });
+  applyClockOffset();
   { const ms = +$('card-len').value * 1000, mk = (t, sub) => (t.trim() || sub.trim() ? { title: t.trim(), subtitle: sub.trim(), duration_ms: ms } : null);
     project.intro = mk($('in-title').value, $('in-sub').value); project.outro = mk($('out-title').value, $('out-sub').value); }
   { const t = $('wm-text').value.trim(); project.watermark = t ? { text: t, corner: $('wm-corner').value, opacity: +$('wm-opacity').value, size: (project.watermark && project.watermark.size) || 0.028 } : null; }
@@ -1440,7 +1455,7 @@ function nativeMusicChanged() {
 function syncNative(start) {
   const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
   const idx = project.clips.indexOf(clip), speed = Math.max(0.25, Math.min(4, clip?.speed || 1));
-  const want = (srcMs - (a.offset_ms || 0)) / 1000;
+  const want = (srcMs - clockOffsetMs()) / 1000;
   if (clip?.mute) { invoke('audio_set_volume', { volume: 0, muted: true }).catch(() => { }); } else if (nat.mutedClip) applyVolume();
   nat.mutedClip = !!clip?.mute;
   const sound = (clip?.speed || 1) <= 4;
@@ -1465,7 +1480,7 @@ function syncAudio(start) {
   if (audioState !== 'ready' || !project) return;
   if (nat.on) return syncNative(start);
   const a = project.audio, srcMs = tl.outToSrc(tl.playhead), clip = audioClip(srcMs);
-  const want = (srcMs - (a.offset_ms || 0)) / 1000;
+  const want = (srcMs - clockOffsetMs()) / 1000;
   applyVolume(); if (clip?.mute) pa.muted = true;
   pa.playbackRate = Math.max(0.25, Math.min(4, clip?.speed || 1)); pa.preservesPitch = true;
   // Above 4x the browser cannot keep up with the sound, so it is skipped.

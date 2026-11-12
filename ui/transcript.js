@@ -34,8 +34,12 @@ function renderTranscript() {
   caps.forEach((c, i) => {
     CaptionEdit.ensureWords(c);
     const row = document.createElement('div'); row.className = 'tr-row';
-    const t = document.createElement('button'); t.className = 'tr-time'; t.textContent = fmt(c.start_ms); t.title = 'Jump here';
-    t.onclick = () => { tl.playhead = tl.srcToOut(c.start_ms + 1); tl.draw(); refresh(); };
+    const shift = (typeof tl !== 'undefined' && tl.clockOffsetMs) || 0;
+    const outStart = (typeof CaptionEdit !== 'undefined' && CaptionEdit.outputStartMs)
+      ? CaptionEdit.outputStartMs((s) => tl.srcToOut(s), c.start_ms, shift)
+      : tl.srcToOut(c.start_ms + shift);
+    const t = document.createElement('button'); t.className = 'tr-time'; t.textContent = fmt(outStart); t.title = 'Jump here';
+    t.onclick = () => { tl.playhead = tl.srcToOut(c.start_ms + shift + 1); tl.draw(); refresh(); };
     const words = document.createElement('div'); words.className = 'tr-words'; words.setAttribute('role', 'group'); words.setAttribute('aria-label', 'Caption ' + (i + 1));
     let picked = -1; // the word split will start a new line at
     const edit = (k) => {
@@ -62,7 +66,7 @@ function renderTranscript() {
     };
     c.words.forEach((w, k) => {
       const chip = document.createElement('button'); chip.className = 'tr-word' + (k === picked ? ' picked' : ''); chip.textContent = w.text; chip.title = 'Click to fix this word';
-      chip.onclick = () => { picked = k; tl.playhead = tl.srcToOut(w.start_ms + 1); tl.draw(); edit(k); };
+      chip.onclick = () => { picked = k; tl.playhead = tl.srcToOut(w.start_ms + shift + 1); tl.draw(); edit(k); };
       words.appendChild(chip);
     });
     const tools = document.createElement('div'); tools.className = 'tr-tools';

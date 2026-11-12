@@ -64,3 +64,13 @@ test('timing can be nudged and never inverts or goes below zero', () => {
   assert.equal(c2[0].words[0].start_ms, 0);
   assert.equal(c2[0].words[2].end_ms, 2000);
 });
+
+test('transcript time is on the edited timeline', () => {
+  // A 1 s cut at the start: source 2000 ms is output 1000 ms.
+  const srcToOut = (src) => Math.max(0, src - 1000);
+  assert.equal(E.outputStartMs(srcToOut, 2000, 0), 1000);
+  assert.equal(E.outputStartMs(srcToOut, 2000, 200), 1200);
+  // No cuts: output time equals source time.
+  const identity = (src) => src;
+  assert.equal(E.outputStartMs(identity, 3500, 0), 3500);
+});
