@@ -95,7 +95,14 @@
     return caps;
   }
 
-  const api = { ensureWords, setWord, mergeNext, splitAt, nudge, sync };
+  // Output-timeline time for a caption (or word) start. Stored times are on
+  // the recording clock; the playhead is after cuts and speed changes.
+  // clockOffsetMs is the audio offset (and any lead) so the time matches the voice.
+  function outputStartMs(srcToOut, startMs, clockOffsetMs) {
+    return srcToOut(startMs + (clockOffsetMs || 0));
+  }
+
+  const api = { ensureWords, setWord, mergeNext, splitAt, nudge, sync, outputStartMs };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CaptionEdit = api;
 })(typeof window !== 'undefined' ? window : globalThis);

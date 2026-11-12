@@ -1926,6 +1926,14 @@ fn state_json(s: booya_core::playback::State) -> serde_json::Value {
     serde_json::json!({ "playing": s.playing, "voice_s": s.voice_s, "music_s": s.music_s, "rate": s.rate, "volume": s.volume, "muted": s.muted, "peak": s.peak, "has_voice": s.has_voice, "has_music": s.has_music })
 }
 
+/// The audio clock the editor should use: the user's offset plus any lead of
+/// the audio track over the video, so preview sound and captions match export.
+#[tauri::command]
+fn audio_clock_offset(source: String, offset_ms: f64) -> R<serde_json::Value> {
+    let lead_ms = booya_core::export::audio_lead_ms(std::path::Path::new(&source));
+    Ok(serde_json::json!({ "lead_ms": lead_ms, "offset_ms": offset_ms, "effective_ms": offset_ms + lead_ms }))
+}
+
 /// Start playing from `voice_s` of the recording and `music_s` of the video, at `rate`.
 #[tauri::command]
 fn audio_play(voice_s: f64, music_s: f64, rate: f64) -> R<serde_json::Value> {
@@ -2847,7 +2855,7 @@ fn main() {
             proxy_path,
             audio_preview,
             audio_bytes,
-            audio_preview_wav, permissions_list, permissions_request, audio_native_load, audio_native_music, audio_play, audio_pause, audio_seek, audio_set_rate, audio_set_volume, audio_state, audio_diag_log,
+            audio_preview_wav, permissions_list, permissions_request, audio_native_load, audio_native_music, audio_clock_offset, audio_play, audio_pause, audio_seek, audio_set_rate, audio_set_volume, audio_state, audio_diag_log,
             mic_list,
             mic_meter_start,
             mic_meter_stop,

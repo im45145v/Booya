@@ -432,7 +432,7 @@ class Timeline {
     ctx.font = mono(9.5, 400); let wEnd = -1e9;
     for (const cap of this.project.captions || []) for (const w of cap.words) {
       if (!visible(w)) continue;
-      const a = this.x(this.srcToOut(w.start_ms)), tw = ctx.measureText(w.text).width;
+      const a = this.x(this.srcToOut(w.start_ms + (this.clockOffsetMs || 0))), tw = ctx.measureText(w.text).width;
       if (a < wEnd + 4 || a > x1) continue;
       const fill = FILLER.test(w.text);
       ctx.fillStyle = fill ? C('--by-ui-warning') : C('--by-ui-text-2'); ctx.fillText(w.text, a, wy);

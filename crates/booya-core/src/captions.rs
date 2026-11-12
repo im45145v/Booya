@@ -49,26 +49,39 @@ fn ts(ms: f64, sep: char) -> String {
     format!("{:02}:{:02}:{:02}{}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, sep, ms % 1000)
 }
 
-/// True when a word survives the project's cuts.
+/// True when a word survives the project's cuts. `shift_ms` is the audio
+/// clock offset (user offset plus any track lead): stored word times are on
+/// the decoded audio, and this moves them onto the video clock first.
+pub fn word_visible_shifted(p: &Project, w: &CaptionWord, shift_ms: f64) -> bool {
+    [w.start_ms + 40.0, (w.start_ms + w.end_ms) / 2.0, w.end_ms - 40.0].iter().any(|&t| p.output_time(t + shift_ms).is_some())
+}
+
+/// True when a word survives the project's cuts, using the project's audio
+/// offset and lead.
 pub fn word_visible(p: &Project, w: &CaptionWord) -> bool {
-    [w.start_ms + 40.0, (w.start_ms + w.end_ms) / 2.0, w.end_ms - 40.0].iter().any(|&t| p.output_time(t).is_some())
+    word_visible_shifted(p, w, crate::export::effective_audio_offset_ms(p))
 }
 
 /// Captions mapped to output time; captions fully cut out are dropped.
+/// Times include the audio clock offset and, when present, the intro card,
+/// so a sidecar file lines up with the finished video.
 pub fn output_captions(p: &Project) -> Vec<(f64, f64, String)> {
+    let shift = crate::export::effective_audio_offset_ms(p);
+    let (intro_ms, _) = p.card_lengths_ms();
     let mut v = Vec::new();
     for c in &p.captions {
         // Use the visible words so cut filler words disappear from the text.
-        let kept: Vec<&CaptionWord> = c.words.iter().filter(|w| word_visible(p, w)).collect();
+        let kept: Vec<&CaptionWord> = c.words.iter().filter(|w| word_visible_shifted(p, w, shift)).collect();
         let text = if c.words.is_empty() { c.text.clone() } else { kept.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") };
         if text.trim().is_empty() {
             continue;
         }
-        let start = (0..=20).map(|i| c.start_ms + (c.end_ms - c.start_ms) * i as f64 / 20.0).find_map(|t| p.output_time(t));
-        let end = (0..=20).rev().map(|i| c.start_ms + (c.end_ms - c.start_ms) * i as f64 / 20.0 - 0.5).find_map(|t| p.output_time(t));
+        let src = |t: f64| t + shift;
+        let start = (0..=20).map(|i| src(c.start_ms + (c.end_ms - c.start_ms) * i as f64 / 20.0)).find_map(|t| p.output_time(t));
+        let end = (0..=20).rev().map(|i| src(c.start_ms + (c.end_ms - c.start_ms) * i as f64 / 20.0 - 0.5)).find_map(|t| p.output_time(t));
         if let (Some(a), Some(b)) = (start, end) {
             if b > a {
-                v.push((a, b, text));
+                v.push((a + intro_ms, b + intro_ms, text));
             }
         }
     }
@@ -167,6 +180,32 @@ pub fn snap_to_speech(words: &mut [CaptionWord], silences: &[(f64, f64)]) {
             if w.end_ms > a && w.end_ms <= b && a > w.start_ms {
                 w.end_ms = a;
             }
+        }
+    }
+}
+
+/// How late a word start may be, relative to the voiced stretch it sits in,
+/// before we pull it back to that stretch's onset.
+pub const LATE_ONSET_MS: f64 = 400.0;
+
+/// Snap a word start back to the onset of the voiced stretch it sits in when
+/// Whisper placed it late but still on the voice. The move is at most
+/// `max_late_ms` and never earlier than the previous word's end. Words in
+/// silence are left to [`snap_to_speech`].
+pub fn tighten_late_onsets(words: &mut [CaptionWord], onsets: &[(f64, f64)], max_late_ms: f64) {
+    for i in 0..words.len() {
+        let prev_end = if i == 0 { f64::NEG_INFINITY } else { words[i - 1].end_ms };
+        let start = words[i].start_ms;
+        let Some(&(a, _)) = onsets.iter().find(|&&(a, b)| start >= a && start < b) else {
+            continue;
+        };
+        let late = start - a;
+        if late <= 0.0 || late > max_late_ms {
+            continue;
+        }
+        let new_start = a.max(prev_end);
+        if new_start < start {
+            words[i].start_ms = new_start;
         }
     }
 }
@@ -280,5 +319,68 @@ mod tests {
         let words = vec![w(0.0, 400.0, "Okay"), w(500.0, 800.0, "um"), w(900.0, 1200.0, "next")];
         let cuts = plan_cuts(&words, &[(2000.0, 4000.0), (5000.0, 5300.0)], &AutoCutOptions { cut_silences: true, ..Default::default() });
         assert_eq!(cuts, vec![(460.0, 840.0), (2180.0, 3820.0)]);
+    }
+
+    #[test]
+    fn srt_shifts_with_the_audio_offset() {
+        let mut p = Project::new("a.mp4".into(), None, 10, 10, 10_000.0);
+        p.captions = words_to_captions(&[w(1000.0, 1400.0, "Hello")], 42, 700.0);
+        p.audio.offset_ms = 200.0;
+        let srt = to_srt(&p);
+        assert!(srt.contains("00:00:01,200 --> "), "{srt}");
+        p.audio.offset_ms = -200.0;
+        let srt = to_srt(&p);
+        assert!(srt.contains("00:00:00,800 --> "), "{srt}");
+    }
+
+    #[test]
+    fn srt_and_vtt_include_the_intro_card() {
+        let mut p = Project::new("a.mp4".into(), None, 10, 10, 10_000.0);
+        p.captions = words_to_captions(&[w(1000.0, 1400.0, "Hello")], 42, 700.0);
+        p.intro = Some(crate::project::Card { title: "Intro".into(), subtitle: String::new(), duration_ms: 2000.0 });
+        let srt = to_srt(&p);
+        assert!(srt.contains("00:00:03,000 --> "), "{srt}");
+        assert!(to_vtt(&p).contains("00:00:03.000 --> "));
+        p.audio.offset_ms = 200.0;
+        let srt = to_srt(&p);
+        assert!(srt.contains("00:00:03,200 --> "), "{srt}");
+    }
+
+    #[test]
+    fn a_late_onset_snaps_back_within_the_window() {
+        let mut ws = vec![w(1300.0, 1800.0, "Hello"), w(2000.0, 2400.0, "there")];
+        tighten_late_onsets(&mut ws, &[(1000.0, 2500.0)], LATE_ONSET_MS);
+        assert_eq!(ws[0].start_ms, 1000.0);
+        // 1 s late, past the window: left alone.
+        assert_eq!(ws[1].start_ms, 2000.0);
+        assert_eq!(ws[0].end_ms, 1800.0);
+    }
+
+    #[test]
+    fn a_late_onset_does_not_cross_the_previous_word() {
+        let mut ws = vec![w(1000.0, 1250.0, "Hi"), w(1300.0, 1800.0, "Hello")];
+        tighten_late_onsets(&mut ws, &[(1000.0, 2000.0)], LATE_ONSET_MS);
+        assert_eq!(ws[1].start_ms, 1250.0);
+    }
+
+    #[test]
+    fn a_late_onset_uses_the_stretch_the_word_is_on() {
+        let mut ws = vec![w(5300.0, 5800.0, "Next")];
+        tighten_late_onsets(&mut ws, &[(1000.0, 2000.0), (5000.0, 7000.0)], LATE_ONSET_MS);
+        assert_eq!(ws[0].start_ms, 5000.0);
+    }
+
+    #[test]
+    fn a_word_already_on_the_onset_is_left_alone() {
+        let mut ws = vec![w(1000.0, 1400.0, "Hello")];
+        tighten_late_onsets(&mut ws, &[(1000.0, 2000.0)], LATE_ONSET_MS);
+        assert_eq!(ws[0].start_ms, 1000.0);
+    }
+
+    #[test]
+    fn a_missing_source_file_does_not_invent_an_audio_lead() {
+        let p = Project::new("a.mp4".into(), None, 10, 10, 10_000.0);
+        assert_eq!(crate::export::audio_lead_ms(&p.source), 0.0);
+        assert_eq!(crate::export::effective_audio_offset_ms(&p), 0.0);
     }
 }

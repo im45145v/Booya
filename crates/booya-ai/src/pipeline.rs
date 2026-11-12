@@ -97,6 +97,7 @@ fn finish_transcript(p: &mut Project, mut words: Vec<booya_core::project::Captio
     // Captions never show before anyone speaks, whoever did the transcribing.
     let tight = transcribe::voice_onsets(&samples, 16_000);
     transcribe::fix_times(&mut words, &tight, &tight);
+    captions::tighten_late_onsets(&mut words, &tight, captions::LATE_ONSET_MS);
     p.captions = captions::words_to_captions(&words, 42, 900.0);
     Ok(TranscribeReport { words: words.len(), fillers: words.iter().filter(|w| captions::is_filler(&w.text)).count(), lines: p.captions.len(), model: "cloud".into(), weak_model: false, reason: String::new(),
     })

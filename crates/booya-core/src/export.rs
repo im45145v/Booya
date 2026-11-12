@@ -142,6 +142,61 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
     f
 }
 
+/// How far the audio track starts after the video, in ms (negative means
+/// earlier). Same threshold as [`with_audio_lead`]: gaps under 40 ms or over
+/// 30 s are ignored. Returns 0 when the file cannot be read. Results are
+/// cached per path and modification time so preview frames do not spawn a
+/// probe each time.
+pub fn audio_lead_ms(source: &Path) -> f64 {
+    audio_lead_ms_cached(source)
+}
+
+fn audio_lead_uncached(source: &Path) -> f64 {
+    let Some(v) = crate::finalize::stream_times(source, "v:0") else {
+        return 0.0;
+    };
+    let Some(a) = crate::finalize::stream_times(source, "a:0") else {
+        return 0.0;
+    };
+    let lead_ms = (a.0 - v.0) * 1000.0;
+    if lead_ms.abs() > 40.0 && lead_ms.abs() < 30_000.0 {
+        lead_ms
+    } else {
+        0.0
+    }
+}
+
+struct AudioLeadCache {
+    path: std::path::PathBuf,
+    stamp: Option<(std::time::SystemTime, u64)>,
+    lead_ms: f64,
+}
+
+fn audio_lead_ms_cached(source: &Path) -> f64 {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<AudioLeadCache>> = Mutex::new(None);
+    let stamp = std::fs::metadata(source).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+    if let Ok(g) = CACHE.lock() {
+        if let Some(c) = g.as_ref() {
+            if c.path == source && c.stamp == stamp {
+                return c.lead_ms;
+            }
+        }
+    }
+    let lead_ms = audio_lead_uncached(source);
+    if let Ok(mut g) = CACHE.lock() {
+        *g = Some(AudioLeadCache { path: source.to_path_buf(), stamp, lead_ms });
+    }
+    lead_ms
+}
+
+/// User audio offset plus any lead of the audio track over the video. Caption
+/// times (from the decoded sound) plus this amount are on the video clock,
+/// which is also how preview and export seek the voice.
+pub fn effective_audio_offset_ms(project: &Project) -> f64 {
+    project.audio.offset_ms + audio_lead_ms(&project.source)
+}
+
 /// The project with the source's audio lead folded in. An audio track that
 /// starts later (or earlier) than the video in the file, as in recordings made
 /// before 0.4.1 or with a slow microphone, would otherwise be shifted to start
@@ -149,14 +204,10 @@ pub fn audio_graph(project: &Project, idx: usize, post: &str) -> String {
 /// already starts at zero (the denoised copy), so only the offset is needed.
 pub fn with_audio_lead(project: &Project, zero_based: bool) -> Project {
     let mut p = project.clone();
-    let v = crate::finalize::stream_times(&project.source, "v:0");
-    let a = crate::finalize::stream_times(&project.source, "a:0");
-    if let (Some(v), Some(a)) = (v, a) {
-        let lead_ms = (a.0 - v.0) * 1000.0;
-        if lead_ms.abs() > 40.0 && lead_ms.abs() < 30_000.0 {
-            p.audio.offset_ms += lead_ms;
-            p.audio.rebase_start = !zero_based;
-        }
+    let lead_ms = audio_lead_ms(&project.source);
+    if lead_ms != 0.0 {
+        p.audio.offset_ms += lead_ms;
+        p.audio.rebase_start = !zero_based;
     }
     p
 }
